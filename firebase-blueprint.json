@@ -1,0 +1,400 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Non-PII user account metadata, RBAC role, and client-side encryption key-wrapping parameters.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "description": "Role-based access control tier.",
+          "enum": ["student", "educator", "admin"]
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Public/workspace display name.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "encryptionMode": {
+          "type": "string",
+          "description": "Key derivation method used for client-side E2EE.",
+          "enum": ["passphrase", "device-wrapped"]
+        },
+        "keySalt": {
+          "type": "string",
+          "description": "Base64-encoded random 16-byte PBKDF2 salt.",
+          "minLength": 16,
+          "maxLength": 128
+        },
+        "wrappedDek": {
+          "type": "string",
+          "description": "Base64-encoded AES-GCM wrapped 256-bit Data Encryption Key.",
+          "minLength": 16,
+          "maxLength": 512
+        },
+        "wrappedDekIv": {
+          "type": "string",
+          "description": "Base64-encoded 12-byte IV used to wrap the DEK.",
+          "minLength": 12,
+          "maxLength": 64
+        },
+        "recoveryWrappedDek": {
+          "type": "string",
+          "description": "Optional Base64-encoded recovery-key wrapped DEK.",
+          "minLength": 16,
+          "maxLength": 512
+        },
+        "recoveryWrappedDekIv": {
+          "type": "string",
+          "description": "Optional Base64-encoded IV for recovery-wrapped DEK.",
+          "minLength": 12,
+          "maxLength": 64
+        },
+        "keyVersion": {
+          "type": "number",
+          "description": "Monotonic encryption key rotation version."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when account was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when account was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "role",
+        "displayName",
+        "encryptionMode",
+        "keySalt",
+        "wrappedDek",
+        "wrappedDekIv",
+        "keyVersion",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "EncryptedUserProfile": {
+      "title": "EncryptedUserProfile",
+      "description": "Client-side AES-256-GCM encrypted user PII profile (email, school, year group, study targets).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ciphertext": {
+          "type": "string",
+          "description": "Base64-encoded AES-256-GCM encrypted JSON profile payload.",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "iv": {
+          "type": "string",
+          "description": "Base64-encoded 12-byte AES-GCM IV.",
+          "minLength": 12,
+          "maxLength": 64
+        },
+        "alg": {
+          "type": "string",
+          "description": "Symmetric cipher algorithm identifier.",
+          "enum": ["AES-GCM-256"]
+        },
+        "keyVersion": {
+          "type": "number",
+          "description": "DEK version used to encrypt this profile."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "ciphertext",
+        "iv",
+        "alg",
+        "keyVersion",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "EncryptedSyncDoc": {
+      "title": "EncryptedSyncDoc",
+      "description": "Encrypted revision or planner data chunk synchronized across user devices.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "app": {
+          "type": "string",
+          "description": "Source application module.",
+          "enum": ["revision", "planner"]
+        },
+        "chunkKey": {
+          "type": "string",
+          "description": "Logical storage key (e.g. fc-state, gdoc-geo1, mockplanner.v1).",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "chunkIndex": {
+          "type": "number",
+          "description": "Zero-based chunk index for large documents."
+        },
+        "totalChunks": {
+          "type": "number",
+          "description": "Total number of chunks for this key."
+        },
+        "ciphertext": {
+          "type": "string",
+          "description": "Base64-encoded AES-256-GCM encrypted payload.",
+          "minLength": 1,
+          "maxLength": 400000
+        },
+        "iv": {
+          "type": "string",
+          "description": "Base64-encoded 12-byte AES-GCM IV.",
+          "minLength": 12,
+          "maxLength": 64
+        },
+        "alg": {
+          "type": "string",
+          "description": "Symmetric cipher algorithm identifier.",
+          "enum": ["AES-GCM-256"]
+        },
+        "checksum": {
+          "type": "string",
+          "description": "Hex SHA-256 hash of plaintext for sync deduplication.",
+          "minLength": 16,
+          "maxLength": 128
+        },
+        "deviceId": {
+          "type": "string",
+          "description": "Originating device identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deviceName": {
+          "type": "string",
+          "description": "Human-readable originating device label.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "keyVersion": {
+          "type": "number",
+          "description": "DEK version used for encryption."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "app",
+        "chunkKey",
+        "chunkIndex",
+        "totalChunks",
+        "ciphertext",
+        "iv",
+        "alg",
+        "checksum",
+        "deviceId",
+        "deviceName",
+        "keyVersion",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserDevice": {
+      "title": "UserDevice",
+      "description": "Registered device session metadata for multi-device synchronization tracking.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deviceId": {
+          "type": "string",
+          "description": "Unique device identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deviceName": {
+          "type": "string",
+          "description": "Human-readable device label.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "platform": {
+          "type": "string",
+          "description": "Browser or OS platform summary.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest sync heartbeat."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when device was first registered."
+        }
+      },
+      "required": [
+        "ownerId",
+        "deviceId",
+        "deviceName",
+        "platform",
+        "lastSeenAt",
+        "createdAt"
+      ]
+    },
+    "UserActivity": {
+      "title": "UserActivity",
+      "description": "Security and cloud sync audit trail entry for the user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "action": {
+          "type": "string",
+          "description": "Audit event name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "deviceName": {
+          "type": "string",
+          "description": "Device where the event occurred.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the audit event."
+        }
+      },
+      "required": [
+        "ownerId",
+        "action",
+        "deviceName",
+        "createdAt"
+      ]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Trusted admin role assignment document for RBAC enforcement.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID granted admin role.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grantedBy": {
+          "type": "string",
+          "description": "UID of admin who granted the role.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin role was granted."
+        }
+      },
+      "required": [
+        "uid",
+        "grantedBy",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserAccount"
+      },
+      "description": "Account metadata, RBAC role, and wrapped encryption key parameters."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": {
+        "$ref": "#/entities/EncryptedUserProfile"
+      },
+      "description": "Isolated PII subcollection storing client-side encrypted user profiles."
+    },
+    "/users/{userId}/syncDocs/{docId}": {
+      "schema": {
+        "$ref": "#/entities/EncryptedSyncDoc"
+      },
+      "description": "End-to-end encrypted data chunks for Revision and Planner apps."
+    },
+    "/users/{userId}/devices/{deviceId}": {
+      "schema": {
+        "$ref": "#/entities/UserDevice"
+      },
+      "description": "Registered user devices for multi-device synchronization tracking."
+    },
+    "/users/{userId}/activity/{activityId}": {
+      "schema": {
+        "$ref": "#/entities/UserActivity"
+      },
+      "description": "Security and synchronization audit log entries."
+    },
+    "/admins/{userId}": {
+      "schema": {
+        "$ref": "#/entities/AdminRole"
+      },
+      "description": "Trusted admin role registry used for RBAC enforcement."
+    }
+  }
+}

@@ -1,0 +1,1283 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Revision: History and Geography</title>
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@500;700;800&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#F2F4F7;--card:#fff;--ink:#17202E;--mute:#5A6577;--line:#CBD2DC;--e1:#B3342F;--e2:#A8750C;--e3:#2F5F8A;--e4:#3B3B46;--e5:#5E6E35;--e6:#7A4E8A;--ok:#1F7A4D;--bad:#B3342F;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10151D;--card:#1A212C;--ink:#EDF0F4;--mute:#9AA5B5;--line:#33404F;--e1:#E5605A;--e2:#E0A62E;--e3:#6FA4D6;--e4:#B4B4C4;--e5:#9DB063;--e6:#C79BD8;--ok:#52C58A;--bad:#E5605A}}
+:root[data-theme="dark"]{--bg:#10151D;--card:#1A212C;--ink:#EDF0F4;--mute:#9AA5B5;--line:#33404F;--e1:#E5605A;--e2:#E0A62E;--e3:#6FA4D6;--e4:#B4B4C4;--e5:#9DB063;--e6:#C79BD8;--ok:#52C58A;--bad:#E5605A}
+*{box-sizing:border-box}html,body{margin:0}html{scroll-padding-top:70px}
+body{background:var(--bg);color:var(--ink);font:400 17px/1.45 "Source Sans 3",system-ui,sans-serif}
+header{padding:28px 20px 8px;max-width:760px;margin:0 auto}
+h1{font:800 clamp(30px,6vw,46px)/1.05 Bitter,Georgia,serif;margin:0}
+.sub{color:var(--mute);margin:6px 0 0}
+nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 20px}
+.bar{max-width:760px;margin:0 auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{font:600 15px "Source Sans 3",sans-serif;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer}
+button:focus-visible{outline:3px solid var(--e3);outline-offset:2px}
+button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.jump{max-width:760px;margin:10px auto 0;display:flex;gap:6px;flex-wrap:wrap}
+.jump a{font-size:14px;text-decoration:none;color:var(--ink);border-left:5px solid var(--c);padding:3px 9px;background:var(--card);border-radius:3px}
+main{max-width:760px;margin:0 auto;padding:12px 20px 80px}
+.era{margin-top:64px}
+.era h2{font:800 clamp(24px,5vw,32px)/1.1 Bitter,Georgia,serif;margin:0;color:var(--c)}
+.era .yrs{font:600 15px "Source Sans 3";color:var(--mute);margin:4px 0 22px}
+.list{position:relative;margin-left:10px;padding-left:26px;border-left:4px solid var(--c)}
+.m{position:relative;margin:0 0 40px;padding:0}
+.m::before{content:"";position:absolute;left:-36px;top:7px;width:16px;height:16px;border-radius:50%;background:var(--bg);border:4px solid var(--c)}
+.d{font:800 clamp(20px,4.4vw,25px)/1.2 Bitter,Georgia,serif;color:var(--c);margin:0}
+.ev{font:700 18px/1.3 "Source Sans 3";margin:3px 0 2px}
+.x{margin:0;color:var(--mute)}
+.hide{cursor:pointer;background:repeating-linear-gradient(135deg,var(--line) 0 6px,transparent 6px 12px);color:transparent!important;border-radius:5px;user-select:none;min-height:1.3em}
+.hide:focus-visible{outline:3px solid var(--e3)}
+.tools{display:none}.rec .tools{display:flex}
+.panel{max-width:760px;margin:0 auto;padding:20px}
+.q{background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:22px}
+.q h3{font:800 24px/1.2 Bitter,Georgia,serif;margin:0 0 4px}
+.opts{display:grid;gap:10px;margin:18px 0}
+.opts button{text-align:left;padding:12px 14px;font-size:17px}
+.opts .right{background:var(--ok);color:#fff;border-color:var(--ok)}.opts .wrong{background:var(--bad);color:#fff;border-color:var(--bad)}
+.score{font:700 18px Bitter,serif}
+[hidden]{display:none!important}
+@media print{nav,.jump{display:none}}
+
+.m.k .d::after{content:" ★";font-size:.7em}
+.why{margin:8px 0 0;padding-left:10px;border-left:3px solid var(--c);font-size:16px}
+.kw{display:block;font-weight:400;color:var(--mute);font-size:15px;margin-top:2px}
+.fc .why{margin-top:12px}
+@media(max-width:620px){nav>.bar:first-child{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}nav button{white-space:nowrap;flex:0 0 auto}}
+.er{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)}.er.gone .eb{text-decoration:line-through;opacity:.5}
+.eb{flex:1;min-width:0}.eb em{color:var(--mute);font-size:14px}.er button{padding:6px 10px;font-size:14px}
+.st{font-size:18px!important;color:var(--mute)}.st[aria-pressed=true]{background:var(--e2);border-color:var(--e2);color:#fff}
+#ef{display:grid;gap:12px;margin:14px 0}#ef label{display:grid;gap:4px;font-weight:600;font-size:15px}#ef input,#ef select{font-size:16px;width:100%}
+#ef label.chk{display:flex;align-items:center;gap:8px}#ef label.chk input{width:auto}#ef #fw{display:grid;gap:12px}
+.fh3{font:800 24px Bitter,serif;margin:0 0 4px}.ftp{margin:18px 0}.fth{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;font-size:18px}.fth button{padding:4px 10px;font-size:13px;margin-left:6px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{position:relative;overflow:hidden;text-align:left;display:grid;gap:2px;padding:10px 14px;min-width:150px}.chip small{color:var(--mute);font-weight:400;font-size:13px}.chip i{position:absolute;left:0;bottom:0;height:4px;background:var(--ok)}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--bg)}.chip[aria-pressed=true] small{color:var(--bg);opacity:.8}
+.fopt{display:grid;gap:8px;margin:16px 0;font-size:16px}.fopt label{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.fopt input{min-width:0}
+button.pri{background:var(--ink);color:var(--bg);border-color:var(--ink)}button.pri:disabled{opacity:.4;cursor:default}
+.sp{justify-content:space-between;align-items:center}.rt{flex:1;padding:12px}.rt.a{border-color:var(--bad)}.rt.g{border-color:var(--e3)}.rt.e{border-color:var(--ok)}
+.tg{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:9px;background:var(--line);margin-left:6px}.tg.ok{background:var(--ok);color:#fff}
+textarea{font:400 16px "Source Sans 3",sans-serif;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+#fcx{height:180px;margin-top:10px}#fty{margin:6px 0}
+.kh{font:800 22px/1.1 Bitter,Georgia,serif;margin:34px 0 10px}.kh small{font:600 14px "Source Sans 3";color:var(--mute)}
+.kl{border-left:4px solid var(--c);padding-left:14px}.kr{display:grid;grid-template-columns:minmax(120px,38%) 1fr;gap:12px;padding:7px 0;border-bottom:1px solid var(--line)}
+.kd{font:700 16px Bitter,Georgia,serif;color:var(--c)}.ke{font-weight:600}
+#kol{display:flex;align-items:center;gap:6px;font-size:15px}#kol input{min-width:0}
+.seg{display:flex;gap:0;margin-top:14px}.seg button{border-radius:0;font-size:16px;padding:9px 18px}.seg button:first-child{border-radius:8px 0 0 8px}.seg button:last-child{border-radius:0 8px 8px 0}.seg button:not(:first-child){border-left:0}
+select,input{font:400 15px "Source Sans 3",sans-serif;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.fc{background:var(--card);border:1.5px solid var(--line);border-left:8px solid var(--c);border-radius:12px;min-height:200px;padding:24px;cursor:pointer;display:flex;flex-direction:column;justify-content:center;margin:14px 0}
+.fc .ev{font-size:24px}.fc .d{font-size:30px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+.o{display:grid;gap:10px;margin:16px 0}.o button{text-align:left;padding:12px 14px;font-size:17px}
+.o button.done{background:var(--ok);color:#fff;border-color:var(--ok)}.o button.bad{background:var(--bad);color:#fff;border-color:var(--bad)}
+.o .dt{display:block;font:700 14px Bitter,serif;opacity:.9}
+.bar2{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.bar2 i{display:block;height:100%;background:var(--ok);width:0}
+mark{background:color-mix(in srgb,var(--e2) 35%,transparent);color:inherit}
+
+/* polish */
+:root{--sh:0 1px 2px rgba(20,30,50,.06),0 8px 24px rgba(20,30,50,.07)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--sh:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35)}}
+body{-webkit-font-smoothing:antialiased}
+header{padding:22px 20px 6px}h1{font-size:clamp(26px,5vw,36px);letter-spacing:-.01em}.sub{font-size:15px}
+nav{background:color-mix(in srgb,var(--bg) 86%,transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);padding:8px 20px}
+nav>.bar:first-child{gap:2px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px;width:fit-content;max-width:100%;overflow-x:auto;flex-wrap:nowrap}
+nav>.bar:first-child button{border:0;background:transparent;color:var(--mute);border-radius:999px;padding:7px 14px;white-space:nowrap;flex:0 0 auto}
+nav>.bar:first-child button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+nav>.bar:first-child button:not([aria-pressed=true]):hover{color:var(--ink)}
+.seg button{border-radius:0}.seg{background:var(--card);border-radius:999px;padding:3px;display:inline-flex;border:1px solid var(--line);gap:2px}
+.seg button,.seg button:first-child,.seg button:last-child{border:0;border-radius:999px;background:transparent;color:var(--mute);padding:6px 14px}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+button{border-radius:10px;border-width:1px;transition:transform .12s,background .15s,border-color .15s}button:active{transform:scale(.97)}
+.q,.fc,.deckbar,.acc{box-shadow:var(--sh)}
+body[data-m=cards] #tseg,body[data-m=cards] nav>.bar:nth-child(2),body[data-m=key] nav>.bar:nth-child(2),body[data-m=edit] nav>.bar:nth-child(2){display:none}
+body[data-m=cards] .jump{display:none}
+/* flashcard UI */
+.deckbar{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;position:sticky;top:calc(env(safe-area-inset-top,0px) + 58px);z-index:3}
+.deckbar b{display:block;font:700 18px Bitter,Georgia,serif}.deckbar span{color:var(--mute);font-size:14px}
+.deckbar .pri{padding:11px 22px;font-size:16px;flex:0 0 auto}
+.acc{background:var(--card);border:1px solid var(--line);border-radius:16px;margin:12px 0;overflow:hidden}
+.acc>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px}.acc>summary::-webkit-details-marker{display:none}
+.acc>summary::after{content:"";width:8px;height:8px;border-right:2px solid var(--mute);border-bottom:2px solid var(--mute);transform:rotate(45deg);transition:transform .25s;margin-left:6px;flex:0 0 auto;margin-top:-3px}
+.acc[open]>summary::after{transform:rotate(-135deg);margin-top:3px}
+.acc>summary{font-size:17px}.tn{font:700 17px Bitter,Georgia,serif;flex:1}.tc{color:var(--mute);font-size:14px}.tc em{font-style:normal;color:var(--ink);font-weight:600}
+.accb{padding:0 16px 16px;animation:dd .25s ease}@keyframes dd{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.row.mini button{padding:4px 12px;font-size:13px}
+.chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-top:10px}
+.chip{position:relative;overflow:hidden;text-align:left;display:grid;gap:3px;padding:12px 14px 16px;min-width:0;background:var(--bg);border:1.5px solid var(--line);border-radius:14px;min-height:84px}
+.chip .cn{font-weight:700;font-size:15px;line-height:1.2;padding-right:20px}.chip .cm{color:var(--mute);font-size:12.5px;font-weight:400}
+.chip .cb{position:absolute;left:0;right:0;bottom:0;height:4px;background:var(--line)}.chip .cb i{display:block;height:100%;background:var(--ok);transition:width .4s}
+.chip[aria-pressed=true]{background:color-mix(in srgb,var(--c) 14%,var(--card));border-color:var(--c);color:var(--ink)}
+.chip[aria-pressed=true] .cm{color:var(--mute)}.chip[aria-pressed=true]::after{content:"✓";position:absolute;right:10px;top:8px;width:20px;height:20px;border-radius:50%;background:var(--c);color:#fff;font-size:12px;display:grid;place-items:center}
+.fopt{display:grid;gap:4px}.optrow,.sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:16px}
+.seg2{display:inline-flex;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:3px}.seg2 button{border:0;background:transparent;border-radius:999px;padding:6px 12px;font-size:14px;color:var(--mute)}.seg2 button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.sw{cursor:pointer}.sw input{position:absolute;opacity:0;width:0}.sw i{width:42px;height:24px;border-radius:12px;background:var(--line);position:relative;transition:background .2s;flex:0 0 auto}
+.sw i::after{content:"";position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.sw input:checked+i{background:var(--ok)}.sw input:checked+i::after{transform:translateX(18px)}.sw input:focus-visible+i{outline:3px solid var(--e3);outline-offset:2px}
+.ftop{display:flex;align-items:center;gap:10px;margin-bottom:10px}.fpn{flex:1;text-align:center;color:var(--mute);font-weight:600;font-size:15px}
+button.ic{width:40px;height:40px;padding:0;font-size:20px;line-height:1;display:grid;place-items:center;border-radius:50%}
+.menuw{position:relative}.menu{position:absolute;right:0;top:46px;min-width:235px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--sh);padding:6px;z-index:6;animation:dd .18s ease}
+.menu button{display:block;width:100%;text-align:left;border:0;background:transparent;padding:10px 12px;border-radius:8px}.menu button:hover{background:var(--bg)}
+.bar2{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-bottom:18px}.bar2 i{display:block;height:100%;width:0;background:var(--ok);transition:width .5s cubic-bezier(.2,.8,.2,1);border-radius:3px}
+.fc3{position:relative;height:clamp(270px,46vh,380px);perspective:1400px;cursor:pointer;outline:none;--c:var(--e3);-webkit-tap-highlight-color:transparent}
+.fin{position:absolute;inset:0;transition:transform .65s cubic-bezier(.2,.8,.2,1);transform-style:preserve-3d}
+.fc3.flipped .fin{transform:rotateY(180deg)}
+.face{position:absolute;inset:0;-webkit-backface-visibility:hidden;backface-visibility:hidden;border-radius:22px;background:var(--card);border:1px solid var(--line);box-shadow:var(--sh);padding:26px 26px 22px;display:flex;flex-direction:column;overflow:auto}
+.face::before{content:"";position:absolute;left:0;top:0;bottom:0;width:7px;background:var(--c)}
+.fbk{transform:rotateY(180deg)}
+.fc3:focus-visible .face{outline:3px solid var(--e3);outline-offset:3px}
+.fl{font:600 12px "Source Sans 3";letter-spacing:.08em;text-transform:uppercase;color:var(--c)}
+.fcc{margin:auto 0;padding:14px 0;font:700 clamp(21px,4.6vw,28px)/1.3 Bitter,Georgia,serif;text-align:center}.fcc.ans{color:var(--ink)}
+.fq{margin:12px 0 0;color:var(--mute);font-size:15px;text-align:center}.you{margin:0;color:var(--mute);font-size:14px;text-align:center}
+.fh{align-self:center;color:var(--mute);font-size:13px}.hn{margin:0;text-align:center;color:var(--mute);font-family:Bitter,serif;letter-spacing:.06em}
+.fc3.in{animation:cin .42s cubic-bezier(.2,.8,.2,1) both}@keyframes cin{from{opacity:0;transform:translateY(22px) scale(.95)}to{opacity:1;transform:none}}
+.fc3.out-r{animation:outr .28s cubic-bezier(.5,0,.9,.5) both}.fc3.out-l{animation:outl .28s cubic-bezier(.5,0,.9,.5) both}
+@keyframes outr{to{opacity:0;transform:translateX(70px) rotate(5deg)}}@keyframes outl{to{opacity:0;transform:translateX(-70px) rotate(-5deg)}}
+#fcard{touch-action:pan-y}.fnav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}.fnav button{padding:8px 18px;border-radius:999px;font-size:15px}.fnav button:disabled{opacity:.4}.fnav .fh{flex:1;text-align:center}@media(max-width:520px){.fnav .fh{display:none}.fnav button{flex:1;padding:10px}}
+#fty{margin-top:14px}
+.fmodes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0 0}
+.mc{text-align:left;display:grid;gap:4px;align-content:start;padding:12px 14px;border:2px solid var(--line);border-radius:14px;background:var(--card);--m:var(--e3);cursor:pointer;color:var(--ink)}.mc.cr{--m:var(--e2)}
+.mc b{font:700 16px Bitter,Georgia,serif}.mc span{font-size:13.5px;color:var(--mute);line-height:1.35}.mc em{font-style:normal;font-weight:700;font-size:14px;color:var(--m)}
+.mc[aria-checked=true]{border-color:var(--m);background:color-mix(in srgb,var(--m) 11%,var(--card))}.mc[aria-checked=true] b::after{content:" ✓";color:var(--m)}
+.mbadge{font-size:12.5px;font-weight:700;border-radius:999px;padding:3px 10px;border:1.5px solid var(--e3);color:var(--e3);white-space:nowrap}.mbadge[data-m=cram]{border-color:var(--e2);color:var(--e2)}
+#fcr[data-mode=cram] #fpb{background:var(--e2)}
+@media(max-width:520px){.mc[aria-checked=false] span{display:none}.mc{padding:10px 12px}}.fbtns{margin-top:16px}.wide{width:100%;padding:14px;font-size:17px;border-radius:14px}
+.rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;animation:dd .25s ease}.rt{display:grid;gap:2px;padding:12px 6px;border-radius:14px;border-width:1.5px;text-align:center}.rt b{font-size:16px}.rt small{color:var(--mute);font-size:12.5px;font-weight:400}
+.rt.a{border-color:var(--bad)}.rt.g{border-color:var(--e3)}.rt.e{border-color:var(--ok)}.rt:hover{background:var(--bg)}
+.done{background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:var(--sh);padding:22px;text-align:center;animation:cin .4s ease both}.done h3{font:800 24px Bitter,serif;margin:0 0 14px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stats div{background:var(--bg);border-radius:12px;padding:12px 4px}.stats b{display:block;font:800 28px Bitter,serif}.stats span{color:var(--mute);font-size:13px}
+@media (prefers-reduced-motion:reduce){.fin{transition:none}.fc3.in,.fc3.out-r,.fc3.out-l,.accb,.rates,.menu,.done{animation:none}.bar2 i,.chip .cb i{transition:none}}
+@media (max-width:520px){.deckbar{padding:12px}.deckbar .pri{padding:10px 16px}}
+.mh{font:600 12px "Source Sans 3";letter-spacing:.08em;text-transform:uppercase;color:var(--mute);padding:12px 12px 4px;border-top:1px solid var(--line);margin-top:6px}.menu .sw{padding:8px 12px;border-bottom:0;font-size:15px}
+.optcol{display:grid;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);font-size:16px}.optcol small{color:var(--mute);font-size:12.5px;font-weight:400;margin-left:4px}
+.tchips{display:flex;flex-wrap:wrap;gap:6px}.tchips button{border-radius:999px;padding:6px 12px;font-size:14px;background:var(--bg)}.tchips button small{color:var(--mute);margin-left:3px}
+.tchips button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}.tchips button[aria-pressed=true] small{color:var(--bg);opacity:.75}
+.fq.top{margin:10px 0 0;font-size:15px}.fcc.cz{font-size:clamp(19px,4vw,24px);font-weight:600;line-height:1.7}
+.gap{display:inline-block;border-bottom:3px solid var(--c);text-align:center;color:var(--c);font-weight:800;margin:0 3px;line-height:1.1;vertical-align:baseline}.gap:empty::before{content:"\00a0"}
+mark.fill{background:color-mix(in srgb,var(--c) 24%,transparent);color:inherit;border-radius:5px;padding:1px 5px;font-weight:800}
+.gn{margin:4px 0 8px}.gn h3{font-size:17px;margin:16px 0 6px}.gn p{margin:6px 0;line-height:1.5}.gn ul{margin:6px 0;padding-left:22px}.gn li{margin:4px 0;line-height:1.5}.gn li.sub{margin-left:20px;list-style:circle}.gn-ed textarea{width:100%;box-sizing:border-box;min-height:220px;font:inherit;font-size:16px;line-height:1.5;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:inherit}.gn-ed .row{margin-top:8px;display:flex;gap:8px}
+
+[hidden]{display:none!important}
+.hrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.hrow .seg{margin-top:0}
+.aab{border-radius:999px;padding:6px 12px;font-size:14px;color:var(--mute)}.aab[aria-expanded=true]{background:var(--ink);color:var(--bg)}
+.aap{margin-top:10px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--card);display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end}
+.aap label,.advb label{display:block;font-size:13px;color:var(--mute);font-weight:600}
+.aap select,.advb input,.advb select{display:block;width:100%;box-sizing:border-box;margin-top:4px;font:inherit;font-size:15px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.aap input[type=range]{padding:0;border:0;background:transparent}
+.advb input[type=color]{height:38px;padding:2px}
+details.adv{margin:14px 0;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:0 14px}
+details.adv summary{cursor:pointer;padding:12px 0;font-weight:600;color:var(--mute)}
+.advb{padding-bottom:12px}.advb h3{margin:16px 0 6px;font-size:16px}
+#el .mv{display:none;padding:4px 8px}#el.adv-on .mv{display:inline-block}
+[data-mw] #tl,[data-mw] .panel,[data-mw] header,[data-mw] .jump{max-width:var(--mw)}
+[data-ff] *:not(.gpage):not(.gpage *){font-family:var(--ff)!important}
+[data-lh] .m p{line-height:var(--lh)}
+#tl,.panel{zoom:var(--zm,1)}
+body[data-s=g] nav>.bar:nth-child(2){display:none}
+.gd{width:min(var(--pw,100%),calc(100vw - 40px));margin-left:50%;transform:translateX(-50%)}
+.gtb{position:sticky;top:var(--nh,56px);z-index:4;background:var(--bg);padding:6px 0 2px}
+.gr{display:flex;gap:4px;flex-wrap:wrap;align-items:center;padding:6px;background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:6px}
+.gr button{padding:5px 9px;font-size:14px;border-radius:8px;white-space:nowrap}
+.gr button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.gr select,.gr input[type=number],.gr input[type=text]{font:inherit;font-size:14px;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);max-width:150px}
+.gr input[type=number]{width:54px}
+.gr input[type=color]{width:34px;height:28px;padding:1px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.gg{display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding-right:8px;margin-right:4px;border-right:1px solid var(--line)}
+.gg small{color:var(--mute);font-size:12px}
+.hlb{background:#fff2a8;color:#000;padding:0 3px;border-radius:3px}
+.gpage{--gbg:var(--card);--gink:var(--ink);background:var(--gbg);color:var(--gink);border:1px solid var(--line);border-radius:10px;box-shadow:var(--sh);padding:40px 48px;min-height:60vh;outline:none;font-size:17px;line-height:1.55;overflow-wrap:anywhere}
+.gpage h1{font:800 32px/1.15 Bitter,Georgia,serif;margin:0 0 14px}.gpage h2{font:800 24px/1.2 Bitter,Georgia,serif;margin:26px 0 8px}.gpage h3{font:700 19px/1.25 Bitter,Georgia,serif;margin:18px 0 6px}
+.gpage p{margin:0 0 10px}.gpage blockquote{margin:12px 0;padding:4px 14px;border-left:4px solid var(--line);color:var(--mute)}
+.gpage ul,.gpage ol{margin:6px 0 10px;padding-left:26px}.gpage ul.cl{list-style:none;padding-left:4px}.gpage ul.cl input{margin-right:8px}
+.gpage table.gt{border-collapse:collapse;margin:12px 0;max-width:100%}.gpage td,.gpage th{border:1px solid var(--line);padding:6px 10px;min-width:70px;vertical-align:top}
+.gpage img{max-width:100%;height:auto;border-radius:6px}.gpage hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+.gpage .callout{border-left:4px solid var(--e3);background:color-mix(in srgb,var(--e3) 12%,transparent);padding:8px 14px;border-radius:8px;margin:12px 0}
+.gpage a{color:var(--e3)}
+.gst{margin:8px 2px;font-size:13px;color:var(--mute)}
+.gbar{display:flex;justify-content:flex-end;margin:0 0 8px}.gedit{border-radius:999px;padding:6px 14px;font-size:14px;color:var(--mute)}
+.gd:not(.ed) .gtb{display:none}.gd:not(.ed) .gst:not(.gh){display:none}.gd.ed .gst.gh{display:block}
+.gd:not(.ed) .gpage{min-height:0;cursor:default}.gd.ed .gpage{box-shadow:0 0 0 2px var(--e3)}
+.tbo{display:none}.gd.intable .tbo{display:inline-block}
+.gpage h2{border-left:5px solid var(--e3);padding-left:10px}
+.gr label.chk{font-size:14px;display:flex;gap:6px;align-items:center}
+.gpage .s1{--ac:var(--e1)}.gpage .s2{--ac:var(--e2)}.gpage .s3{--ac:var(--e3)}.gpage .s4{--ac:var(--e4)}.gpage .s5{--ac:var(--e5)}.gpage .s6{--ac:var(--e6)}
+.gpage h2{border-left:6px solid var(--ac,var(--e3));background:color-mix(in srgb,var(--ac,var(--e3)) 12%,transparent);padding:8px 12px;border-radius:0 12px 12px 0}
+.gpage h3{color:var(--ac,inherit);border-bottom:2px solid color-mix(in srgb,var(--ac,var(--line)) 35%,transparent);padding-bottom:3px}
+.gpage .nb{display:inline-grid;place-items:center;min-width:1.5em;height:1.5em;margin-right:.5em;border-radius:50%;background:var(--ac,var(--e3));color:var(--gbg,var(--bg));font:800 .7em/1 "Source Sans 3",sans-serif;vertical-align:.12em}
+.gpage .bd{font:800 .55em/1 "Source Sans 3",sans-serif;letter-spacing:.06em;padding:3px 8px;border-radius:999px;background:var(--ac,var(--e3));color:var(--gbg,var(--bg));vertical-align:.3em}
+.gpage li::marker{color:var(--ac,var(--mute));font-weight:700}
+.gpage b.t{color:var(--ac,inherit)}
+.gpage b.i{background:color-mix(in srgb,var(--ac,var(--e3)) 15%,transparent);padding:0 5px;border-radius:5px}
+.gpage .pn{color:var(--mute);font-size:.93em}
+.gpage .fg{background:color-mix(in srgb,var(--e2) 24%,transparent);border-radius:4px;padding:0 4px;font-weight:600;white-space:nowrap}
+.gpage .flow{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px 4px;margin:4px 0}
+.gpage .st{display:inline-flex;gap:6px;align-items:baseline;padding:3px 10px;border-radius:10px;border:1.5px solid color-mix(in srgb,var(--ac,var(--e3)) 55%,transparent);background:color-mix(in srgb,var(--ac,var(--e3)) 9%,transparent);font-size:.94em;line-height:1.35}
+.gpage .st em{font-style:normal;font-weight:800;color:var(--ac,var(--e3))}
+.gpage .ar{color:var(--ac,var(--mute));font-weight:700}
+.gpage .callout{border-left:5px solid var(--ac,var(--e3));background:color-mix(in srgb,var(--ac,var(--e3)) 12%,transparent)}
+.gpage .callout b{color:var(--ac,inherit)}
+.gpage .co-tip{--ac:var(--ok)}.gpage .co-note{--ac:var(--e3)}.gpage .co-key{--ac:var(--e2)}.gpage .co-warn{--ac:var(--bad)}
+.gpage table.gt{width:100%;border-collapse:separate;border-spacing:0;border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
+.gpage th{background:var(--ac,var(--e3));color:var(--gbg,var(--bg));text-align:left;font-weight:700;border-color:transparent}
+.gpage tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--ac,var(--e3)) 6%,transparent)}
+.gpage td{border-left:0;border-top:0}
+@media(max-width:620px){.gpage{padding:22px 18px}}
+@media print{.gtb,.gst,.aab,.aap,.hrow,#tseg{display:none!important}.gpage{border:0;box-shadow:none;padding:0}.gd{transform:none;margin:0;width:auto}}
+#tseg{max-width:100%;overflow-x:auto}#tseg button,#subj button{white-space:nowrap;flex:0 0 auto}#cb{position:fixed;inset:0;z-index:30;background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}#cb[hidden]{display:none}
+.cbw{max-width:760px;margin:0 auto;padding:0 20px 120px}
+.cbh{position:sticky;top:0;z-index:4;background:var(--bg);padding:12px 0 10px;border-bottom:1px solid var(--line);display:grid;gap:9px}
+.cbh .r1{display:flex;align-items:center;gap:8px}.cbh .r1 b{font:800 22px Bitter,Georgia,serif;flex:1;min-width:0}.cbh .r1 small{color:var(--mute);font:600 15px "Source Sans 3"}
+.cbh .r1 .pri{padding:8px 16px}
+#cb input[type=search],#cb input[type=text],#cb textarea,#cb select{width:100%;font:inherit;font-size:16px;padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
+#cb textarea{resize:vertical;min-height:64px}
+.cbf{display:flex;gap:8px;align-items:center;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.cbf::-webkit-scrollbar{display:none}
+.cbf .seg{margin:0;flex:0 0 auto}.cbf .seg button{padding:5px 12px;font-size:14px}
+.cbf .fchip{flex:0 0 auto;white-space:nowrap;font-size:13.5px;padding:5px 11px;border-radius:999px;color:var(--mute)}.cbf .fchip small{opacity:.75;font-weight:400}
+.cbf .fchip[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.cbh .sw{padding:2px 0;border:0;font-size:15px;color:var(--mute)}
+#cbs{margin:10px 0 0;font-size:14px}
+.cbp{margin:14px 0 0;padding:16px;border:1.5px solid var(--line);border-radius:14px;background:var(--card);box-shadow:var(--sh);display:grid;gap:10px}
+.cbp[hidden]{display:none}.cbp h3{font:800 20px Bitter,Georgia,serif;margin:0}.cbp label{display:block;font-size:13px;font-weight:600;color:var(--mute)}.cbp label>*{margin-top:4px;font-weight:400;color:var(--ink)}
+.cbp .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:520px){.cbp .g2{grid-template-columns:1fr}}
+.cbp .row{margin:0}.cbmsg{min-height:1.3em;font-size:14px;color:var(--ok);margin:0}.cbmsg.bad{color:var(--bad)}
+.cbs{font:800 26px Bitter,Georgia,serif;margin:26px 0 4px}.cbs small,#cb h4 small{font:600 14px "Source Sans 3";color:var(--mute)}
+#cb h4{font:700 14px "Source Sans 3";text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:18px 0 4px;display:flex;align-items:center;gap:8px}
+#cb h4 span{flex:1}#cb h4 button{font-size:13px;padding:3px 10px;text-transform:none;letter-spacing:0;border-radius:999px}
+.cbtop{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 6px}.cbtop button{font-size:14px;padding:5px 12px;border-radius:999px}
+.cbc{border-bottom:1px solid var(--line)}
+.cbq{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;background:none;border:0;border-radius:0;padding:10px 0;font:600 16px/1.35 "Source Sans 3",sans-serif}
+.cbq .qt{flex:1}.cbq .dot{flex:0 0 auto;width:10px;height:10px;border-radius:50%;margin-top:6px;background:var(--line)}.cbq .dot.l{background:var(--e2)}.cbq .dot.m{background:var(--ok)}
+.cbq .fl{color:var(--e2);font-size:14px;margin-top:1px}
+.tag{display:inline-block;font:600 11px "Source Sans 3";letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--line);color:var(--mute);border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:2px}
+.cba{display:none;padding:0 0 4px 12px;border-left:4px solid var(--e3);margin:0 0 8px}.cbc.on .cba{display:block}
+.cbact{display:none;gap:8px;flex-wrap:wrap;margin:0 0 12px 12px}.cbc.on .cbact{display:flex}.cbact button{font-size:13.5px;padding:4px 11px;border-radius:999px}
+.cbact .dg{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
+.cbed{padding:12px 0;display:grid;gap:9px}.cbed label{font-size:13px;font-weight:600;color:var(--mute);display:block}.cbed label>*{margin-top:4px;font-weight:400;color:var(--ink)}
+#cbio{margin:12px 0 0;padding:14px;border:1.5px solid var(--line);border-radius:14px;background:var(--card);display:grid;gap:10px}#cbio[hidden]{display:none}
+#cbio textarea{min-height:120px;font:13px/1.4 ui-monospace,Menlo,monospace}
+#cbt{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:40;background:var(--ink);color:var(--bg);border-radius:999px;padding:10px 12px 10px 18px;display:flex;gap:12px;align-items:center;box-shadow:var(--sh);max-width:92vw;font-size:15px}
+#cbt[hidden]{display:none}#cbt button{background:transparent;color:var(--bg);border:1.5px solid color-mix(in srgb,var(--bg) 50%,transparent);padding:3px 12px;border-radius:999px;font-size:14px}
+.lnk{background:none;border:0;color:var(--mute);text-decoration:underline;text-underline-offset:3px;padding:6px}
+#cb .menu{top:44px}
+.bkr{display:grid;gap:8px;padding:12px 0 0;border-top:1px solid var(--line)}.bkr label{display:block;font-size:13px;font-weight:600;color:var(--mute)}.bkr label>*{margin-top:4px;font-weight:400;color:var(--ink)}#bkt{font:12px/1.35 ui-monospace,Menlo,monospace}
+nav{-webkit-backdrop-filter:none;backdrop-filter:none;background:var(--bg)}
+#cb .accb,#cb .secb{animation:none}
+.cbc{content-visibility:auto;contain-intrinsic-size:auto 48px}
+/* ===== responsive layout: phone / tablet / laptop ===== */
+:root{--wd:760px}
+@media(min-width:760px){:root{--wd:860px}}
+@media(min-width:1100px){:root{--wd:1120px}}
+@media(min-width:1500px){:root{--wd:1240px}}
+header,.bar,.panel,main,.jump{max-width:var(--wd)}
+html{scroll-padding-top:110px}
+.era{margin-top:46px}.m{margin-bottom:30px}.era .yrs{margin-bottom:16px}
+#fcr{max-width:720px;margin-inline:auto}
+#quiz .q,#order .q{max-width:760px;margin-inline:auto}#ef{max-width:700px}
+.lay{display:block}
+@media(min-width:1100px){
+ nav{padding-inline:max(20px,calc((100vw - var(--wd))/2 + 20px))}
+ header,.panel{padding-inline:20px}
+ .lay{display:grid;grid-template-columns:200px minmax(0,1fr);gap:30px;max-width:var(--wd);margin:0 auto;padding:0 20px}
+ .lay:has(>.jump[hidden]),.lay:has(>.jump:empty){display:block}
+ .lay .jump{position:sticky;top:calc(env(safe-area-inset-top,0px) + 124px);align-self:start;flex-direction:column;flex-wrap:nowrap;gap:4px;margin:18px 0 0;max-width:none;max-height:calc(100vh - 150px);overflow-y:auto;scrollbar-width:thin}
+ .lay .jump a{display:block;padding:7px 10px;font-size:14.5px;line-height:1.25}
+ .lay main{max-width:none;margin:0;padding:12px 0 80px}
+ .lay:has(>.jump[hidden]) main,.lay:has(>.jump:empty) main{max-width:860px;margin:0 auto}
+ [data-mw] .lay{max-width:none}
+ html{scroll-padding-top:120px}
+ .cbw{max-width:1040px}
+ #cbl{display:grid;grid-template-columns:1fr 1fr;gap:0 36px;align-items:start}
+ #cbl .cbg:only-child,#cbl>.x{grid-column:1/-1}
+ #cb details[data-t]{scroll-margin-top:230px}
+}
+@media(min-width:620px) and (max-width:1099px){.lay .jump{margin-top:10px}}
+@media(max-width:620px){
+ body{font-size:16px}
+ header{padding:14px 14px 4px}nav{padding:8px 14px}main{padding:8px 14px 56px}.panel{padding:14px}
+ .era{margin-top:30px}.m{margin-bottom:24px}.era .yrs{margin-bottom:12px}
+ .q{padding:16px}.cbw{padding:0 14px 100px}
+ .jump{margin-top:6px;padding:0 14px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.jump::-webkit-scrollbar{display:none}.jump a{white-space:nowrap;flex:0 0 auto}
+ .fc3{height:clamp(240px,42vh,340px)}.face{padding:20px 18px 16px}
+}
+
+.cbtl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0 4px}.cbtl select{width:auto;max-width:100%;flex:1 1 150px;font-size:14.5px;padding:7px 10px}.cbtl button{font-size:14px;padding:6px 12px;border-radius:999px}
+#cb details[data-t]{scroll-margin-top:190px}
+.acc>summary .ts{font-size:13px;padding:3px 11px;border-radius:999px;margin-left:4px}
+.sec{border-top:1px solid var(--line)}.sec:first-child{border-top:0}
+.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:12px 0;min-height:48px}.sec>summary::-webkit-details-marker{display:none}
+.sec>summary::before{content:"";flex:0 0 auto;width:7px;height:7px;border-right:2px solid var(--mute);border-bottom:2px solid var(--mute);transform:rotate(-45deg);transition:transform .2s;margin:0 4px 0 2px}.sec[open]>summary::before{transform:rotate(45deg)}
+.sec>summary:focus-visible{outline:3px solid var(--e3);outline-offset:2px;border-radius:6px}
+.sn{flex:1;min-width:0;font:700 16px/1.25 "Source Sans 3",sans-serif}.sc{flex:0 0 auto;color:var(--mute);font-size:13.5px}
+.pb{flex:0 0 46px;height:5px;background:var(--line);border-radius:3px;overflow:hidden}.pb b{display:block;height:100%;background:var(--ok)}
+.sb{display:flex;gap:6px;flex:0 0 auto}.sb button{font-size:12.5px;padding:3px 10px;border-radius:999px}
+.secb{padding:0 0 10px 18px;animation:dd .2s ease}
+@media(max-width:520px){.sb button{padding:3px 8px}.pb{flex-basis:34px}.secb{padding-left:8px}}
+</style></head><body>
+<div id="cb" role="dialog" aria-modal="true" aria-label="All flashcards" hidden><div class="cbw">
+<div class="cbh"><div class="r1"><b>Flashcards <small id="cbn"></small></b><button id="cbad" class="pri">+ Add</button>
+<div class="menuw"><button id="cbm" class="ic" aria-haspopup="true" aria-expanded="false" aria-label="More actions">⋯</button><div class="menu" id="cbmn" hidden>
+<button data-ma="import">Import cards</button><button data-ma="export">Export as CSV</button><button data-ma="backup">Back up / restore all data</button><button data-ma="restore" id="cbrs">Restore deleted cards</button><button data-ma="reset" id="cbrp">Reset progress</button></div></div>
+<button id="cbx" class="ic" aria-label="Close">✕</button></div>
+<input id="cbq" type="search" placeholder="Search questions and answers" aria-label="Search all cards">
+<div class="cbf" id="cbf"></div>
+<label class="sw"><span>Show answers</span><input type="checkbox" id="cba"><i></i></label></div>
+<p class="x" id="cbs"></p>
+<div class="cbtl"><select id="cbj" aria-label="Jump to topic"></select><select id="cbso" aria-label="Sort cards"><option value="orig">Original order</option><option value="weak">Weakest first</option><option value="flag">Flagged first</option><option value="az">A to Z</option></select><button id="cbea">Expand all</button><button id="cbca">Collapse all</button><button id="cbst" class="pri" hidden></button></div>
+<form class="cbp" id="cbp" hidden><h3 id="cbph">Add cards</h3>
+<div class="g2"><label>Topic<select id="cbpt"></select></label><label>Section<select id="cbps"></select></label></div>
+<label id="cbpnw" hidden>New section name<input type="text" id="cbpn" autocomplete="off"></label>
+<div class="seg" id="cbpm" role="group" style="margin:0;justify-self:start"><button type="button" data-pm="one" aria-pressed="true">One card</button><button type="button" data-pm="many" aria-pressed="false">Paste several</button></div>
+<div id="cbp1" style="display:grid;gap:10px"><label>Question<textarea id="cbpq" rows="2"></textarea></label><label>Answer<textarea id="cbpa" rows="2"></textarea></label></div>
+<div id="cbp2" style="display:grid;gap:10px" hidden><label>One card per line as question,answer (tab-separated also works)<textarea id="cbpb" rows="6" placeholder="Who led the Bonus Army?,Walter Waters"></textarea></label><label>Or load a CSV or text file<input type="file" id="cbpf" accept=".csv,.txt,.tsv,text/plain,text/csv"></label></div>
+<p class="cbmsg" id="cbpmsg" role="status"></p>
+<div class="row"><button type="submit" class="pri" id="cbpsv">Save card</button><button type="button" id="cbpc">Close</button></div></form>
+<div id="cbio" hidden><b id="cbioh"></b><textarea id="cbiot" aria-label="CSV"></textarea><div class="row" style="margin:0"><button id="cbioc" class="pri">Copy</button><button id="cbiox">Close</button></div><p class="cbmsg" id="cbiom"></p></div>
+<div class="cbp" id="cbbk" hidden><h3>Back up and restore</h3>
+<p class="x" style="margin:0">Backs up everything saved on this site: your added and edited cards, flashcard progress, notes, edits and settings. Keep the file somewhere safe; you can import it on any device.</p>
+<div class="bkr"><b>Export</b><p class="x" id="bkx" style="margin:0"></p><div class="row" style="margin:0"><button class="pri" id="bksv">Save backup file</button><button id="bkcp">Copy as text</button></div><textarea id="bkt" rows="4" readonly hidden aria-label="Backup text"></textarea></div>
+<div class="bkr"><b>Import</b><label>Backup file<input type="file" id="bkf" accept=".json,.txt,application/json,text/plain"></label><label>Or paste backup text<textarea id="bki" rows="3" placeholder="Paste backup text here"></textarea></label>
+<label>How to import<select id="bkm"><option value="merge">Merge: keep what is here, add what is missing</option><option value="replace">Replace: backup overwrites what is here</option></select></label>
+<div class="row" style="margin:0"><button class="pri" id="bkim">Import</button></div></div>
+<p class="cbmsg" id="bkmsg" role="status"></p><div class="row" style="margin:0"><button id="bkcl">Close</button></div></div>
+<div id="cbl"></div></div>
+<div id="cbt" role="status" hidden><span id="cbtm"></span><button id="cbtu">Undo</button></div></div>
+<header><h1 id="h"></h1><p class="sub" id="sub"></p>
+<div class="hrow"><div class="seg" id="subj" role="group" aria-label="Subject"></div><button id="aa" class="aab" aria-label="Appearance" aria-expanded="false" title="Appearance">Aa</button><button id="cbo" class="aab" aria-label="Browse all flashcards" aria-haspopup="dialog" title="Browse all flashcards">Cards</button></div>
+<div class="aap" id="aap" hidden>
+<label>Theme<select id="aTh"><option value="">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+<label>Text size<input type="range" id="aZm" min="85" max="150" step="5"></label>
+<label>Line spacing<input type="range" id="aLh" min="12" max="24" step="1"></label>
+<label>Page width<select id="aMw"><option value="">Default</option><option value="620px">Narrow</option><option value="900px">Wide</option><option value="1200px">Extra wide</option></select></label>
+<label>Font<select id="aFf"><option value="">Default</option><option value="'Source Sans 3',system-ui,sans-serif">Sans</option><option value="Bitter,Georgia,serif">Serif</option><option value="system-ui,sans-serif">System</option><option value="ui-monospace,Menlo,monospace">Mono</option></select></label>
+<button id="aRs" type="button">Reset look</button><button id="aBk" type="button">Backup and restore</button></div><div style="margin-top:8px"><div class="seg" id="tseg" role="group" aria-label="Topic"></div></div></header>
+<nav><div class="bar">
+<button data-mode="study" aria-pressed="true">Study</button>
+<button data-mode="rec-d" aria-pressed="false">Recall dates</button>
+<button data-mode="rec-e" aria-pressed="false">Recall events</button>
+<button data-mode="key" aria-pressed="false">Key dates</button>
+<button data-mode="cards" aria-pressed="false">Flashcards</button>
+<button data-mode="order" aria-pressed="false">Order it</button>
+<button data-mode="quiz" aria-pressed="false">Quiz</button>
+<button data-mode="edit" aria-pressed="false">Edit</button></div>
+<div class="bar" style="margin-top:8px"><input id="q" type="search" placeholder="Search events" aria-label="Search events"><select id="era" aria-label="Era" hidden></select><label id="kol" hidden><input type="checkbox" id="ko"> Key dates only</label>
+<span class="tools bar" style="gap:8px"><button id="all">Reveal all</button><button id="reset">Hide all</button></span></div></nav>
+<div class="lay"><div class="jump" id="jump"></div>
+<main id="tl"></main></div>
+<section class="panel" id="edit" hidden><div class="row"><button id="eadd">Add milestone</button><button id="ereset">Reset my changes</button></div><p class="x" id="en"></p>
+<form id="ef" class="q" hidden><h3 id="fh">Add milestone</h3>
+<label>Date<input id="fd" placeholder="e.g. March 1920" autocomplete="off"></label>
+<label>Event<input id="fv" placeholder="e.g. Kapp Putsch" autocomplete="off"></label>
+<label>Detail<input id="fx" placeholder="One short line" autocomplete="off"></label>
+<label>Why it matters<input id="fy" placeholder="Optional; shown for key dates" autocomplete="off"></label>
+<label class="chk"><input type="checkbox" id="fk"> Key date (important)</label>
+<div id="fw"><label>Era<select id="fe"></select></label><label>Position<select id="fa"></select></label></div>
+<div class="row"><button type="submit">Save</button><button type="button" id="fcancel">Cancel</button></div></form>
+<details class="adv" id="eadv"><summary>More options</summary><div class="advb">
+<p class="x">Reorder milestones with the arrows that appear on each row while this is open.</p>
+<h3>Edit an era</h3>
+<label>Era<select id="ees"></select></label>
+<label>Title<input id="eet" autocomplete="off"></label>
+<label>Years / subtitle<input id="eey" autocomplete="off"></label>
+<label>Colour<input type="color" id="eec"></label>
+<div class="row"><button type="button" id="eesv">Save era</button><button type="button" id="eedel">Delete era</button></div>
+<h3>Add a new era</h3>
+<label>Title<input id="ent" autocomplete="off"></label>
+<label>Years / subtitle<input id="eny" autocomplete="off"></label>
+<label>Colour<input type="color" id="enc" value="#2f5f8a"></label>
+<div class="row"><button type="button" id="enadd">Add era</button></div>
+</div></details>
+<div id="el"></div></section>
+<section class="panel" id="key" hidden><div class="row"><button id="kd">Hide dates</button><button id="ke">Hide events</button><button id="ks">Show all</button></div><p class="x" id="kn"></p><div id="kv"></div></section>
+<section class="panel" id="cards" hidden>
+<div id="fcs">
+<div class="deckbar"><div><b id="dbt">No sections selected</b><span id="dbs"></span></div><button id="frs" hidden></button><button id="fgo" class="pri">Start</button></div>
+<div id="fmodes" class="fmodes" role="radiogroup" aria-label="Study mode"></div>
+<p class="x" style="margin:6px 2px 2px"><button id="fman" class="lnk" style="padding:4px 2px">Browse and manage all cards →</button></p>
+<div id="fct"></div>
+<details class="acc"><summary><span class="tn">Study options</span><span class="tc">size, shuffle, filters</span></summary><div class="accb fopt" id="fco"></div></details>
+</div>
+<div id="fcr" hidden>
+<div class="ftop"><button id="fback" class="ic" aria-label="Back to decks">←</button><span class="mbadge" id="fmb"></span><span class="fpn" id="fpn"></span>
+<div class="menuw"><button id="fmenu" class="ic" aria-haspopup="true" aria-expanded="false" aria-label="More actions">⋯</button>
+<div class="menu" id="fmn" hidden><button id="fhint">Show hint</button><button id="fstar">Flag card</button><button id="fedit">Edit card</button><div class="mh">Study options</div><button id="fshuf">Shuffle remaining cards</button><label class="sw"><span>Reverse cards</span><input type="checkbox" data-mo="rev"><i></i></label><label class="sw"><span>Type answer first</span><input type="checkbox" data-mo="type"><i></i></label><label class="sw"><span>Fill in the blank</span><input type="checkbox" data-mo="cloze"><i></i></label></div></div></div>
+<div class="bar2"><i id="fpb"></i></div>
+<div id="fplay">
+<div class="fc3" id="fcard" tabindex="0" role="button" aria-label="Flashcard. Press Space to flip"><div class="fin"><div class="face ffr" id="ffr"></div><div class="face fbk" id="fbk"></div></div></div>
+<div class="fnav"><button id="fprev" aria-label="Previous card">‹ Prev</button><span class="fh">Swipe or use ← → to flick through</span><button id="fnext" aria-label="Next card">Next ›</button></div>
+<div id="fty" hidden><textarea id="ftx" rows="2" placeholder="Type your answer from memory, then flip" aria-label="Your answer"></textarea></div>
+<div class="fbtns"><button id="fflip" class="pri wide">Show answer</button>
+<div class="rates" id="frate" hidden><button data-r="1" class="rt a"><b>Again</b><small id="r1s"></small></button><button data-r="2" class="rt g"><b>Good</b><small id="r2s"></small></button><button data-r="3" class="rt e"><b>Easy</b><small id="r3s"></small></button></div></div>
+</div>
+<div id="fsum" hidden></div></div>
+<form id="fcf" class="q" hidden><h3 id="fch">Add cards</h3>
+<label>Topic<select id="ftp"></select></label><label>Section<select id="fsc"></select></label><label id="fnw" hidden>New section name<input id="fnn" autocomplete="off"></label>
+<div id="fone"><label>Question<textarea id="fq" rows="2"></textarea></label><label>Answer<textarea id="fa2" rows="2"></textarea></label></div>
+<div id="fbulk" hidden><label>Paste CSV: one card per line as question,answer<textarea id="fbt" rows="6" placeholder='"Who led the Bonus Army?",Walter Waters'></textarea></label></div>
+<div class="row"><button type="submit" class="pri" id="fsave">Save</button><button type="button" id="fmode">Bulk import instead</button><button type="button" id="fcan">Cancel</button><button type="button" id="fdelc" hidden>Delete card</button></div><p class="x" id="fmsg"></p></form>
+</section>
+<section class="panel" id="order" hidden><div class="q"><h3>Order it</h3><p class="x" id="os"></p><div class="o" id="oo"></div><button id="on" hidden>Next set</button></div></section>
+<section class="panel" id="quiz" hidden><div class="q"><div class="score" id="sc"></div><h3 id="qq"></h3><p class="x" id="qd"></p><div class="opts" id="op"></div><div class="row"><button id="nx" hidden>Next question</button><button id="qr" hidden>Retry missed</button></div></div></section>
+<script>
+/* storage: browser + private cloud copy */
+const LS=(()=>{const mem={},dirty={},meta={};let db=null,uid=null,tm=null,chain=Promise.resolve();const CH=80000,api={cloud:false,err:null,onload:null,onsync:null};
+const sl=k=>k.replace(/[^A-Za-z0-9_~:@+-]/g,'_').slice(0,150);
+try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);mem[k]=localStorage.getItem(k)}}catch(e){}
+const col=()=>db.collection('data/users/'+uid);
+async function put(k){const v=mem[k],s=sl(k),old=meta[k]||0;
+if(v==null){try{await col().doc(s).delete()}catch(e){}for(let i=0;i<old;i++){try{await col().doc(s+'.c'+i).delete()}catch(e){}}delete meta[k];return}
+const n=Math.max(1,Math.ceil(v.length/CH));
+for(let i=0;i<n;i++)await col().doc(s+'.c'+i).set({v:v.slice(i*CH,(i+1)*CH)});
+await col().doc(s).set({k,n,t:Date.now()});
+for(let i=n;i<old;i++){try{await col().doc(s+'.c'+i).delete()}catch(e){}}
+meta[k]=n}
+function flush(){clearTimeout(tm);if(!db)return;chain=chain.then(async()=>{for(const k of Object.keys(dirty)){delete dirty[k];try{await put(k);api.err=null}catch(e){dirty[k]=1;api.err=(e&&e.code)||'error';break}}if(api.onsync)api.onsync()}).catch(()=>{})}
+const sched=()=>{if(db){clearTimeout(tm);tm=setTimeout(flush,600)}};
+api.get=k=>k in mem?mem[k]:null;
+api.set=(k,v)=>{mem[k]=String(v);try{localStorage.setItem(k,mem[k])}catch(e){}dirty[k]=1;sched()};
+api.del=k=>{delete mem[k];try{localStorage.removeItem(k)}catch(e){}dirty[k]=1;sched()};
+api.flush=flush;
+(async()=>{if(!(window.claude&&claude.use))return;try{const [d,u]=await Promise.all([claude.use('db'),claude.use('user')]);if(!d||!u)return;const me=await u.id();if(!me)return;db=d;uid=me;
+const snap=await col().limit(1000).get(),docs={};snap.docs.forEach(x=>{docs[x.id]=x.data()});
+let changed=false;const remote=new Set();
+for(const did in docs){if(/\.c\d+$/.test(did))continue;const m=docs[did];if(!m||!m.k)continue;let v='',ok=true;for(let i=0;i<m.n;i++){const c=docs[did+'.c'+i];if(!c){ok=false;break}v+=c.v}if(!ok)continue;remote.add(m.k);meta[m.k]=m.n;if(dirty[m.k])continue;if(mem[m.k]!==v){mem[m.k]=v;try{localStorage.setItem(m.k,v)}catch(e){}changed=true}}
+Object.keys(mem).forEach(k=>{if(!remote.has(k))dirty[k]=1});
+api.cloud=true;flush();if(api.onsync)api.onsync();if(changed&&api.onload)api.onload()}catch(e){}})();
+api.keys=()=>Object.keys(mem);
+return api})();
+
+const E=[
+["The Birth of Weimar","1918–1923","var(--e1)",[
+["25 October 1918","Kiel Mutiny","Sailors refused to fight Britain, igniting strikes across Germany."],
+["9 November 1918","Kaiser Abdicates","Wilhelm II fled into exile in Holland."],
+["10 November 1918","Republic Declared","Social Democrat Friedrich Ebert took office as president."],
+["11 November 1918","Armistice Signed","Erzberger ended 4 years of war for Germany."],
+["5 January 1919","Spartacist Uprising","Communists seized the government newspaper and phone offices."],
+["15 January 1919","Luxemburg and Liebknecht Killed","Freikorps shot both communist leaders after the revolt."],
+["19 January 1919","National Assembly Election","82% turnout; Ebert's SPD won 40% of seats."],
+["28 June 1919","Treaty of Versailles Signed","Army capped at 100,000 men, down from 650,000."],
+["31 July 1919","Weimar Constitution Approved","Germany became a republic with no kaiser."],
+["September 1919","Hitler Joins the German Workers' Party","Drexler's party had only six members."],
+["13 March 1920","Kapp Putsch","Freikorps marched on Berlin backing Wolfgang Kapp."],
+["29 July 1921","Hitler Becomes Nazi Leader","He took control of the party."],
+["December 1922","Reparations Payment Missed","Germany's default triggered French retaliation."],
+["January 1923","Ruhr Invaded","French and Belgian troops seized Germany's iron, steel and coal heartland."],
+["8–9 November 1923","Munich Putsch","Hitler's armed bid to overthrow Weimar, launched as hyperinflation peaked."],
+["15 November 1923","Rentenmark Introduced","Stresemann's temporary currency replaced the worthless mark."]]],
+["The Golden Years","1924–1929","var(--e2)",[
+["February 1924","Hitler's Trial","He turned the court into a stage, then was imprisoned."],
+["1924","Dawes Plan","Germany received over 25 billion marks across 6 years."],
+["February 1925","Nazi Party Relaunched","Ban lifted; 4,000 supporters met at the Munich beer hall."],
+["1925","Mein Kampf Published","It soon became a bestseller."],
+["1 December 1925","Locarno Pact","Seven treaties: avoid force except in self-defence."],
+["September 1926","Germany Joins League of Nations","Stresemann's diplomacy restored Germany as a great power."],
+["20 May 1928","Nazi Election Flop","Just 12 Reichstag seats."],
+["27 August 1928","Kellogg-Briand Pact","62 countries promised not to use force to settle disputes."],
+["1929","Young Plan Approved","Reparations cut to around $8 billion."],
+["3 October 1929","Stresemann Dies","A stroke removed Weimar's most capable statesman."],
+["24 October 1929","Wall Street Crash","US share prices collapsed and the world economy plunged into crisis."]]],
+["The Nazi Rise to Power","1930–1933","var(--e3)",[
+["10 April 1932","Presidential Election","Hitler polled 13 million votes but lost to Hindenburg."],
+["31 July 1932","Nazis Become Largest Party","230 seats, 37.4% of the vote."],
+["6 November 1932","November Election","Communists won 100 seats, their best result."],
+["30 January 1933","Hitler Appointed Chancellor","Weimar's constitution still limited his powers."],
+["27 February 1933","Reichstag Fire","Dutch communist van der Lubbe was found at the scene."],
+["28 February 1933","Emergency Decrees","Hindenburg used Article 48 to rule by decree."],
+["23–24 March 1933","Enabling Act Passed","Voted 444 to 94, ending the Weimar Constitution."],
+["1 April 1933","Boycott of Jewish Businesses","A nationwide boycott organised by the Nazi government."],
+["2 May 1933","Trade Unions Crushed","Offices raided and leaders arrested."],
+["14 July 1933","One-Party State and Sterilisation Law","All parties banned bar the Nazis; up to 700,000 later sterilised."],
+["20 July 1933","Concordat with the Catholic Church","Hitler sought the Church's support."]]],
+["The Nazi Dictatorship","1934–1939","var(--e4)",[
+["15 January 1934","State Parliaments Abolished","Local democracy ended altogether."],
+["30 June 1934","Night of the Long Knives","Around 200 SA officers arrested; about 90 killed, including Röhm."],
+["2 August 1934","Hindenburg Dies; Hitler Becomes Führer","Chancellor and president merged; the army swore an oath to Hitler."],
+["September 1935","Nuremberg Laws","Jews lost citizenship and the right to marry Aryans."],
+["1–16 August 1936","Berlin Olympics","Nazis staged them to showcase Aryan supremacy."],
+["October 1936","Four Year Plan","Goering pushed autarky; debt still passed 40 billion marks."],
+["December 1936","Hitler Youth Law","Every eligible young person had to join a Nazi youth group."],
+["9–10 November 1938","Kristallnacht","800+ shops wrecked, 191 synagogues attacked, 91 Jews killed."]]],
+["Nazi Germany at War","1939–1945","var(--e5)",[
+["August 1939","Rationing Begins","Bread, meat, dairy and soap restricted."],
+["1 September 1939","Germany Invades Poland","Brought 3 million Polish Jews under Nazi control."],
+["June 1941","Operation Barbarossa","Invasion of the USSR; Moscow, Leningrad and Kiev threatened by November."],
+["July 1941","'Final Solution' Planned","Camps built in eastern Poland for forced labour."],
+["January 1942","Wannsee Conference","Camps converted into extermination camps."],
+["22 July 1942","Warsaw Deportations Begin","German authorities announced 'resettlement' of Warsaw's Jews."],
+["January 1943","Total Labour Conscription","Men 16–65 and women 17–45 had to register for work."],
+["18 February 1943","'Total War' and White Rose Arrests","Goebbels demanded total commitment; the Scholls were arrested in Munich."],
+["March–July 1943","43 Cities Bombed","Hamburg's raids killed 42,600 and drove 1 million out."],
+["20 July 1944","July Bomb Plot","Von Stauffenberg's bomb killed four, but Hitler survived."],
+["October 1944","Cologne Uprising","Anti-Nazi revolt; dozens publicly hanged."],
+["30 April 1945","Hitler's Suicide","He shot himself; Eva took cyanide."],
+["7 May 1945","Germany Surrenders","Admiral Doenitz ended the Third Reich."]]]];
+const U=[
+["Fear, Prohibition and Prejudice","1917–1924","var(--e1)",[
+["2 April 1917","USA Declares War on Germany","The Zimmermann telegram exposed a German plot against the USA."],
+["11 November 1918","First World War Ends","America turned inward after the war."],
+["16 January 1919","Eighteenth Amendment Ratified","Banned making, selling and transporting alcohol."],
+["7 November 1919","Palmer Raids Begin","Union of Russian Workers offices searched; Red Scare peaks."],
+["17 January 1920","Prohibition Comes into Force","The Volstead Act made the USA dry in theory."],
+["15 April 1920","Braintree Robbery","A paymaster and guard were shot; $15,776.51 stolen."],
+["5 May 1920","Sacco and Vanzetti Arrested","Two Italian anarchists were seized by police."],
+["18 August 1920","Women Gain the Vote","The Nineteenth Amendment gave women voting rights."],
+["19 May 1921","Emergency Quota Act","Capped immigration at 357,000 a year; 3% per country."],
+["May 1921","Sacco and Vanzetti Trial","A jury of 12 men heard 167 witnesses."],
+["14 July 1921","Guilty Verdict","Sentenced to death by electrocution."],
+["1923","Klan Membership Hits 5 Million","The Ku Klux Klan peaked in the early 1920s."],
+["May 1924","National Origins Act","A second, stricter law restricting immigration."]]],
+["Prosperity and Its Limits","1925–1929","var(--e2)",[
+["October 1925","Ford's Assembly Line Peaks","A Model T rolled off the line every 10 seconds."],
+["10 July 1925","Scopes 'Monkey' Trial Begins","Bryan prosecuted and Darrow defended over teaching evolution."],
+["14 February 1929","St Valentine's Day Massacre","Chicago gang violence became national news."]]],
+["Crash and Depression","1929–1932","var(--e3)",[
+["October 1929","Wall Street Crash","Investors lost confidence and the New York Stock Exchange collapsed."],
+["1930","Hawley-Smoot Tariff","Import duties on foreign food rose by 40%."],
+["1932","Reconstruction Finance Corporation","$2 billion provided to rescue banks and key firms."],
+["28 July 1932","Bonus Marchers Cleared","20,000 veterans had camped near the Capitol."],
+["8 November 1932","Roosevelt Wins the Presidency","He carried 42 of 48 states."]]],
+["The First New Deal","1933–1934","var(--e4)",[
+["4 March 1933","Roosevelt Takes Office","He promised jobs, homes and protected savings."],
+["1933","Unemployment Peaks at 24.9%","The worst year of the Depression."],
+["9 March 1933","Emergency Banking Act","Start of the Hundred Days; only sound banks reopened."],
+["12 March 1933","First Fireside Chat","Roosevelt asked Americans to redeposit their savings."],
+["31 March 1933","Civilian Conservation Corps","Reforestation Relief Act put young men to work."],
+["12 May 1933","Federal Emergency Relief and AAA","Relief spending began and farm over-production was targeted."],
+["18 May 1933","Tennessee Valley Authority","A federal programme to redevelop a poor region."],
+["16 June 1933","Farm Credit Act and NIRA","Farmers refinanced; industry and the PWA were created."],
+["5 December 1933","Prohibition Ends","Alcohol was legal again after 13 years."],
+["January 1934","Townsend Pension Plan","Old Age Revolving Pensions Ltd attacked the New Deal."],
+["February 1934","Long's Share Our Wealth","A radical rival programme to redistribute wealth."],
+["August 1934","American Liberty League Founded","Business opponents organised against Roosevelt."],
+["November 1934","Coughlin's Union; Midterms","National Union for Social Justice formed; reformers won seats."]]],
+["The Second New Deal and War","1935–1941","var(--e5)",[
+["8 April 1935","Emergency Relief Appropriation Act","Created the WPA and the Rural Electrification Authority."],
+["May 1935","WPA and Resettlement Administration","Hopkins led the WPA; the poor were rehoused."],
+["27 May 1935","Supreme Court Strikes Down NRA","Declared unconstitutional."],
+["5 July 1935","Wagner Act","The National Labor Relations Act helped workers unionise."],
+["14 August 1935","Social Security Act","Introduced pensions and unemployment insurance."],
+["September 1935","Huey Long Assassinated","His movement faded afterwards."],
+["January 1936","Supreme Court Strikes Down AAA","A second blow to the first New Deal."],
+["November 1936","Roosevelt Wins Second Term","A landslide over his critics."],
+["February 1937","Judicial Reorganisation Bill","Roosevelt's court-packing plan was rejected."],
+["25 June 1938","Fair Labor Standards Act","Improved working conditions in industry."],
+["November 1938","Democrats Lose Seats","Congress turned against further reform."],
+["1 September 1939","Second World War Begins in Europe","Arms sales to the Allies soon began."],
+["1941","War Reaches the Pacific","35% of farms now had electricity; the New Deal era closed."]]]];
+const M=[
+["Mandate Palestine","1917–1945","var(--e1)",[
+["2 November 1917","Balfour Declaration","Britain backed a Jewish national home in Palestine."],
+["December 1917","British Capture Jerusalem","Ottoman rule over the city ended."],
+["29 September 1923","Britain Awarded the Mandate","The League of Nations gave Britain control of Palestine."],
+["August 1929","Jerusalem Clashes","Arab–Jewish violence erupted over holy sites."],
+["1936","Arab Revolt Begins","Palestinian Arabs launched a strike and revolt against British rule."],
+["July 1937","Peel Commission Report","A 400-page verdict: the Mandate could never succeed."],
+["1939","White Paper","Britain shelved Peel's plan and limited Jewish immigration."],
+["16 April 1945","Bergen-Belsen Liberated","60,000 prisoners found alive and 13,000 dead bodies."]]],
+["Partition and the Birth of Israel","1945–1950","var(--e2)",[
+["22 July 1946","King David Hotel Bombing","Irgun blew up Britain's headquarters in Jerusalem."],
+["February 1947","Britain Asks the UN for Help","The Mandate had become unmanageable."],
+["July 1947","SS Exodus Refused at Haifa","British authorities denied the refugee ship permission to dock."],
+["September 1947","UNSCOP Proposes Partition","Majority decision: split Palestine in two."],
+["29 November 1947","UN Resolution 181","Partition passed by 33 votes to 13, with 10 abstentions."],
+["December 1947","Britain Announces Withdrawal","Departure was set for 15 May 1948."],
+["9 April 1948","Deir Yassin Massacre","Irgun and Lehi killed 100–120 villagers."],
+["14 May 1948","State of Israel Declared","Ben-Gurion announced it at 4 p.m.; the USA recognised it at once."],
+["15 May 1948","Five Arab States Invade","The British Mandate ended and the first Arab–Israeli War began."],
+["July 1950","Law of Return","Any Jew in the world could become an Israeli citizen."]]],
+["Nasser and Suez","1952–1958","var(--e3)",[
+["1954","Nasser Takes Power in Egypt","He became president."],
+["February 1955","Israeli Raid on Gaza","38 Egyptian soldiers killed, exposing Egypt's weakness."],
+["September 1955","Czech Arms Deal","Nasser agreed to buy weapons from Czechoslovakia."],
+["October 1955","Aswan Dam Loan Offered","The USA and Britain offered $270 million."],
+["July 1956","Aswan Offer Withdrawn","The USA and Britain suddenly took back the loan."],
+["26 July 1956","Nasser Nationalises the Suez Canal","His answer to losing the Aswan funding."],
+["22 October 1956","Sèvres Agreement","Secret plan between Israel, France and Britain."],
+["29 October 1956","Israel Attacks Egypt","The Sèvres plan went into action."],
+["November 1956","Suez Crisis Ends","UN and US intervention forced a halt."],
+["February 1958","United Arab Republic","Egypt and Syria merged; Syria left in 1961."]]],
+["Six Day War and the PLO","1964–1973","var(--e4)",[
+["January 1964","Cairo Arab Summit","Arab states committed to the destruction of Israel."],
+["May 1964","PLO Set Up","The Palestine Liberation Organisation was formed."],
+["1 January 1965","Fatah's First Attack","A failed raid that still won Arafat publicity."],
+["November 1966","Samu Incident","A mine killed three Israeli police; Israel struck Jordan."],
+["May 1967","Nasser Expels UN from Sinai","He also closed the Straits of Tiran."],
+["5 June 1967","Six Day War Begins","Israel destroyed 309 of Egypt's 340 aircraft by 11 a.m."],
+["10 June 1967","Six Day War Ends","Israel's territory grew by 350%."],
+["August 1967","Khartoum Conference","Arab states rejected Israel's right to exist."],
+["21 March 1968","Battle of Karameh","15,000 Israeli troops crossed into Jordan after a school bus mine."],
+["September 1970","Dawson's Field Hijacks","The PFLP blew up hijacked planes."],
+["28 September 1970","Nasser Dies","Five million mourners attended his funeral."]]],
+["War, Peace Deals and Lebanon","1973–1987","var(--e5)",[
+["6 October 1973","Yom Kippur War","Egypt and Syria launched a co-ordinated surprise attack."],
+["October 1974","Arab League Recognises PLO","Sole representative of the Palestinians."],
+["November 1974","Arafat Speaks at the UN","The PLO gained international standing."],
+["5 June 1975","Suez Canal Reopens","Exactly 8 years after the Six Day War closure."],
+["20 November 1977","Sadat Addresses the Knesset","Begin accepted the challenge."],
+["15 March 1978","Operation Litani","26,000 Israeli troops invaded Lebanon."],
+["17 September 1978","Camp David Accords","Sadat and Begin talked in secret at Carter's retreat."],
+["26 March 1979","Egypt–Israel Peace Treaty","Signed in Washington six months later."],
+["2 June 1982","Israeli Ambassador Shot in London","Three non-PLO Palestinians gave Israel its excuse."],
+["6 June 1982","Israel Invades Lebanon","The aim was to destroy the PLO."],
+["August 1982","PLO Evacuated from Beirut","11,500 fighters left; headquarters moved to Tunis."],
+["16 September 1982","Sabra and Shatila Massacres","International condemnation turned many Israelis against the war."]]],
+["Intifadas, Oslo and Gaza","1987–2012","var(--e6)",[
+["9 December 1987","First Intifada Begins","A Gaza road crash sparked a 5-year uprising."],
+["Mid-December 1987","Hamas Founded","Set up 6 days after the Intifada began, mostly in Gaza."],
+["November 1988","PLO Recognises Israel","Arafat adopted a two-state solution."],
+["December 1988","Arafat Renounces Terrorism","Delivered at the UN, at US insistence."],
+["2 August 1990","Iraq Invades Kuwait","The world condemned the invasion."],
+["January 1991","Gulf War","A 34-nation coalition launched Operation Desert Storm."],
+["30 October 1991","Madrid Conference","Israel, Syria, Lebanon, Jordan and the Palestinians attended."],
+["December 1991","USSR Dissolves","The Cold War ended."],
+["June 1992","Rabin Takes Power","A new Israeli PM willing to compromise."],
+["April 1993","First Hamas Suicide Bombing","Hamas refused to negotiate at all."],
+["13 September 1993","Oslo Accords Signed","Rabin and Arafat signed in Washington; Nobel Peace Prize in 1994."],
+["28 September 1995","Oslo II Signed","Two months before Rabin's death."],
+["4 November 1995","Rabin Assassinated","Shot by Israeli extremist Yigal Amir."],
+["May 1996","Netanyahu Wins Election","Hamas attacks swung voters against Peres."],
+["28 September 2000","Second Intifada Begins","A new uprising against Israeli rule."],
+["February 2001","Sharon Elected Prime Minister","He answered the Intifada with force."],
+["June 2002","Security Fence Ordered","Suicide bombings dropped once the first part was built."],
+["June 2003","Roadmap Agreed in Principle","Sharon and Abbas met Bush, but Arafat refused support."],
+["11 November 2004","Arafat Dies","Mahmoud Abbas took over in January 2005."],
+["February 2005","Second Intifada Officially Ends","Israel agreed to leave Gaza."],
+["September 2005","Gaza Settlements Dismantled","All 21 were removed."],
+["January 2006","Hamas Wins Elections; Sharon's Stroke","Peace hopes dimmed on both sides."],
+["July 2006","Israel Fights Hezbollah in Lebanon","The attempt to destroy Hezbollah failed."],
+["June 2007","Hamas Seizes Gaza","It expelled every Fatah member."],
+["27 December 2008","Operation Cast Lead","100 targets were struck in the first four minutes."]]]];
+const WHY={"Armistice Signed": "Ended WWI; the 'stab in the back' myth damaged Weimar from birth.", "Spartacist Uprising": "Showed the threat from the left; Weimar relied on the Freikorps to survive.", "Treaty of Versailles Signed": "A hated 'diktat': blame, reparations, lost land, a 100,000-man army.", "Weimar Constitution Approved": "Democratic but flawed: proportional representation and Article 48.", "Ruhr Invaded": "Triggered passive resistance and hyperinflation.", "Munich Putsch": "Failed, but gave Hitler a trial platform and a new 'legal' strategy.", "Rentenmark Introduced": "Ended hyperinflation and began Stresemann's recovery.", "Dawes Plan": "US loans fuelled the Golden Years, but made Germany dependent on America.", "Locarno Pact": "Germany accepted its western borders and was welcomed back diplomatically.", "Wall Street Crash": "The boom ended; loans were recalled and the Depression began.", "Nazis Become Largest Party": "Hitler's electoral peak, yet still short of a majority.", "Hitler Appointed Chancellor": "The 'legal' route to power, via deals with Hindenburg's circle.", "Reichstag Fire": "The pretext for emergency decrees and attacks on communists.", "Enabling Act Passed": "Gave Hitler the power to make laws: the end of democracy.", "Night of the Long Knives": "Removed Röhm and the SA threat, and won the army's loyalty.", "Hindenburg Dies; Hitler Becomes Führer": "Hitler merged chancellor and president; the army swore a personal oath.", "Nuremberg Laws": "Made racial persecution of Jews legal.", "Kristallnacht": "Persecution escalated from discrimination to open violence.", "Germany Invades Poland": "Started WWII and put millions of Jews under Nazi control.", "Wannsee Conference": "Co-ordinated the 'Final Solution'.", "Germany Surrenders": "The Third Reich ended.", "Palmer Raids Begin": "The Red Scare's peak: fear of communists overrode civil liberties.", "Prohibition Comes into Force": "Fuelled organised crime and disrespect for the law.", "Women Gain the Vote": "Political equality, though daily life changed little.", "Emergency Quota Act": "The first firm immigration limits: nativism won.", "Guilty Verdict": "Sacco and Vanzetti became symbols of prejudice against immigrants and radicals.", "Scopes 'Monkey' Trial Begins": "Exposed the split between fundamentalists and modern ideas.", "Hawley-Smoot Tariff": "Cut trade and deepened the Depression.", "Bonus Marchers Cleared": "Hoover's reputation collapsed after veterans were driven out.", "Roosevelt Wins the Presidency": "A landslide for change; the end of Hoover's hands-off approach.", "Emergency Banking Act": "Restored confidence: sound banks reopened.", "Civilian Conservation Corps": "Jobs for young men: relief through work.", "Federal Emergency Relief and AAA": "Direct relief, and a bid to cut farm over-production.", "Farm Credit Act and NIRA": "Eased farm debt and set up industry codes and public works.", "Prohibition Ends": "An admission that Prohibition had failed.", "Supreme Court Strikes Down NRA": "The Court blocked part of the first New Deal.", "Wagner Act": "Protected workers' right to join unions.", "Social Security Act": "The start of US welfare: pensions and unemployment insurance.", "Judicial Reorganisation Bill": "The 'court-packing' backlash cost Roosevelt support.", "War Reaches the Pacific": "War production finally ended the unemployment of the 1930s.", "Balfour Declaration": "Britain backed a Jewish home while having also made promises to Arabs.", "Peel Commission Report": "The first proposal to partition Palestine.", "White Paper": "Limited Jewish immigration just as refugees needed escape.", "King David Hotel Bombing": "Irgun terrorism hardened Britain's resolve to leave.", "UN Resolution 181": "Partition plan for a Jewish and an Arab state; Arabs rejected it.", "State of Israel Declared": "Israel's birth, and the start of the Palestinian refugee problem.", "Five Arab States Invade": "The first Arab–Israeli War: Israel survived and gained land.", "Nasser Nationalises the Suez Canal": "Challenged Britain and France and made Nasser an Arab hero.", "Israel Attacks Egypt": "Part of the Sèvres plot; Britain and France were later forced out.", "PLO Set Up": "Gave the Palestinians an organised voice.", "Six Day War Begins": "Israel gained Sinai, Gaza, the West Bank and Golan: 350% bigger.", "Yom Kippur War": "A surprise attack restored Arab pride and opened the way to peace talks.", "Camp David Accords": "The first Israeli–Arab peace framework.", "Egypt–Israel Peace Treaty": "Egypt recognised Israel, but Sadat was isolated in the Arab world.", "Israel Invades Lebanon": "Aimed to destroy the PLO but damaged Israel's image.", "Sabra and Shatila Massacres": "Massacres in refugee camps brought global condemnation.", "First Intifada Begins": "A mass uprising that put the Palestinian cause back on the world stage.", "PLO Recognises Israel": "A shift towards a two-state solution.", "Oslo Accords Signed": "First direct deal: mutual recognition and Palestinian self-rule.", "Rabin Assassinated": "The peace camp lost its leader to an Israeli extremist.", "Second Intifada Begins": "Trust collapsed; violence returned and the security fence followed.", "Hamas Seizes Gaza": "Palestinians split: Fatah in the West Bank, Hamas in Gaza.", "Operation Cast Lead": "A major Israeli offensive on Gaza with heavy civilian losses."};
+const EXACT=new Set(["Armistice Signed","Hitler Appointed Chancellor","UN Resolution 181","State of Israel Declared","Six Day War Begins"]);
+const short=x=>x.key&&!x.ud&&!EXACT.has(x.e)?x.d.replace(/^\d+(?:[–-]\d+)?\s+(?=[A-Z])/,''):x.d;
+const KEYS={mideast:new Set(["Balfour Declaration", "Peel Commission Report", "White Paper", "King David Hotel Bombing", "UN Resolution 181", "State of Israel Declared", "Five Arab States Invade", "Nasser Nationalises the Suez Canal", "Israel Attacks Egypt", "PLO Set Up", "Six Day War Begins", "Yom Kippur War", "Camp David Accords", "Egypt–Israel Peace Treaty", "Israel Invades Lebanon", "Sabra and Shatila Massacres", "First Intifada Begins", "PLO Recognises Israel", "Oslo Accords Signed", "Rabin Assassinated", "Second Intifada Begins", "Hamas Seizes Gaza", "Operation Cast Lead"]),usa:new Set(["Palmer Raids Begin", "Prohibition Comes into Force", "Women Gain the Vote", "Emergency Quota Act", "Guilty Verdict", "Scopes 'Monkey' Trial Begins", "Wall Street Crash", "Hawley-Smoot Tariff", "Bonus Marchers Cleared", "Roosevelt Wins the Presidency", "Emergency Banking Act", "Civilian Conservation Corps", "Federal Emergency Relief and AAA", "Farm Credit Act and NIRA", "Prohibition Ends", "Supreme Court Strikes Down NRA", "Wagner Act", "Social Security Act", "Judicial Reorganisation Bill", "War Reaches the Pacific"]),germany:new Set(["Armistice Signed", "Spartacist Uprising", "Treaty of Versailles Signed", "Weimar Constitution Approved", "Ruhr Invaded", "Munich Putsch", "Rentenmark Introduced", "Dawes Plan", "Locarno Pact", "Wall Street Crash", "Nazis Become Largest Party", "Hitler Appointed Chancellor", "Reichstag Fire", "Enabling Act Passed", "Night of the Long Knives", "Hindenburg Dies; Hitler Becomes Führer", "Nuremberg Laws", "Kristallnacht", "Germany Invades Poland", "Wannsee Conference", "Germany Surrenders"])};
+const GC=(...n)=>n.map((x,i)=>[x,'Case study','var(--e'+(i+1)+')',[]]);
+const D={mideast:{t:'The Middle East 1917–2012',s:'Conflict, crisis and change',e:M},geo1:{t:'Changing River Environments',s:'Topic 1 · case studies',e:GC('Belgian Floods 2021 (River Vesdre)','Three Gorges Dam (Yangtze)')},geo2:{t:'Changing Coastal Environments',s:'Topic 2 · case studies',e:GC('Mappleton (Holderness Coast)','Gardens of the Queen (Cuba)')},geo4:{t:'Tectonic Hazards',s:'Topic 4 · case studies',e:GC('Sulawesi Earthquake 2018','Grindavík Eruption 2023–25')},geo6:{t:'Changing Populations',s:'Topic 6 · case studies',e:GC('Japan (Ageing Population)','Morocco to Spain (International Migration)')},geo7:{t:'Changing Towns and Cities',s:'Topic 7 · case studies',e:GC('Nairobi, Kenya')},geo8:{t:'Development',s:'Topic 8 · case studies',e:GC('Honduras')},germany:{t:'Germany 1918–1945',s:'Development of dictatorship',e:E},usa:{t:'The USA 1918–1941',s:'Boom, bust and the New Deal',e:U}};
+const $=id=>document.getElementById(id),tl=$('tl'),jump=$('jump');
+/*@ADD_D*/
+let topic='germany',mode='study',pool=[],all=[],known=new Set(),queue=[],cur=null,ok=0,n=0;
+const pick=a=>a[Math.floor(Math.random()*a.length)],shuf=a=>[...a].sort(()=>Math.random()-.5);
+const key='known-';function load(){try{known=new Set(JSON.parse(LS.get(key+topic)||'[]'))}catch(e){known=new Set()}}
+function save(){try{LS.set(key+topic,JSON.stringify([...known]))}catch(e){}}
+let fullEras=[],edits={};
+function getEd(){if(!edits[topic]){let o=null;try{o=JSON.parse(LS.get('edits-'+topic))}catch(e){}edits[topic]=Object.assign({mod:{},del:[],add:[],eras:{},ne:[],ord:{}},o&&o.mod?o:{})}return edits[topic]}
+function eras(){const ed=getEd(),o=ed.eras;return D[topic].e.map((e,i)=>o[i]?[o[i].t||e[0],o[i].y!=null?o[i].y:e[1],o[i].c||e[2],e[3]]:e).concat(ed.ne.map(n=>[n.t,n.y,n.c,[]]))}
+function hex(c){if(/^#[0-9a-f]{6}$/i.test(c))return c;const t=document.createElement('i');t.style.color=c;document.body.appendChild(t);const m=getComputedStyle(t).color.match(/\d+/g)||[0,0,0];t.remove();return '#'+m.slice(0,3).map(x=>(+x).toString(16).padStart(2,'0')).join('')}
+function saveEd(){try{LS.set('edits-'+topic,JSON.stringify(edits[topic]))}catch(e){}}
+/* appearance */
+let look={};try{look=JSON.parse(LS.get('look')||'{}')}catch(e){}
+function applyLook(){const r=document.documentElement,st=r.style;
+look.th?r.setAttribute('data-theme',look.th):r.removeAttribute('data-theme');
+st.setProperty('--zm',(look.zm||100)/100);
+if(look.lh){st.setProperty('--lh',look.lh/10);r.setAttribute('data-lh','')}else r.removeAttribute('data-lh');
+if(look.mw){st.setProperty('--mw',look.mw);r.setAttribute('data-mw','')}else r.removeAttribute('data-mw');
+if(look.ff){st.setProperty('--ff',look.ff);r.setAttribute('data-ff','')}else r.removeAttribute('data-ff');
+$('aTh').value=look.th||'';$('aZm').value=look.zm||100;$('aLh').value=look.lh||14;$('aMw').value=look.mw||'';$('aFf').value=look.ff||''}
+function saveLook(){try{LS.set('look',JSON.stringify(look))}catch(e){}}
+['aTh','aZm','aLh','aMw','aFf'].forEach(id=>$(id).oninput=()=>{look={th:$('aTh').value,zm:+$('aZm').value,lh:+$('aLh').value,mw:$('aMw').value,ff:$('aFf').value};if(look.lh===14)delete look.lh;if(look.zm===100)delete look.zm;saveLook();applyLook()});
+$('aRs').onclick=()=>{look={};try{LS.del('look')}catch(e){}applyLook()};
+$('aa').onclick=()=>{const o=$('aap').hidden;$('aap').hidden=!o;$('aa').setAttribute('aria-expanded',o)};
+
+/* geography document editor */
+const escH=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function cleanHTML(h){const p=new DOMParser().parseFromString('<body>'+h,'text/html');p.querySelectorAll('script,style,iframe,object,embed,link,meta,base,form,svg').forEach(n=>n.remove());p.body.querySelectorAll('*').forEach(n=>{[...n.attributes].forEach(a=>{const k=a.name.toLowerCase(),v=a.value.trim().toLowerCase();if(k.startsWith('on')||((k==='href'||k==='src')&&!/^(https?:|mailto:|#|data:image\/)/.test(v)))n.removeAttribute(a.name)})});return p.body.innerHTML}
+let gp=null,gr=null,gsync=null;
+document.addEventListener('selectionchange',()=>{if(!gp)return;const s=getSelection();if(s.rangeCount&&gp.contains(s.anchorNode)){gr=s.getRangeAt(0).cloneRange();if(gsync)gsync()}});
+function gfocus(){if(!gp)return;if(document.activeElement!==gp){gp.focus();if(gr){const s=getSelection();s.removeAllRanges();s.addRange(gr)}}}
+/* paste auto-format */
+const inl=s=>escH(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|[\s(>])\*(?!\s)([^*<]+?)\*(?=[\s).,;:!?<]|$)/g,'$1<i>$2</i>');
+const wc=s=>s.trim().split(/\s+/).filter(Boolean).length;
+function flow(items,num){return'<span class="flow">'+items.map((h,i)=>'<span class="st">'+(num?'<em>'+(i+1)+'</em>':'')+h+'</span>').join('<span class="ar">→</span>')+'</span>'}
+function arrowFlow(s){const p=s.split(/\s*(?:→|->|=>|➜|⇒)\s*/).map(x=>x.trim()).filter(Boolean);if(p.length<2||p.some(x=>wc(x)>14))return null;return flow(p.map(x=>inl(x.replace(/\.+$/,''))),false)}
+const ABBR=/^(e\.g|i\.e|etc|vs|cf|approx|no|nos|fig|figs|st|dr|mr|mrs|ms|prof|ca|inc|ltd|est|[A-Za-z])$/i;
+function sentences(s){const out=[];let dp=0,st=0;for(let i=0;i<s.length;i++){const ch=s[i];if(ch==='(')dp++;else if(ch===')')dp=Math.max(0,dp-1);else if(dp===0&&/[.!?]/.test(ch)){let j=i;while(j+1<s.length&&/[.!?]/.test(s[j+1]))j++;const nx=s.slice(j+1);
+if(!nx.length||/^\s+["“'(]?[A-Z0-9]/.test(nx)){const w=((s.slice(st,i).match(/(\S+)$/)||['',''])[1]).replace(/^[("“']+/,'');if(ch==='.'&&j===i&&ABBR.test(w)){continue}out.push(s.slice(st,j+1).trim());st=j+1}i=j}}
+const rest=s.slice(st).trim();if(rest)out.push(rest);return out}
+function stepsOf(def){const parts=sentences(def);if(parts.length>=3&&parts.length<=10&&parts.every(x=>wc(x)<=22))return flow(parts.map(x=>inl(x.replace(/[.!?]+$/,''))),true);return null}
+function boldItems(def){const parts=[];let dp=0,cur='';for(const ch of def){if(ch==='(')dp++;else if(ch===')')dp=Math.max(0,dp-1);if(ch===','&&dp===0){parts.push(cur);cur=''}else cur+=ch}parts.push(cur);
+if(parts.length<3)return null;
+const ok=parts.every(p=>{const t=p.trim().replace(/\.$/,''),nm=t.replace(/\(.*$/,'').trim();return nm&&nm.split(/\s+/).length<=5&&!/[.!?]\s*\S/.test(t.replace(/\b(?:e\.g|i\.e|etc|vs)\./gi,''))});
+if(!ok||parts.filter(p=>/\(/.test(p)).length/parts.length<0.3)return null;
+return parts.map(p=>{const t=p.replace(/^\s+/,''),pre=p.slice(0,p.length-t.length),m=t.match(/^([^()]+?)(\s*\(.*)?$/);let nm=m[1].trim(),dot='';if(/\.$/.test(nm)){nm=nm.slice(0,-1);dot='.'}return pre+'<b class="i">'+inl(nm)+'</b>'+dot+(m[2]?' '+inl(m[2].trim()):'')}).join(',')}
+const termOK=x=>x.split(/\s+/).length<=5&&!/[.!?]$/.test(x)&&!/^(https?|note)$/i.test(x);
+function termB(s,dash){const m=s.match(/^([^:]{2,40}?):\s+(\S.*)$/);
+if(m&&termOK(m[1]))return'<b class="t">'+inl(m[1])+':</b> '+(boldItems(m[2])||stepsOf(m[2])||arrowFlow(m[2])||inl(m[2]));
+if(dash){const d=s.match(/^([^–—:]{2,40}?)\s+[–—-]\s+(\S.*)$/);if(d&&wc(d[1])<=4&&!/[.!?]$/.test(d[1]))return'<b class="t">'+inl(d[1])+'</b> – '+(boldItems(d[2])||stepsOf(d[2])||arrowFlow(d[2])||inl(d[2]))}
+return arrowFlow(s)||inl(s)}
+const termL=s=>{const m=s.match(/^([^:]{2,40}?):\s+\S/);return !!m&&termOK(m[1])};
+const CO=[[/^(exam tips?|top tips?|tips?|hints?)$/i,'tip'],[/^(notes?|links?|context)$/i,'note'],[/^(remember|key points?|key ideas?|important|mnemonic|key facts?)$/i,'key'],[/^(warning|watch out|careful|common mistakes?)$/i,'warn']];
+function callout(l){const m=l.match(/^([A-Za-z ]{3,20}?)\s*[:–-]\s+(\S.*)$/);if(!m)return null;for(const [re,ty] of CO){if(re.test(m[1].trim()))return'<div class="callout co-'+ty+'"><b>'+inl(m[1].trim())+':</b> '+inl(m[2])+'</div>'}return null}
+function tableHTML(rows){const nc=Math.max(...rows.map(r=>r.length));return'<table class="gt"><tbody>'+rows.map((r,ri)=>'<tr>'+Array.from({length:nc},(_,ci)=>{const c=(r[ci]||'').trim();return ri===0?'<th>'+inl(c)+'</th>':'<td>'+(ci===0&&c&&!termL(c)&&wc(c)<=8?'<b class="t">'+inl(c)+'</b>':termB(c))+'</td>'}).join('')+'</tr>').join('')+'</tbody></table><p><br></p>'}
+const RXD=/(\([^()]{1,70}\))|(\b(?:1[5-9]\d{2}|20\d{2})(?:[–-]\d{2,4})?\b)|((?:[€$£]\s?)?\b\d[\d,]*(?:\.\d+)?\s?(?:%|°C|km²|km|mm|cm|m³\/s|m|billion|million|thousand|people|deaths|tonnes|years|days|hours|cumecs|bn)(?![A-Za-z]))/gi;
+function beautify(html){const doc=new DOMParser().parseFromString('<body>'+html,'text/html'),b=doc.body;
+const hasH2=!!b.querySelector(':scope>h2');let c=0;
+[...b.children].forEach(n=>{const tg=n.tagName;if(tg==='H2'||(tg==='H3'&&!hasH2))c++;const k=((Math.max(c,1)-1)%6)+1;if(!/\bs\d\b/.test(n.className)&&!/\bco-/.test(n.className))n.className=(n.className+' s'+k).trim()});
+b.querySelectorAll('ul').forEach(u=>{const li=[...u.children];if(li.length&&li.every(x=>x.firstElementChild&&x.firstElementChild.type==='checkbox'))u.classList.add('cl')});
+b.querySelectorAll('h2,h3').forEach(h=>{const t=h.firstChild;if(h.tagName==='H2'&&t&&t.nodeType===3){const m=t.nodeValue.match(/^(\d{1,2})[.)]\s+/);if(m){const sp=doc.createElement('span');sp.className='nb';sp.textContent=m[1];t.nodeValue=t.nodeValue.slice(m[0].length);h.insertBefore(sp,t)}}
+const w=doc.createTreeWalker(h,NodeFilter.SHOW_TEXT),ns=[];while(w.nextNode())ns.push(w.currentNode);
+ns.forEach(t=>{const m=t.nodeValue.match(/\s*\(([A-Z]{2,6})\)\s*$/);if(m){t.nodeValue=t.nodeValue.slice(0,m.index);const sp=doc.createElement('span');sp.className='bd';sp.textContent=m[1];t.after(' ',sp)}})});
+const tw=doc.createTreeWalker(b,NodeFilter.SHOW_TEXT),nodes=[];while(tw.nextNode())nodes.push(tw.currentNode);
+nodes.forEach(t=>{if(!t.parentElement||t.parentElement.closest('h1,h2,h3,th,a,b.t,.fg,.pn,.bd,.nb'))return;const s=t.nodeValue,parts=[];let last=0,mm;RXD.lastIndex=0;
+while((mm=RXD.exec(s))){if(mm.index>last)parts.push(s.slice(last,mm.index));const sp=doc.createElement('span');sp.className=mm[1]?'pn':'fg';sp.textContent=mm[0];parts.push(sp);last=mm.index+mm[0].length}
+if(!parts.length)return;if(last<s.length)parts.push(s.slice(last));t.replaceWith(...parts)});
+return b.innerHTML}
+function textToHTML(t){
+const isBul=s=>/^[-•*–—·▪●◦■□]\s+/.test(s),isNum=s=>/^\d{1,2}[.)]\s+/.test(s);
+const tabRow=s=>!/^\s/.test(s)&&/\t/.test(s)&&s.trim().split(/\t+/).length>=2;
+const pipeRow=s=>/^\s*\|.*\|\s*$/.test(s),pipeSep=s=>/^\s*\|?[\s:|-]+\|?\s*$/.test(s)&&/-/.test(s);
+const L=[];String(t).replace(/\r/g,'').split('\n').forEach(raw=>{const l=raw.trim(),prev=L.length?L[L.length-1]:'',pt=prev.trim();
+if(l&&pt&&!isBul(l)&&!isNum(l)&&!tabRow(raw)&&!tabRow(prev)&&!pipeRow(prev)&&!pipeRow(raw)){
+if(/^\s{2,}\S/.test(raw)&&(isBul(pt)||isNum(pt))){L[L.length-1]=prev+' '+l;return}
+if(/^[a-z(]/.test(l)&&pt.length>=45&&!/[.!?:;]$/.test(pt)){L[L.length-1]=prev+' '+l;return}}
+L.push(raw)});
+let out='',stack=[],ind=[],auto=false;
+const closeAll=()=>{while(stack.length)out+='</li></'+stack.pop()+'>';ind=[]};
+const level=sp=>{while(ind.length&&ind[ind.length-1]>sp)ind.pop();if(!ind.length||ind[ind.length-1]<sp)ind.push(sp);return ind.length-1};
+const li=(ty,sp,c)=>{const lv=level(sp);
+if(!stack.length||lv>stack.length-1){out+='<'+ty+'><li>';stack.push(ty)}
+else{while(stack.length>lv+1)out+='</li></'+stack.pop()+'>';if(stack[lv]!==ty){out+='</li></'+stack.pop()+'><'+ty+'><li>';stack.push(ty)}else out+='</li><li>'}
+out+=c};
+const nbi=i=>{for(let j=i+1;j<L.length;j++)if(L[j].trim())return j;return -1};
+const nbt=i=>{const j=nbi(i);return j<0?'':L[j].trim()};
+const nbt2=i=>{const j=nbi(i);return j<0?'':nbt(j)};
+const tc=s=>s.toLowerCase().replace(/(^|\s)\w/g,c=>c.toUpperCase());
+function head(l,nx){if(isBul(l))return null;let m;const short=l.length<=70,noEnd=!/[.!?]$/.test(l);
+if(m=l.match(/^(#{1,3})\s+(.*)$/))return[m[1].length,m[2]];
+if(short&&l.length>=4&&/^[A-Z0-9 ,&'’\-–:()\/]+$/.test(l)&&/[A-Z]{3}/.test(l))return[2,tc(l.replace(/:$/,''))];
+if(short&&noEnd&&/^(topic|case study|section|chapter|part|unit)\b/i.test(l))return[2,l.replace(/:$/,'')];
+if(short&&noEnd&&/^\d{1,2}[.)]\s+[A-Za-z]/.test(l)&&wc(l)<=9&&!isNum(nx)&&!/:\s/.test(l))return[2,l.replace(/:$/,'')];
+if(short&&/:$/.test(l)&&!isNum(l)&&!callout(l+' x'))return[3,l.slice(0,-1)];
+if(short&&noEnd&&(isBul(nx)||isNum(nx))&&wc(l)<=8&&!/:\s/.test(l)&&!isNum(l))return[3,l];
+return null}
+for(let i=0;i<L.length;i++){const raw=L[i],l=raw.trim();
+if(!l){const n=nbt(i);if(!(stack.length&&n&&(isBul(n)||isNum(n)||(auto&&!head(n,nbt2(i))))))closeAll();continue}
+if(pipeRow(raw)){closeAll();auto=false;const rows=[];let j=i;while(j<L.length&&(pipeRow(L[j])||!L[j].trim())){if(L[j].trim()&&!pipeSep(L[j]))rows.push(L[j].trim().replace(/^\||\|$/g,'').split('|').map(x=>x.trim()));j++}
+if(rows.length){out+=tableHTML(rows)}i=j-1;continue}
+if(tabRow(raw)){closeAll();auto=false;const rows=[];let j=i;
+while(j<L.length){if(!L[j].trim()){const q=nbi(j);if(q>=0&&tabRow(L[q])){j=q;continue}break}if(!tabRow(L[j]))break;rows.push(L[j].trim().split(/\t+/));j++}
+out+=tableHTML(rows);i=j-1;continue}
+const nx=nbt(i),sp=(raw.match(/^[ \t]*/)[0]).replace(/\t/g,'    ').length;let m,h,co;
+if(m=l.match(/^[-•*–—·▪●◦■□]\s+(.*)$/)){const cb=m[1].match(/^\[( |x|X)\]\s*(.*)$/);li('ul',sp,cb?'<input type="checkbox" contenteditable="false"'+(cb[1]!==' '?' checked':'')+'> '+termB(cb[2],true):termB(m[1],true));continue}
+if(co=callout(l)){closeAll();out+=co;continue}
+if(h=head(l,nx)){closeAll();out+='<h'+h[0]+'>'+inl(h[1])+'</h'+h[0]+'>';auto=h[0]===3;continue}
+if(m=l.match(/^(\d{1,2})[.)]\s+(.*)$/)){li('ol',sp,termB(m[2],true));continue}
+if(auto||(termL(l)&&termL(nx)&&!head(nx,nbt2(i)))){li('ul',0,termB(l,true));continue}
+closeAll();out+='<p>'+termB(l)+'</p>'}
+closeAll();return beautify(out)}
+function cleanPasted(h){const p=new DOMParser().parseFromString('<body>'+cleanHTML(h),'text/html'),b=p.body;
+b.querySelectorAll('span,font,b,strong,i,em,u').forEach(n=>{const st=(n.getAttribute('style')||'').toLowerCase(),tg=n.tagName.toLowerCase();
+const bold=(tg==='b'||tg==='strong')?!/font-weight:\s*(normal|[1-4]00)/.test(st):/font-weight:\s*(bold|[6-9]00)/.test(st);
+const it=(tg==='i'||tg==='em')?!/font-style:\s*normal/.test(st):/font-style:\s*italic/.test(st);
+let node=p.createDocumentFragment();while(n.firstChild)node.appendChild(n.firstChild);
+[[tg==='u','u'],[it,'i'],[bold,'b']].forEach(([on,t])=>{if(on){const w=p.createElement(t);w.appendChild(node);node=w}});
+n.replaceWith(node)});
+b.querySelectorAll('div').forEach(n=>{const blk=n.querySelector('p,ul,ol,table,h1,h2,h3,h4,div');const r=blk?p.createDocumentFragment():p.createElement('p');while(n.firstChild)r.appendChild(n.firstChild);n.replaceWith(r)});
+b.querySelectorAll('li p').forEach(n=>{const f=p.createDocumentFragment();while(n.firstChild)f.appendChild(n.firstChild);n.replaceWith(f)});
+b.querySelectorAll('*').forEach(n=>{const tg=n.tagName.toLowerCase();[...n.attributes].forEach(a=>{const k=a.name;if(!((tg==='a'&&k==='href')||(tg==='img'&&(k==='src'||k==='alt'))||((tg==='td'||tg==='th')&&(k==='colspan'||k==='rowspan'))))n.removeAttribute(k)});
+if(tg==='table')n.className='gt';if(tg==='a'){n.target='_blank';n.rel='noopener'}});
+b.querySelectorAll('b:empty,i:empty,u:empty,p:empty').forEach(n=>n.remove());
+return b.innerHTML}
+
+/* geography document */
+const GPW={n:'600px',m:'100%',w:'1000px',f:'100vw'},GBG={d:['',''],p:['#fbf6ea','#2b2418'],w:['#ffffff','#1b1f24'],k:['#161b22','#e6edf3']};
+function gDoc(){
+const d=D[topic],k='gdoc-'+topic;let html='',cfg={},fresh=true;
+try{const h=LS.get(k);if(h){html=h;fresh=false}cfg=JSON.parse(LS.get(k+'-cfg')||'{}')}catch(e){}
+if(!html.trim())html='<h1>'+escH(d.t)+'</h1>'+d.e.map(e=>'<h2>'+escH(e[0])+'</h2><p><br></p>').join('');
+const B=(c,l,t,x)=>`<button type="button" data-c="${c}" title="${t}" aria-label="${t}"${x?' class="'+x+'"':''}>${l}</button>`;
+const O=a=>a.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('');
+tl.innerHTML=`<div class="gd"><div class="gbar"><button type="button" id="ged" class="gedit">✎ Edit notes</button></div>
+<div class="gtb"><div class="gr">
+${B('undo','↶','Undo')}${B('redo','↷','Redo')}
+<select data-s="block" aria-label="Text style">${O([['p','Normal'],['h1','Title'],['h2','Heading'],['h3','Subheading'],['blockquote','Quote']])}</select>
+${B('bold','<b>B</b>','Bold')}${B('italic','<i>I</i>','Italic')}${B('underline','<u>U</u>','Underline')}${B('hl','<span class="hlb">A</span>','Highlight')}
+${B('insertUnorderedList','• List','Bulleted list')}${B('insertOrderedList','1. List','Numbered list')}${B('more','More ▾','More tools')}${B('done','✓ Done','Finish editing','pri')}
+</div><div class="gr gm" hidden>
+<div class="gg"><small>Text</small><select data-s="font" aria-label="Font">${O([['','Font'],["'Source Sans 3',system-ui,sans-serif",'Sans'],['Georgia,serif','Serif'],['Bitter,Georgia,serif','Slab'],["'Courier New',monospace",'Mono']])}</select>
+<select data-s="size" aria-label="Font size">${O([['','Size'],...[12,14,16,18,20,24,28,32,40].map(n=>[n,n])])}</select>
+<input type="color" data-s="fore" value="#17202e" title="Text colour" aria-label="Text colour"><input type="color" data-s="back" value="#fff2a8" title="Highlight colour" aria-label="Highlight colour">
+${B('strikeThrough','<s>S</s>','Strikethrough')}${B('justifyLeft','⇤','Align left')}${B('justifyCenter','↔','Centre')}${B('clear','Clear','Clear formatting')}</div>
+<div class="gg"><small>Insert</small>${B('cl','☑ Checklist','Checklist')}${B('callout','Callout','Callout box')}${B('img','Image','Insert image')}<input type="file" accept="image/*" data-i="img" hidden>
+<input type="text" data-i="url" placeholder="Link address" aria-label="Link address">${B('link','Link','Add link')}${B('unlink','Unlink','Remove link')}</div>
+<div class="gg"><small>Table</small><input type="number" data-i="tr" value="3" min="1" max="12" aria-label="Rows"><small>×</small><input type="number" data-i="tc" value="3" min="1" max="8" aria-label="Columns">${B('table','Insert','Insert table')}${B('tr+','+Row','Add row','tbo')}${B('tc+','+Col','Add column','tbo')}${B('tdel','Delete','Delete table','tbo')}</div>
+<div class="gg"><small>Format</small>${B('fmt','✨ Auto-format','Auto-format the selected text, or the whole page')}<label class="chk"><input type="checkbox" data-s="af" checked> Auto-format pasted notes</label></div>
+<div class="gg"><small>Page</small><select data-s="pw" aria-label="Page width">${O([['n','Narrow'],['m','Normal'],['w','Wide'],['f','Full']])}</select>
+<select data-s="pbg" aria-label="Page colour">${O([['d','Default'],['p','Paper'],['w','White'],['k','Dark']])}</select>
+<select data-s="pf" aria-label="Default font">${O([['','Default font'],["'Source Sans 3',system-ui,sans-serif",'Sans'],['Georgia,serif','Serif'],["'Courier New',monospace",'Mono']])}</select>
+<select data-s="ps" aria-label="Default size">${O([['','Default size'],...[14,16,18,20,22].map(n=>[n,n])])}</select>
+<select data-s="pl" aria-label="Line spacing">${O([['','Spacing'],['1.3','Tight'],['1.55','Normal'],['1.8','Relaxed'],['2.1','Double']])}</select></div>
+<div class="gg" style="border:0">${B('copy','Copy all','Copy the whole document')}${B('print','Print','Print or save as PDF')}${B('reset','Reset page','Reset this page to the template')}</div>
+</div></div>
+<div class="gpage" contenteditable="false" role="textbox" aria-multiline="true" aria-label="Notes document"></div><div class="gst"></div></div>`;
+const gd=tl.firstChild,gm=gd.querySelector('.gm'),st=gd.querySelector('.gst'),tb=gd.querySelector('.gtb'),eb=gd.querySelector('#ged');
+gp=gd.querySelector('.gpage');gr=null;gp.innerHTML=cleanHTML(html);
+const links=()=>gp.querySelectorAll('a').forEach(a=>{a.target='_blank';a.rel='noopener'});links();
+if(fresh)st.classList.add('gh');
+const words=()=>(gp.innerText||'').trim().split(/\s+/).filter(Boolean).length;
+let tm=null,pend=false;const me=gp;
+const write=()=>{pend=false;try{LS.set(k,me.innerHTML);st.classList.remove('gh');st.textContent='Saved · '+words()+' words'+(LS.cloud?(LS.err?' · sync problem':' · synced'):' · this device only')}catch(e){st.textContent='Could not save (storage full or blocked)'}};
+const gsave=now=>{clearTimeout(tm);pend=true;st.textContent='Saving…';if(now)write();else tm=setTimeout(write,400)};
+gflush=()=>{if(pend){clearTimeout(tm);write()}};
+st.textContent=fresh?'Tap Edit notes to start writing.':words()+' words';
+const savecfg=()=>{try{LS.set(k+'-cfg',JSON.stringify(cfg))}catch(e){}};
+function apply(){gd.style.setProperty('--pw',GPW[cfg.pw||'m']);const b=GBG[cfg.pbg||'d'];if(b[0]){gp.style.setProperty('--gbg',b[0]);gp.style.setProperty('--gink',b[1])}else{gp.style.removeProperty('--gbg');gp.style.removeProperty('--gink')}
+gp.style.fontFamily=cfg.pf||'';gp.style.fontSize=cfg.ps?cfg.ps+'px':'';gp.style.lineHeight=cfg.pl||'';
+[['pw','m'],['pbg','d'],['pf',''],['ps',''],['pl','']].forEach(([n,dv])=>{gd.querySelector('[data-s='+n+']').value=cfg[n]||dv});gd.querySelector('[data-s=af]').checked=cfg.af!==false}
+apply();
+function setEd(on){gd.classList.toggle('ed',on);gp.contentEditable=on?'true':'false';gp.spellcheck=on;eb.hidden=on;
+if(on){gd.style.setProperty('--nh',document.querySelector('nav').offsetHeight+'px');gp.focus()}else{gm.hidden=true;gflush&&gflush();links();st.textContent=words()+' words';gr=null}}
+const X=(c,v)=>{gfocus();try{document.execCommand('styleWithCSS',false,true)}catch(e){}document.execCommand(c,false,v==null?null:v);gsave()};
+const cell=()=>{const s=getSelection();let n=s.anchorNode;n=n&&(n.nodeType===1?n:n.parentElement);return n&&gp.contains(n)?n.closest('td,th'):null};
+const val=n=>gd.querySelector('[data-i='+n+']');
+let armed=false,armedF=false;
+function act(c){
+if(c==='fmt'){gfocus();const sl=getSelection(),tx=sl.toString(),bt=gd.querySelector('[data-c=fmt]');if(tx.trim()){X('insertHTML',textToHTML(tx));return}if(!armedF){armedF=true;bt.textContent='Tap again: format whole page';return}armedF=false;bt.textContent='✨ Auto-format';gp.innerHTML=textToHTML(gp.innerText);gsave(true);return}
+if(c==='done'){setEd(false);return}
+if(c==='more'){gm.hidden=!gm.hidden;return}
+if(c==='hl'){gfocus();document.execCommand('styleWithCSS',false,true);document.execCommand('hiliteColor',false,'#fff2a8')||document.execCommand('backColor',false,'#fff2a8');gsave();return}
+if(c==='clear'){X('removeFormat');return}
+if(c==='link'){let u=val('url').value.trim();if(!u)return;if(!/^(https?:|mailto:)/i.test(u))u='https://'+u;X('createLink',u);links();return}
+if(c==='unlink'){X('unlink');return}
+if(c==='table'){const r=Math.max(1,Math.min(12,+val('tr').value||3)),n=Math.max(1,Math.min(8,+val('tc').value||3));X('insertHTML','<table class="gt"><tbody>'+('<tr>'+'<td><br></td>'.repeat(n)+'</tr>').repeat(r)+'</tbody></table><p><br></p>');return}
+if(c==='tr+'){const t=cell();if(!t)return;const tr=t.parentElement,n=tr.cloneNode(true);n.querySelectorAll('td,th').forEach(x=>x.innerHTML='<br>');tr.after(n);gsave();return}
+if(c==='tc+'){const t=cell();if(!t)return;const i=[...t.parentElement.children].indexOf(t);t.closest('table').querySelectorAll('tr').forEach(r=>{const x=document.createElement('td');x.innerHTML='<br>';r.children[i]?r.children[i].after(x):r.append(x)});gsave();return}
+if(c==='tdel'){const t=cell();if(!t)return;t.closest('table').remove();gsave();return}
+if(c==='cl'){X('insertHTML','<ul class="cl"><li><input type="checkbox" contenteditable="false"> <br></li></ul>');return}
+if(c==='callout'){X('insertHTML','<div class="callout"><p>Note</p></div><p><br></p>');return}
+if(c==='img'){val('img').click();return}
+if(c==='copy'){const r=document.createRange();r.selectNodeContents(gp);const s=getSelection();s.removeAllRanges();s.addRange(r);try{document.execCommand('copy');st.textContent='Copied to clipboard'}catch(e){st.textContent='Copy failed'}s.removeAllRanges();return}
+if(c==='print'){try{window.print()}catch(e){}return}
+if(c==='reset'){if(!armed){armed=true;gd.querySelector('[data-c=reset]').textContent='Tap again to confirm';return}try{LS.del(k);LS.del(k+'-cfg')}catch(e){}gflush=null;buildData();return}
+X(c)}
+eb.onclick=()=>setEd(true);
+tb.addEventListener('mousedown',e=>{if(e.target.closest('button'))e.preventDefault()});
+tb.addEventListener('click',e=>{const b=e.target.closest('button[data-c]');if(b)act(b.dataset.c)});
+tb.addEventListener('change',e=>{const t=e.target,s=t.dataset.s;
+if(t.dataset.i==='img'){const f=t.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{const im=new Image();im.onload=()=>{const sc=Math.min(1,900/im.width),cv=document.createElement('canvas');cv.width=Math.round(im.width*sc);cv.height=Math.round(im.height*sc);cv.getContext('2d').drawImage(im,0,0,cv.width,cv.height);X('insertImage',cv.toDataURL('image/jpeg',.82))};im.src=rd.result};rd.readAsDataURL(f);t.value='';return}
+if(!s)return;const v=t.value;
+if(s==='af'){cfg.af=t.checked;savecfg();return}
+if(s==='block'){X('formatBlock','<'+v+'>');return}
+if(s==='font'){if(v)X('fontName',v);return}
+if(s==='size'){if(!v)return;gfocus();document.execCommand('styleWithCSS',false,false);document.execCommand('fontSize',false,'7');gp.querySelectorAll('font[size="7"]').forEach(f=>{const sp=document.createElement('span');sp.style.fontSize=v+'px';while(f.firstChild)sp.appendChild(f.firstChild);f.replaceWith(sp)});gsave();return}
+if(s==='fore'){X('foreColor',v);return}
+if(s==='back'){gfocus();document.execCommand('styleWithCSS',false,true);document.execCommand('hiliteColor',false,v)||document.execCommand('backColor',false,v);gsave();return}
+cfg[s]=v;savecfg();apply()});
+gp.addEventListener('input',()=>gsave());
+gp.addEventListener('blur',()=>gsave(true));
+gp.addEventListener('change',e=>{if(e.target.type==='checkbox'){e.target.toggleAttribute('checked',e.target.checked);gsave(true)}});
+gp.addEventListener('paste',e=>{if(gp.contentEditable!=='true')return;e.preventDefault();const h=e.clipboardData.getData('text/html'),tx=e.clipboardData.getData('text/plain');let out;
+if(cfg.af===false)out=h?cleanHTML(h):escH(tx).replace(/\n/g,'<br>');
+else if(h&&/<(h[1-6]|ul|ol|li|table)\b/i.test(h))out=beautify(cleanPasted(h));
+else out=textToHTML(tx||new DOMParser().parseFromString(h,'text/html').body.innerText||'');
+document.execCommand('insertHTML',false,out);gsave()});
+gsync=()=>{try{['bold','italic','underline','insertUnorderedList','insertOrderedList'].forEach(c=>{const b=gd.querySelector('[data-c='+c+']');if(b)b.setAttribute('aria-pressed',document.queryCommandState(c))});
+const v=String(document.queryCommandValue('formatBlock')||'').toLowerCase().replace(/[<>]/g,''),sl=gd.querySelector('[data-s=block]');sl.value=['p','h1','h2','h3','blockquote'].includes(v)?v:'p';gd.classList.toggle('intable',!!cell())}catch(e){}}}
+
+let gflush=null;
+function buildData(){if(gflush)gflush();const d=D[topic],ed=getEd();$('h').textContent=d.t;$('sub').textContent=d.s;all=[];fullEras=[];tl.innerHTML='';jump.innerHTML='';if(isDoc()){gDoc();return}const ER=eras();
+$('era').innerHTML='<option value="-1">All eras</option>'+ER.map((e,i)=>`<option value="${i}">${e[0]} ${e[1]}</option>`).join('');
+ER.forEach((e,i)=>{let list=e[3].map(m=>{const en={id:m[1],d:m[0],e:m[1],x:m[2],key:KEYS[topic].has(m[1]),w:WHY[m[1]]||''};const o=ed.mod[en.id];if(o){Object.assign(en,o);en.ud=true}en.del=ed.del.includes(en.id);return en});
+ed.add.filter(a=>a.era===i).forEach(a=>{const en=Object.assign({},a,{user:true,ud:true});const k=a.after?list.findIndex(z=>z.id===a.after):-1;if(a.after===''){list.unshift(en)}else if(k>=0){list.splice(k+1,0,en)}else list.push(en)});
+{const od=ed.ord[i];if(od)list.sort((a,b)=>{const x=od.indexOf(a.id),y=od.indexOf(b.id);return(x<0?1e9:x)-(y<0?1e9:y)})}fullEras.push(list);
+const sec=document.createElement('section');sec.className='era';sec.id='e'+i;sec.style.setProperty('--c',e[2]);
+sec.innerHTML=`<h2>${e[0]}</h2><p class="yrs">${e[1]}</p><div class="list"></div>`;const L=sec.querySelector('.list');
+list.filter(en=>!en.del).forEach(en=>{all.push({id:en.id,d:en.d,e:en.e,x:en.x,era:i,c:e[2],i:all.length,key:en.key,w:en.w,ud:en.ud});
+const a=document.createElement('article');a.className='m'+(en.key?' k':'');
+a.innerHTML=`<p class="d">${en.d}</p><p class="ev">${en.e}</p><p class="x">${en.x}</p>`+(en.key&&en.w?`<p class="why"><b>Why it matters:</b> ${en.w}</p>`:'');L.appendChild(a)});
+tl.appendChild(sec);const j=document.createElement('a');j.href='#e'+i;j.style.setProperty('--c',e[2]);j.textContent=e[0]+' '+e[1];jump.appendChild(j)})}
+function render(){const g=isDoc();document.body.dataset.s=grp();document.querySelectorAll('[data-mode]').forEach(b=>b.style.display=g&&!['study','cards'].includes(b.dataset.mode)?'none':'');document.querySelectorAll('.tools').forEach(t=>t.style.display=g?'none':'');$('q').style.display=g?'none':'';buildData();load();setMode('study')}
+/* edit mode */
+const clean=v=>v.replace(/[<>]/g,'').trim();let target=null,armed=false;
+function fillAfter(){const i=+$('fe').value,l=fullEras[i]||[];$('fa').innerHTML='<option value="end">At the end of the era</option><option value="start">At the start of the era</option>'+l.map((en,j)=>`<option value="${j}">After: ${en.d} ${en.e}</option>`).join('')}
+function renderEdit(){const d=D[topic],ed=getEd();const ER=eras();$('fe').innerHTML=ER.map((e,i)=>`<option value="${i}">${e[0]} ${e[1]}</option>`).join('');fillAfter();
+let h='';fullEras.forEach((list,i)=>{const e=ER[i];h+=`<h2 class="kh" style="color:${e[2]}">${e[0]} <small>${e[1]}</small></h2><div class="kl" style="--c:${e[2]}">`;
+list.forEach((en,j)=>{h+=`<div class="er${en.del?' gone':''}"><button class="st" data-a="key" data-i="${i}" data-j="${j}" aria-pressed="${!!en.key}" aria-label="Toggle key date" title="Key date">★</button><div class="eb"><b class="kd">${en.d}</b> ${en.e}${en.user?' <em>(yours)</em>':en.ud?' <em>(edited)</em>':''}</div>`+
+(en.del?`<button data-a="restore" data-i="${i}" data-j="${j}">Restore</button>`:`<button class="mv" data-a="up" data-i="${i}" data-j="${j}" aria-label="Move up">▲</button><button class="mv" data-a="dn" data-i="${i}" data-j="${j}" aria-label="Move down">▼</button><button data-a="edit" data-i="${i}" data-j="${j}">Edit</button><button data-a="del" data-i="${i}" data-j="${j}" aria-label="Remove">✕</button>`)+'</div>'});h+='</div>'});
+{const pv=$('ees').value;$('ees').innerHTML=ER.map((e,i)=>`<option value="${i}">${e[0]}</option>`).join('');if(pv&&+pv<ER.length)$('ees').value=pv;fillEra()}
+$('el').innerHTML=h;const n=ed.add.length+Object.keys(ed.mod).length+ed.del.length+Object.keys(ed.eras).length+ed.ne.length;$('en').textContent=n?n+' change'+(n>1?'s':'')+' saved on this device.':'No changes yet. Changes are saved on this device only.';armed=false;$('ereset').textContent='Reset my changes'}
+function openMForm(t){target=t;$('ef').hidden=false;$('fw').hidden=!!t;$('fh').textContent=t?'Edit milestone':'Add milestone';
+$('fd').value=t?t.d:'';$('fv').value=t?t.e:'';$('fx').value=t?t.x:'';$('fy').value=t?t.w:'';$('fk').checked=t?!!t.key:false;$('fd').focus()}
+function mut(fn){const ed=getEd();fn(ed);saveEd();buildData();renderEdit()}
+$('el').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const en=fullEras[+b.dataset.i][+b.dataset.j],a=b.dataset.a;
+if(a==='edit'){openMForm(en);window.scrollTo(0,0);return}
+if(a==='up'||a==='dn'){const i=+b.dataset.i,j=+b.dataset.j,l=fullEras[i],k=a==='up'?j-1:j+1;if(k<0||k>=l.length)return;const ids=l.map(z=>z.id);[ids[j],ids[k]]=[ids[k],ids[j]];mut(ed=>{ed.ord[i]=ids});return}
+mut(ed=>{if(a==='key'){const v=!en.key;if(en.user){ed.add.find(z=>z.id===en.id).key=v}else{ed.mod[en.id]=Object.assign({d:en.d,e:en.e,x:en.x,w:en.w},ed.mod[en.id],{key:v})}}
+else if(a==='del'){if(en.user)ed.add=ed.add.filter(z=>z.id!==en.id);else ed.del.push(en.id)}
+else if(a==='restore')ed.del=ed.del.filter(z=>z!==en.id)})});
+$('eadd').onclick=()=>openMForm(null);$('fe').onchange=fillAfter;$('fcancel').onclick=()=>{$('ef').hidden=true;target=null};
+$('ef').onsubmit=e=>{e.preventDefault();const d=clean($('fd').value),ev=clean($('fv').value);if(!d||!ev){$('fd').focus();return}
+const x=clean($('fx').value),w=clean($('fy').value),key=$('fk').checked;
+mut(ed=>{if(target){if(target.user){Object.assign(ed.add.find(z=>z.id===target.id),{d,e:ev,x,w,key})}else ed.mod[target.id]={d,e:ev,x,w,key}}
+else{const era=+$('fe').value,v=$('fa').value,l=fullEras[era];const after=v==='start'?'':v==='end'?null:l[+v].id;ed.add.push({id:'u'+Date.now(),era,after,d,e:ev,x,w,key})}});
+$('ef').hidden=true;target=null};
+$('ereset').onclick=()=>{if(!armed){armed=true;$('ereset').textContent='Tap again to confirm';return}edits[topic]=null;try{LS.del('edits-'+topic)}catch(e){}buildData();renderEdit()};
+function fillEra(){const i=+$('ees').value,e=eras()[i];if(!e)return;$('eet').value=e[0];$('eey').value=e[1];$('eec').value=hex(e[2]);$('eedel').disabled=i<D[topic].e.length}
+$('ees').onchange=fillEra;
+$('eesv').onclick=()=>{const i=+$('ees').value,t=clean($('eet').value),y=clean($('eey').value),c=$('eec').value,b=D[topic].e.length;if(!t)return;mut(ed=>{if(i<b)ed.eras[i]={t,y,c};else Object.assign(ed.ne[i-b],{t,y,c})})};
+$('eedel').onclick=()=>{const i=+$('ees').value,b=D[topic].e.length;if(i<b)return;mut(ed=>{ed.ne.splice(i-b,1);ed.add=ed.add.filter(a=>a.era!==i).map(a=>a.era>i?Object.assign(a,{era:a.era-1}):a);delete ed.ord[i]})};
+$('enadd').onclick=()=>{const t=clean($('ent').value);if(!t)return;mut(ed=>{ed.ne.push({t,y:clean($('eny').value),c:$('enc').value})});$('ent').value='';$('eny').value=''};
+$('eadv').ontoggle=()=>$('el').classList.toggle('adv-on',$('eadv').open);
+function getPool(){const v=+$('era').value,k=$('ko').checked;return all.filter(x=>(v<0||x.era===v)&&(!k||x.key))}
+function reveal(n){n.classList.remove('hide');n.removeAttribute('tabindex');n.removeAttribute('role')}
+function hideAll(sel){tl.querySelectorAll(sel).forEach(n=>{n.classList.add('hide');n.tabIndex=0;n.setAttribute('role','button')})}
+tl.addEventListener('click',e=>{if(e.target.classList.contains('hide'))reveal(e.target)});
+tl.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.classList.contains('hide')){e.preventDefault();reveal(e.target)}});
+function updHead(){if(mode==='cards'){$('h').textContent='Flashcards';$('sub').textContent='Build a deck from one topic or several'}else{$('h').textContent=D[topic].t;$('sub').textContent=D[topic].s}}
+function setMode(m){mode=m;document.body.dataset.m=m;updHead();document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.mode===m));
+const st=m.startsWith('rec')||m==='study';document.body.classList.toggle('rec',m.startsWith('rec'));
+tl.hidden=!st;jump.hidden=!st;$('q').hidden=m!=='study';['cards','order','quiz','key','edit'].forEach(k=>$(k).hidden=m!==k);$('era').hidden=st||m==='key'||m==='edit'||m==='cards';$('kol').hidden=st||m==='key'||m==='edit'||m==='cards';if(m==='edit'){$('ef').hidden=true;renderEdit()}if(m==='key')renderKey();
+tl.querySelectorAll('.hide').forEach(reveal);tl.querySelectorAll('article').forEach(a=>a.hidden=false);$('q').value='';
+if(m==='rec-d')hideAll('.d');if(m==='rec-e'){hideAll('.ev');hideAll('.x');hideAll('.why')}
+if(m==='cards')fcSetup();if(m==='order')nextOrder();if(m==='quiz')startQuiz(getPool());window.scrollTo(0,0)}
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+// ===== SUBJECT REGISTRY: everything subject-specific hangs off this list =====
+// ADDING A SUBJECT = three small inserts, each placed just before its anchor marker (search the marker name):
+//  1) ADD_SUBJECT (below): SUBJECTS.push({id:'e',n:'Economics',kind:'doc',topics:[['econ1','Markets','Topic 1: Markets']]});
+//       kind 'doc' = notes page + flashcards (like Geography); kind 'tl' = timeline + recall/quiz/order modes (like History)
+//       topic tuple = [id, tab label, long name used in flashcards]; to add a topic to an existing subject, add a tuple to its topics list
+//  2) ADD_D (near the top of the script): D.econ1={t:'Title',s:'Subtitle',e:GC('Case study A','Case study B')};
+//  3) ADD_FC (after the flashcard data): FCS.push(['secid','econ1','Section name']); FCC.push(['secid','Question','Answer',1]);
+const SUBJECTS=[
+{id:'h',n:'History',kind:'tl',topics:[['germany','Germany','Germany 1918–45'],['usa','USA','USA 1918–41'],['mideast','Middle East','Middle East 1917–2012']]},
+{id:'g',n:'Geography',kind:'doc',topics:[['geo1','Rivers','Topic 1: Changing River Environments'],['geo2','Coasts','Topic 2: Changing Coastal Environments'],['geo4','Tectonic Hazards','Topic 4: Tectonic Hazards'],['geo6','Population','Topic 6: Changing Populations'],['geo7','Towns and Cities','Topic 7: Changing Towns and Cities'],['geo8','Development','Topic 8: Development']]}
+];
+/*@ADD_SUBJECT*/
+const SUBJ=Object.fromEntries(SUBJECTS.map(x=>[x.id,x])),TABS=Object.fromEntries(SUBJECTS.map(x=>[x.id,x.topics.map(t=>[t[0],t[1]])])),lastT=Object.fromEntries(SUBJECTS.map(x=>[x.id,x.topics[0][0]]));
+function buildTabs(){const g=grp();if(!$('subj').children.length){$('subj').innerHTML=SUBJECTS.map(x=>`<button data-subj="${x.id}" aria-pressed="false">${x.n}</button>`).join('');$('subj').hidden=SUBJECTS.length<2}lastT[g]=topic;$('subj').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.subj===g));$('tseg').innerHTML=TABS[g].map(t=>`<button data-topic="${t[0]}" aria-pressed="${t[0]===topic}">${t[1]}</button>`).join('')}
+function setTopic(t){topic=t;try{LS.set('last-topic',topic)}catch(e){}buildTabs();render()}
+$('subj').onclick=e=>{const b=e.target.closest('button');if(b&&b.dataset.subj&&b.dataset.subj!==grp())setTopic(lastT[b.dataset.subj])};
+$('tseg').onclick=e=>{const b=e.target.closest('button');if(b&&b.dataset.topic)setTopic(b.dataset.topic)};
+$('all').onclick=()=>tl.querySelectorAll('.hide').forEach(reveal);$('reset').onclick=()=>setMode(mode);
+$('ko').onchange=$('era').onchange=()=>{if(mode==='order')nextOrder();if(mode==='quiz')startQuiz(getPool())};
+$('q').oninput=e=>{const v=e.target.value.toLowerCase();tl.querySelectorAll('article').forEach(a=>a.hidden=v&&!a.textContent.toLowerCase().includes(v))};
+/* key dates */
+function renderKey(){const d=D[topic];let h='',c=0;d.e.forEach((e,i)=>{const r=all.filter(x=>x.era===i&&x.key);if(!r.length)return;c+=r.length;
+h+=`<h2 class="kh" style="color:${e[2]}">${e[0]} <small>${e[1]}</small></h2><div class="kl" style="--c:${e[2]}">`+r.map(x=>`<div class="kr"><b class="kd">${short(x)}</b><span class="ke">${x.e}${x.w?`<span class="kw">${x.w}</span>`:''}</span></div>`).join('')+'</div>'});
+$('kv').innerHTML=h;$('kn').textContent=c+' key dates to learn. Month and year are enough unless the full date is shown.'}
+const kh=sel=>{$('kv').querySelectorAll(sel).forEach(n=>{n.classList.add('hide');n.tabIndex=0})};
+$('kd').onclick=()=>{renderKey();kh('.kd')};$('ke').onclick=()=>{renderKey();kh('.ke')};$('ks').onclick=renderKey;
+$('kv').addEventListener('click',e=>{if(e.target.classList.contains('hide'))reveal(e.target)});
+$('kv').addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.classList.contains('hide')){e.preventDefault();reveal(e.target)}});
+/* flashcards */
+const FCT=SUBJECTS.flatMap(x=>x.topics.map(t=>({id:t[0],n:t[2],g:x.id})));
+const FG=id=>(FCT.find(t=>t.id===id)||{}).g||SUBJECTS[0].id,grp=()=>FG(topic),isDoc=g=>((SUBJ[g||grp()]||{}).kind==='doc');
+const FCS=[["boom", "usa", "The Economic Boom"], ["limits", "usa", "Boom: Farmers and Workers"], ["women", "usa", "Women in the 1920s"], ["immig", "usa", "Immigration and the Red Scare"], ["intol", "usa", "Intolerance: Klan and Scopes"], ["proh", "usa", "Prohibition and Gangsters"], ["crash", "usa", "Wall Street Crash and Depression"], ["newdeal", "usa", "Roosevelt and the New Deal"], ["opp", "usa", "Opposition, Courts and Recovery"], ["g1", "germany", "Weimar: Birth and Crisis 1918–23"], ["g2", "germany", "Weimar Recovery 1924–29"], ["g3", "germany", "Depression and the Nazi Rise"], ["g4", "germany", "Hitler Takes Control 1933–34"], ["g5", "germany", "Terror and Propaganda"], ["g6", "germany", "Nazi Society: Youth, Women, Work"], ["e1", "mideast", "Mandate Palestine 1917–39"], ["e2", "mideast", "Post-war Palestine and Partition"], ["e3", "mideast", "Birth of Israel and the 1948 War"], ["e4", "mideast", "Fedayeen, Nasser and Suez"], ["e5", "mideast", "The Six Day War 1967"], ["e6", "mideast", "Intifadas, Oslo and Gaza"], ["geo1a", "geo1", "Belgian Floods 2021 (River Vesdre)"], ["geo1b", "geo1", "Three Gorges Dam (Yangtze)"], ["geo2a", "geo2", "Mappleton (Holderness Coast)"], ["geo2b", "geo2", "Gardens of the Queen (Cuba)"], ["geo4a", "geo4", "Sulawesi Earthquake 2018"], ["geo4b", "geo4", "Grindavík Eruption 2023–25"], ["geo6a", "geo6", "Japan (Ageing Population)"], ["geo6b", "geo6", "Morocco to Spain (International Migration)"], ["geo7a", "geo7", "Nairobi, Kenya"], ["geo8a", "geo8", "Honduras"]];
+const FCC=[["boom", "Before Ford introduced mass production, how long did skilled workers take to produce one Model T in a workshop?", "12 hours.", 1], ["boom", "On one of Ford's most efficient days, 31 October 1925, how often was a Model T produced?", "Every 10 seconds.", 1], ["boom", "When did Henry Ford introduce his moving assembly line at his motor plant?", "1913.", 0], ["boom", "What did a Model T cost originally, and what did it cost by 1925?", "$950 originally; only $290 by 1925.", 1], ["boom", "How many Americans owned motor cars by 1929?", "23 million (up from 8 million at the start of the decade).", 1], ["boom", "Who set up a credit agency for ordinary consumers in 1919?", "Alfred Sloan.", 1], ["boom", "What was 'hire purchase'?", "Buying goods in instalments; the product became yours once you had paid in full.", 1], ["boom", "What percentage of cars were bought using hire purchase in 1929?", "75 per cent.", 1], ["boom", "What percentage of electrical devices were bought using hire purchase in 1929?", "50 per cent.", 1], ["boom", "How much was spent on advertising each year by 1929?", "$2 billion a year (employing 600,000 people).", 1], ["boom", "How did the number of radios in the USA change between 1920 and 1929?", "From 60,000 to 10 million.", 1], ["boom", "How many radio stations were there in the USA by 1929?", "618.", 1], ["boom", "How many cinema tickets were sold each week in 1924, and what happened by 1929?", "About 40 million; the figure more than doubled by 1929.", 1], ["boom", "Which 1927 film was the first with sound?", "The Jazz Singer.", 1], ["boom", "How many refrigerators were sold in 1921, and how many by 1929?", "5,000 in 1921; 1 million by 1929.", 1], ["limits", "How many people lost their farms in 1924 alone?", "Around 600,000.", 1], ["limits", "How far did the price of wheat fall during the 1920s?", "From $2.50 per bushel to less than $1.", 1], ["limits", "Roughly what share of the US labour force worked on farms in the 1920s?", "About one-third.", 1], ["limits", "How low did weekly wages fall for some US textile workers in 1926?", "As low as $9 a week.", 0], ["women", "When did the Nineteenth Amendment give women the vote?", "1920.", 1], ["women", "How many women joined the workforce in the 1920s, and what share of workers did women then make up?", "2 million joined; women made up about 20 per cent of the workforce.", 1], ["women", "What percentage of married women had jobs at the end of the 1920s?", "Only 12 per cent.", 1], ["women", "How much less than a man did the average woman earn each week in December 1927?", "Around $12 less.", 1], ["immig", "When was the Emergency Quota Act passed?", "1921 (May).", 1], ["immig", "What did the 1921 Emergency Quota Act limit immigration to, from outside the western half of the world?", "357,000 people per year.", 1], ["immig", "When was the National Origins Act passed?", "1924.", 1], ["immig", "What quota did the National Origins Act set for each country?", "2 per cent of that nation's people living in the USA in 1890.", 1], ["immig", "By how much did the 1924 National Origins Act cut the annual quota?", "From 357,000 to around 164,000 a year.", 1], ["immig", "Who was the US Attorney General who led the Palmer Raids during the Red Scare?", "A. Mitchell Palmer.", 1], ["immig", "What were the results of the Palmer Raids?", "Thousands of arrests; around 600 radicals deported.", 1], ["immig", "When did the Palmer Raids peak, and how widely?", "2 January 1920, with raids in 33 cities.", 1], ["immig", "When were Sacco and Vanzetti arrested?", "May 1920.", 1], ["immig", "When were Sacco and Vanzetti executed?", "23 August 1927.", 0], ["intol", "By what year had Ku Klux Klan membership reached about 5 million?", "1923.", 1], ["intol", "Which Klan Grand Dragon was found guilty of rape and murder in 1925, damaging the Klan's reputation?", "David Stephenson.", 1], ["intol", "About how many Klan members were left by 1929?", "Around 200,000.", 1], ["intol", "When and where was the Scopes 'Monkey Trial'?", "July 1925, in Dayton, Tennessee.", 1], ["intol", "Who was the teacher put on trial for teaching evolution?", "John Scopes.", 1], ["intol", "Who defended John Scopes?", "Clarence Darrow.", 1], ["intol", "Who led the prosecution of John Scopes?", "William Jennings Bryan.", 1], ["intol", "What fine was Scopes given after being convicted?", "$100.", 1], ["proh", "When was the Eighteenth Amendment, banning alcohol, ratified?", "1919.", 1], ["proh", "Which Act set up the system to enforce Prohibition, taking effect in January 1920?", "The Volstead Act.", 1], ["proh", "How many speakeasies did New York have by 1929?", "Over 32,000.", 1], ["proh", "By 1929, how did alcohol consumption compare with its 1914 level?", "Back to around 70 per cent of the 1914 level.", 1], ["proh", "How much tax revenue did one anti-Prohibition group estimate the government had lost by 1931?", "$11 billion.", 1], ["proh", "How much did Al Capone earn a year at the height of his power?", "Around $105 million.", 1], ["proh", "When did the St Valentine's Day Massacre take place?", "14 February 1929.", 1], ["proh", "What crime led to Al Capone's arrest in 1931?", "Income tax evasion.", 1], ["proh", "When was Prohibition repealed?", "December 1933.", 1], ["crash", "When did the Wall Street Crash occur?", "October 1929.", 1], ["crash", "On what date was 'Black Tuesday'?", "29 October 1929.", 0], ["crash", "Roughly how many shares were sold on Black Tuesday?", "About 16 million.", 0], ["crash", "Roughly how much value did the market lose on Black Tuesday alone?", "About $14 billion.", 0], ["crash", "How much had brokers lent to investors buying shares 'on the margin' by 1929?", "Over $8.5 billion.", 0], ["crash", "What did the Hawley-Smoot Tariff (1930) do?", "Raised import duties on foreign food by 40 per cent.", 1], ["crash", "What percentage of Americans were unemployed by 1933?", "24.9 per cent.", 1], ["crash", "How many Bonus Marchers marched on Washington in 1932?", "20,000.", 1], ["crash", "How much was each veteran's bonus, and when would most receive it?", "Up to $625 each; most would not be paid until 1945.", 1], ["crash", "Which general led the army troops that cleared the Bonus Marchers' camp?", "General Douglas MacArthur.", 1], ["crash", "What was the political effect of the Bonus Marchers' defeat?", "Hoover's reputation was destroyed.", 1], ["crash", "How many people left their farms on the Great Plains between 1930 and 1935?", "Around a million.", 1], ["newdeal", "When was Franklin D. Roosevelt first elected President?", "November 1932.", 1], ["newdeal", "When was the Emergency Banking Act passed?", "March 1933.", 1], ["newdeal", "How many men had the CCC employed by 1935, and who could join?", "500,000; unemployed 17-23-year-olds, paid $30 a month.", 1], ["newdeal", "Roughly how many young men worked in the CCC in total (1933-42)?", "Around 3 million.", 0], ["newdeal", "What was the aim of the Agricultural Adjustment Act (1933)?", "To raise crop prices by paying farmers to produce less.", 1], ["newdeal", "When was the Works Progress Administration (WPA) set up, and how many did it employ?", "May 1935; around 8 million Americans.", 1], ["newdeal", "How much did the WPA spend during its lifetime?", "$11 billion.", 1], ["newdeal", "When was the Wagner Act (National Labor Relations Act) passed?", "1935.", 1], ["newdeal", "When was the Social Security Act introduced?", "1935.", 1], ["newdeal", "Roughly how large was union membership by 1940?", "Around 9 million.", 1], ["opp", "Which Louisiana senator proposed the 'Share Our Wealth' scheme?", "Huey Long.", 1], ["opp", "When was Huey Long assassinated?", "1935.", 1], ["opp", "Which Supreme Court case, the 'Sick Chicken Case', effectively closed down the NRA?", "Schechter Poultry Corp. (May 1935).", 1], ["opp", "When did the Supreme Court rule the Agricultural Adjustment Act unconstitutional?", "1936.", 1], ["opp", "How did unemployment change between 1939 and 1941 because of defence spending?", "From around 9.5 million to 5.5 million.", 1], ["g1", "On what date did Kaiser Wilhelm II abdicate and flee to Holland?", "9 November 1918.", 1], ["g1", "On what date was the armistice ending the First World War signed by Germany?", "11 November 1918.", 1], ["g1", "What naval order triggered the mutiny of German sailors at Kiel in October 1918?", "Commanders ordered the fleet to fight the British even though defeat was already certain.", 1], ["g1", "On what date did the Spartacist Uprising begin in Berlin?", "5 January 1919.", 1], ["g1", "Which communist leader was assassinated on 15 January 1919, after the Spartacist Uprising?", "Rosa Luxemburg (Karl Liebknecht was also killed).", 1], ["g1", "In what month and year was the Weimar Constitution approved by the National Assembly?", "July 1919.", 1], ["g1", "In what year did Hitler become leader of the Nazi Party?", "1921.", 1], ["g1", "Which paramilitary wing did Hitler set up in 1921?", "The Sturmabteilung (SA, or Stormtroopers).", 1], ["g1", "On what date was Matthias Erzberger assassinated by ultra-nationalists?", "26 August 1921.", 1], ["g1", "What did French and Belgian troops do in January 1923 that sparked the Ruhr crisis?", "Occupied the Ruhr to seize raw materials after Germany defaulted on reparations.", 1], ["g1", "How did the government pay workers who went on strike in the Ruhr?", "It printed extra banknotes.", 1], ["g1", "In what month and year was the Rentenmark introduced?", "November 1923.", 1], ["g2", "For how many months was Gustav Stresemann Chancellor in 1923?", "Four months.", 1], ["g2", "How long did Hitler serve in Landsberg prison after the Munich Putsch trial?", "Nine months of his five-year sentence.", 1], ["g2", "What permanent currency replaced the temporary Rentenmark in 1924?", "The Reichsmark.", 1], ["g2", "How much did the USA loan Germany under the Dawes Plan?", "800 million gold marks.", 1], ["g2", "How many Reichstag seats did the Nazis win in May 1924?", "32.", 1], ["g2", "In what year was the Locarno Pact signed?", "1925.", 1], ["g2", "Which party conference in 1926 confirmed Hitler's control of the Nazi Party?", "The Bamberg Conference.", 1], ["g2", "In what year did Germany join the League of Nations?", "1926.", 1], ["g2", "How many Reichstag seats did the Nazis win in May 1928?", "12.", 1], ["g2", "What share of the vote did the Nazis win in Berlin and the Ruhr in 1928?", "Only 1 per cent.", 1], ["g2", "How many nations signed the Kellogg-Briand Pact in 1928?", "62.", 1], ["g2", "In what year was the Young Plan approved to cut Germany's reparations?", "1929.", 1], ["g2", "In what month and year did Gustav Stresemann die?", "October 1929.", 1], ["g3", "What percentage of people aged 16-30 were unemployed in 1933?", "More than 50 per cent.", 1], ["g3", "How many Reichstag seats did the Nazis win in September 1930?", "107.", 1], ["g3", "How many votes did Hitler win in the April 1932 presidential election?", "13 million (he lost to Hindenburg).", 1], ["g3", "What percentage of the vote did the Nazis gain in July 1932?", "37.4 per cent.", 1], ["g3", "How many Reichstag seats did the Nazis win in July 1932?", "230.", 1], ["g3", "Which conservative politician persuaded Hindenburg to appoint Hitler as Chancellor?", "Franz von Papen.", 0], ["g3", "On what date was Hitler appointed Chancellor?", "30 January 1933.", 1], ["g4", "On what date did the Reichstag Fire take place?", "27 February 1933.", 1], ["g4", "How many communist leaders were arrested on the night of the Reichstag Fire?", "Around 4,000.", 1], ["g4", "Who was tried and executed for setting fire to the Reichstag?", "Marinus van der Lubbe.", 1], ["g4", "On what date was the emergency Decree for the Protection of the People and State issued?", "28 February 1933.", 1], ["g4", "How many Reichstag seats did the Nazis win in the election of 5 March 1933?", "288.", 0], ["g4", "On what date was the Enabling Act passed?", "24 March 1933 (the Reichstag vote was held on 23 March).", 1], ["g4", "On what date were the trade union offices closed?", "2 May 1933.", 1], ["g4", "Which Nazi organisation replaced the trade unions?", "The German Labour Front (DAF), led by Robert Ley.", 1], ["g4", "What agreement did Hitler sign with the Catholic Church in 1933?", "The Concordat (July 1933).", 1], ["g4", "On what date was the Law Against the Formation of New Parties enacted?", "14 July 1933.", 1], ["g4", "On what date were the regional state parliaments abolished?", "15 January 1934.", 1], ["g4", "On what date did the Night of the Long Knives begin?", "30 June 1934.", 1], ["g4", "Which SA commander was murdered in the Night of the Long Knives?", "Ernst Röhm.", 1], ["g4", "On what date did President Hindenburg die?", "2 August 1934.", 1], ["g4", "What percentage of voters approved Hitler becoming Führer in the August 1934 plebiscite?", "90 per cent.", 1], ["g5", "About how many officers did the Gestapo have by 1942?", "Around 30,000.", 1], ["g5", "In what year were the SS and Gestapo brought together under Himmler?", "1936.", 1], ["g5", "How many Germans were imprisoned for supposed opposition to the Nazis?", "Over 200,000 (estimated).", 1], ["g5", "Which Nazi law made it illegal even to tell jokes about Hitler?", "The Law on Malicious Gossip.", 1], ["g5", "Who was appointed Minister of Propaganda and National Enlightenment in 1933?", "Joseph Goebbels.", 1], ["g6", "In what year did Hitler Youth membership become compulsory?", "1939. The 1936 Hitler Youth Law required eligible young people to join, but had no penalties.", 1], ["g6", "How many young Germans belonged to Nazi youth groups by 1939?", "8 million.", 1], ["g6", "What condition applied to the loans under the 1933 Law for Encouragement of Marriage?", "The woman had to give up work.", 1], ["g6", "How many children earned a woman a gold medal for large families?", "Eight (silver for six, bronze for five).", 1], ["g6", "By how much was the number of working women higher in 1939 than in 1933?", "50 per cent higher.", 1], ["g6", "How did unemployment change between 1933 and 1939?", "From 6 million to only about half a million.", 1], ["g6", "Which service made single men do 6 months of manual work, and later forced in the unemployed after 1935?", "The National Labour Service (RAD).", 1], ["g6", "How much did armaments spending rise between 1933 and 1937?", "From 2 to 17 (the textbook prints 'million Reichsmarks'): roughly eight times higher.", 1], ["e1", "In what month and year was the Balfour Declaration issued?", "November 1917.", 1], ["e1", "Who was the British Foreign Secretary who issued the Balfour Declaration?", "Arthur Balfour (called 'Lord Arthur Balfour' in the textbook).", 1], ["e1", "What percentage of Palestine's population was Jewish in 1922?", "About 11 per cent (about 84,000 Jews).", 1], ["e1", "What percentage of Palestine's population was Jewish by 1936?", "About 28 per cent.", 0], ["e1", "When did the League of Nations award Britain the Mandate over Palestine?", "1923.", 1], ["e1", "How many died in the May 1921 clashes in Jaffa?", "47 Jews and 48 Arabs.", 1], ["e1", "How many died in the August 1929 riots over holy sites?", "133 Jews and 116 Arabs.", 1], ["e1", "When did Palestinian Arabs launch a general strike that began the Arab Revolt?", "1936.", 1], ["e1", "How many British troops struggled to control the 1936 strike over 6 months?", "20,000.", 1], ["e1", "Who led the 1936-37 Royal Commission on Palestine?", "William Peel (Lord Peel).", 1], ["e1", "When did the Peel Commission publish its partition report?", "July 1937.", 1], ["e1", "How many Jewish immigrants a year did the 1939 White Paper allow?", "10,000 a year for 5 years.", 1], ["e2", "On what date did British troops liberate Bergen-Belsen?", "15 April 1945 (your textbook gives 16 April).", 1], ["e2", "Which British Foreign Secretary limited Jewish immigration to 1,500 a month?", "Ernest Bevin.", 1], ["e2", "Which US President pressed Britain to admit 100,000 Jewish refugees?", "Harry Truman.", 1], ["e2", "How much did Americans give to the Zionist cause in 1945 alone?", "Over $46 million.", 1], ["e2", "In how many places was the Palestine railway blown up in October 1945?", "153.", 1], ["e2", "How many British troops were killed by Jewish insurgents in 1946?", "73.", 1], ["e2", "On what date did the Irgun bomb the King David Hotel?", "22 July 1946.", 1], ["e2", "How many people were killed in the King David Hotel bombing?", "91.", 1], ["e2", "Which Irgun leader had four British soldiers kidnapped and beaten in December 1946?", "Menachem Begin.", 1], ["e2", "When did Britain ask the UN to find a solution for Palestine?", "February 1947.", 1], ["e2", "When was UNSCOP set up, and how many nations were on it?", "May 1947; 11 nations.", 1], ["e2", "When did the 'Sergeants Affair' take place?", "July 1947.", 1], ["e2", "On what date did the UN vote on Resolution 181, the Partition Plan?", "29 November 1947.", 1], ["e2", "What was the vote on UN Resolution 181?", "33 for, 13 against, 10 abstentions.", 1], ["e2", "How much of Palestine did the Partition Plan give the Jewish state?", "Over half.", 1], ["e2", "How many Arabs would live in the proposed Jewish state?", "Over 400,000 (about 407,000).", 1], ["e3", "On what date did Ben-Gurion proclaim the state of Israel?", "14 May 1948.", 1], ["e3", "Which five Arab states invaded Israel on 15 May 1948?", "Egypt, Syria, Transjordan, Lebanon and Iraq.", 1], ["e3", "How many field guns did Israel have at the start of the war?", "Five (the Arab forces had 152).", 1], ["e3", "On what date did the first UN truce, led by Count Bernadotte, begin?", "11 June 1948.", 1], ["e3", "How many rifles did Israel buy from Czechoslovakia?", "30,000.", 1], ["e3", "About how many foreign volunteers with military experience joined Israel's forces?", "About 5,000.", 0], ["e3", "How large were Israel's forces by December 1948?", "108,000, double the Arab forces (Israel had about 35,000 at the start).", 1], ["e3", "How many Palestinian refugees fled or were expelled during the war?", "700,000.", 1], ["e3", "How many Israelis died in the First Arab-Israeli War?", "About 6,000.", 1], ["e3", "When did the Knesset pass the Law of Return?", "July 1950.", 1], ["e3", "How many Jewish immigrants arrived in Israel between 1949 and 1951?", "700,000.", 1], ["e4", "How many Israelis were killed by fedayeen attacks between 1950 and 1953?", "153.", 1], ["e4", "How many villagers did Israeli troops kill in the October 1953 raid on Qibya?", "69.", 1], ["e4", "When did Colonel Nasser take over power in Egypt?", "1954 (he formally became president in 1956).", 1], ["e4", "What led Nasser to nationalise the Suez Canal in July 1956?", "Britain and the USA withdrew their funding for the Aswan High Dam.", 1], ["e4", "When did Britain, France and Israel launch their attack on Egypt?", "October 1956.", 1], ["e4", "How long did the fighting in the Suez Crisis last?", "About 8 days.", 0], ["e5", "How many Syrian jets did Israel shoot down on 7 April 1967?", "6.", 1], ["e5", "What false report from the USSR pushed Nasser to move troops into Sinai in May 1967?", "That Israel was massing troops on the Syrian border.", 1], ["e5", "When did Nasser close the Straits of Tiran to Israeli shipping?", "22-23 May 1967 (announced 22 May).", 0], ["e5", "On what date did Israel launch its attack that began the Six Day War?", "5 June 1967.", 1], ["e5", "When was UN Resolution 242 ('Land for Peace') adopted?", "November 1967.", 1], ["e6", "When did the First Intifada begin?", "1987.", 1], ["e6", "How many Palestinians were killed by Israelis during the First Intifada?", "About 1,200.", 1], ["e6", "How many Jewish settlers lived in the West Bank and Gaza by 1988?", "About 64,000.", 0], ["e6", "In what year were the Oslo Accords signed?", "1993.", 1], ["e6", "Which Israeli Prime Minister was assassinated in 1995 after Oslo II?", "Yitzhak Rabin.", 1], ["e6", "In what year did the Second Intifada begin?", "2000.", 1], ["e6", "In what year was the Roadmap for Peace proposed?", "2003.", 1], ["e6", "When did Hamas win the Palestinian elections, and when did it take over Gaza?", "Won elections in 2006; expelled Fatah from Gaza in June 2007.", 1]];
+/*@ADD_FC*/
+const INT=[0,1,2,4,8,16],DAY=864e5,RM=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;let fs,S=null,editing=null,bulk=false,armedR=false,fo={};
+function fload(){let o=null;try{o=JSON.parse(LS.get('fc-state'))}catch(e){}
+fs=Object.assign({mod:{},del:[],add:[],secs:[],prog:{},sel:[],opt:{},cyc:{},resume:null},o||{});fs.opt=Object.assign({mode:'smart',shuf:true,rev:false,type:false,star:false,weak:false,cloze:false,lapsed:false,limit:0,types:[]},fs.opt)}
+function fsave(){try{LS.set('fc-state',JSON.stringify(fs))}catch(e){}}
+const P=id=>fs.prog[id]||{b:0,n:0,st:false};
+function fdeck(){const secs=FCS.map(x=>({id:x[0],t:x[1],n:x[2]})).concat(fs.secs);
+const cards=FCC.map((c,i)=>({id:'b'+i,s:c[0],q:c[1],a:c[2],src:c[3]})).filter(c=>!fs.del.includes(c.id)).map(c=>Object.assign(c,fs.mod[c.id]||{})).concat(fs.add.map(c=>Object.assign({src:2},c)));
+return {secs,cards:cards.filter(c=>secs.some(z=>z.id===c.s))}}
+const secName=id=>(fdeck().secs.find(z=>z.id===id)||{}).n||'';
+const sel=()=>{const m=new Map(fdeck().secs.map(z=>[z.id,z.t]));return fs.sel.filter(id=>m.has(id)&&FG(m.get(id))===grp())};
+function fpool(){const D2=fdeck(),o=fs.opt,SL=sel();let c=D2.cards.filter(x=>SL.includes(x.s));
+if(o.types&&o.types.length)c=c.filter(x=>o.types.includes(ctype(x)));if(o.star)c=c.filter(x=>P(x.id).st);if(o.weak)c=c.filter(x=>{const b=P(x.id).b;return b>=1&&b<=2});return c}
+const dueNow=x=>{const p=P(x.id);return !p.b||p.n<=Date.now()};
+const cramPool=(c,reset)=>{const f=c.filter(x=>!fs.cyc[x.id]);if(f.length)return f;if(reset){c.forEach(x=>delete fs.cyc[x.id]);fsave()}return c};
+const CT=[['date','Dates'],['stat','Numbers'],['person','People'],['cause','Causes'],['term','Terms and events']],CTL=Object.fromEntries(CT);
+function ctype(x){const q=x.q.trim();
+if(/^(how (many|much|large|long|far|big|high)|what (percentage|share|proportion)|by how much|by what (percentage|margin)|(roughly|about|approximately) how|how did [a-z ]+ change)/i.test(q))return 'stat';
+if(/^(when|on what (date|day)|in what (year|month)|in which (year|month)|what year|by what year|on which date)/i.test(q))return 'date';
+if(/^who\b|^which ([a-z-]+ ){0,3}(leader|president|politician|senator|general|commander|secretary|minister|dragon|teacher|chancellor)\b/i.test(q))return 'person';
+if(/\b(why|trigger(ed)?|spark(ed)?|led to|what led|cause[ds]?|aim of|purpose|effect|results?|resulted|condition|how did [a-z ]+ (pay|react))\b/i.test(q))return 'cause';
+return 'term'}
+const STOP=new Set('the and with from that this were was for have has had been into over about around more than only their they them then also each which what when where while after before under between across during through other such some many most much very just like even still both either'.split(' '));
+function cloze(a){const parts=a.split(/(\s+)/),cand=[];let words=0;
+parts.forEach((p,i)=>{if(!p.trim())return;words++;const core=p.replace(/^[("'‘“]+|[.,;:)"'’”!?]+$/g,'');if(!core)return;const lw=core.toLowerCase();let sc=0;
+if(/\d/.test(core))sc=10;else if(STOP.has(lw))sc=0;else if(/^[A-ZÀ-Ý]/.test(core)&&i>0)sc=6;else if(core.length>=7)sc=3+core.length/20;if(sc)cand.push({i,sc,core})});
+const caps=parts.filter(p=>/^[A-ZÀ-Ý]/.test(p.replace(/^[("'‘“]+/,''))).length;if(words<4||!cand.length||caps*2>=words)return null;const nums=cand.filter(x=>x.sc===10).length,n=Math.min(3,Math.max(words<=7?1:words<=14?2:3,nums));
+const pick=cand.slice().sort((x,y)=>y.sc-x.sc||x.i-y.i).slice(0,n);
+const build=fn=>parts.map((p,i)=>{const k=pick.find(x=>x.i===i);return k?p.replace(k.core,()=>fn(k.core)):p}).join('');
+return {front:h=>build(w=>`<span class="gap" style="min-width:${Math.max(4,Math.min(w.length,12))}ch">${h?w[0]:''}</span>`),back:build(w=>`<mark class="fill">${w}</mark>`)}}
+function fcSetup(){if(!fs)fload();S=null;$('fcr').hidden=true;$('fcf').hidden=true;$('fcs').hidden=false;$('fmn').hidden=true;const D2=fdeck(),o=fs.opt;let h='';
+const SL=sel();FCT.filter(t=>t.g===grp()).forEach(t=>{const ss=D2.secs.filter(z=>z.t===t.id),cs=D2.cards.filter(x=>ss.some(z=>z.id===x.s)),sn=ss.filter(z=>SL.includes(z.id)).length,open=fo[t.id]!==undefined?fo[t.id]:ss.length>0;
+h+=`<details class="acc" data-t="${t.id}" ${open?'open':''}><summary><span class="tn">${t.n}</span><span class="tc">${sn?`<em>${sn} selected</em> · `:''}${cs.length} cards</span></summary><div class="accb">`;
+if(!ss.length)h+='<p class="x">No cards in this topic yet. Open Manage cards to add or import some.</p>';
+else h+=`<div class="row mini"><button data-ta="all" data-t="${t.id}">Select all</button><button data-ta="none" data-t="${t.id}">Clear</button></div><div class="chips">`+ss.map((z,i)=>{const cc=D2.cards.filter(x=>x.s===z.id),m=cc.filter(x=>P(x.id).b>=4).length,pc=cc.length?Math.round(m/cc.length*100):0;
+return `<button class="chip" data-sec="${z.id}" aria-pressed="${SL.includes(z.id)}" style="--c:var(--e${i%6+1})"><span class="cn">${z.n}</span><span class="cm">${cc.length} cards · ${m} mastered</span><span class="cb"><i style="width:${pc}%"></i></span></button>`}).join('')+'</div>';
+h+='</div></details>'});
+$('fct').innerHTML=h;
+const sw=(k,l)=>`<label class="sw"><span>${l}</span><input type="checkbox" data-o="${k}" ${o[k]?'checked':''}><i></i></label>`;
+const base=D2.cards.filter(x=>SL.includes(x.s)),cnt={};base.forEach(x=>{const t=ctype(x);cnt[t]=(cnt[t]||0)+1});const ty=o.types||[];
+$('fco').innerHTML=`<div class="optrow"><span>Session size</span><div class="seg2">${[10,20,30,0].map(n=>`<button data-ol="${n}" aria-pressed="${(o.limit||0)===n}">${n||'All'}</button>`).join('')}</div></div>`+
+`<div class="optcol"><span>Question types <small>none selected means all</small></span><div class="tchips">${CT.map(t=>`<button data-ty="${t[0]}" aria-pressed="${ty.includes(t[0])}">${t[1]} <small>${cnt[t[0]]||0}</small></button>`).join('')}</div></div>`+
+sw('shuf','Shuffle')+sw('rev','Reverse cards')+sw('cloze','Fill in the blank')+sw('type','Type answer first')+sw('lapsed','Lapsed cards first')+sw('star','Flagged only')+sw('weak','Weak cards only');
+fcount()}
+function fcount(){const p=fpool(),o=fs.opt,n=o.mode==='smart'?p.filter(dueNow):cramPool(p),sz=o.limit?Math.min(n.length,o.limit):n.length,mas=p.filter(x=>P(x.id).b>=4).length,nw=p.filter(x=>!P(x.id).b).length;
+$('fgo').textContent=sz?`${o.mode==='smart'?'Review':'Cram'} · ${sz}`:'Start';const dN=p.filter(dueNow).length,cN=cramPool(p).length;
+$('fmodes').innerHTML=`<button class="mc sm" role="radio" aria-checked="${o.mode==='smart'}" data-om="smart"><b>↻ Smart review</b><span>Only cards that are due. Rate Again, Good or Easy and each card comes back after a longer gap.</span><em>${dN} due now</em></button><button class="mc cr" role="radio" aria-checked="${o.mode==='cram'}" data-om="cram"><b>⚡ Cram</b><span>Every card once, due or not. Cards you answer stay out until the whole deck is covered.</span><em>${cN} to go of ${p.length}</em></button>`;const RN=fs.resume&&fs.resume.q?fs.resume.q.length:0;$('frs').hidden=!RN;if(RN)$('frs').textContent=`Resume · ${RN} left`;$('fgo').disabled=!sz;const SN=sel().length;
+$('dbt').textContent=SN?`${p.length} card${p.length===1?'':'s'} in your deck`:'No sections selected';
+$('dbs').textContent=SN?`${SN} section${SN===1?'':'s'} · ${nw} new · ${mas} mastered`+(o.mode==='smart'?(n.length?` · ${n.length} due`:' · nothing due, try Cram'):' · cram: every card once')+(o.limit&&n.length>o.limit?` · session of ${sz}`:''):'Pick sections below, from one topic or several.'}
+$('fct').addEventListener('toggle',e=>{if(e.target.dataset&&e.target.dataset.t)fo[e.target.dataset.t]=e.target.open},true);
+$('fct').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const D2=fdeck();
+if(b.dataset.sec){const i=fs.sel.indexOf(b.dataset.sec);i<0?fs.sel.push(b.dataset.sec):fs.sel.splice(i,1)}
+else if(b.dataset.ta){const ids=D2.secs.filter(z=>z.t===b.dataset.t).map(z=>z.id);fs.sel=fs.sel.filter(x=>!ids.includes(x));if(b.dataset.ta==='all')fs.sel=fs.sel.concat(ids)}else return;
+fsave();fcSetup()});
+$('fmodes').addEventListener('click',e=>{const b=e.target.closest('[data-om]');if(!b)return;fs.opt.mode=b.dataset.om;fsave();fcount()});
+$('fco').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const d=b.dataset;if(d.om)fs.opt.mode=d.om;else if(d.ol!==undefined)fs.opt.limit=+d.ol;else if(d.ty){const t=fs.opt.types||(fs.opt.types=[]),i=t.indexOf(d.ty);i<0?t.push(d.ty):t.splice(i,1)}else return;fsave();fcSetup()});
+$('fco').addEventListener('change',e=>{const k=e.target.dataset.o;if(!k)return;fs.opt[k]=e.target.checked;fsave();fcount()});
+$('fgo').onclick=()=>{const o=fs.opt;let c=fpool();fs.resume=null;if(o.mode==='smart')c=c.filter(dueNow);else c=cramPool(c,true);if(o.shuf)c=shuf(c);if(o.lapsed)c.sort((a,b)=>(P(b.id).l||0)-(P(a.id).l||0)||P(a.id).b-P(b.id).b);else if(o.mode==='smart')c.sort((a,b)=>P(a.id).b-P(b.id).b);if(o.limit)c=c.slice(0,o.limit);startSession(c)};
+function startSession(c,r){if(!c.length)return;S={q:c.slice(),total:(r&&r.total)||c.length,done:(r&&r.done)||0,again:new Set((r&&r.again)||[]),g:(r&&r.g)||0,e:(r&&r.e)||0,seen:false,busy:false};$('fcs').hidden=true;$('fcf').hidden=true;$('fcr').hidden=false;$('fsum').hidden=true;$('fplay').hidden=false;showCard()}
+const hintOf=a=>a.replace(/[A-Za-z0-9]+/g,w=>w[0]+'_'.repeat(Math.min(w.length-1,6)));
+function renderFront(){const c=S.q[0],o=fs.opt,cl=S.cl,lab=`${secName(c.s)} · ${CTL[ctype(c)]}`;
+if(cl)$('ffr').innerHTML=`<span class="fl">${lab}</span><p class="fq top">${c.q}</p><div class="fcc cz">${cl.front(S.hint)}</div><span class="fh">${S.hint?'Hint shown. Tap to flip':'Fill in the blank. Tap to flip'}</span>`;
+else $('ffr').innerHTML=`<span class="fl">${lab}</span><div class="fcc">${o.rev?c.a:c.q}</div>${S.hint?`<p class="hn">Hint: ${hintOf(o.rev?c.q:c.a)}</p>`:''}<span class="fh">Tap to flip</span>`}
+function paint(){$('fmb').textContent=fs.opt.mode==='smart'?'↻ Smart review':'⚡ Cram';$('fmb').dataset.m=fs.opt.mode;$('fcr').dataset.mode=fs.opt.mode;$('fprev').disabled=$('fnext').disabled=S.q.length<2;const c=S.q[0],o=fs.opt,D2=fdeck(),si=Math.max(0,D2.secs.findIndex(z=>z.id===c.s)),fc=$('fcard'),p=P(c.id);
+fc.style.setProperty('--c',`var(--e${si%6+1})`);$('fpn').textContent=`${Math.min(S.done+1,S.total)} of ${S.total}`;$('fpb').style.width=S.done/S.total*100+'%';
+const fin=fc.querySelector('.fin');fin.style.transition='none';fc.classList.remove('flipped');void fin.offsetWidth;fin.style.transition='';
+const tag=c.src===1?'<span class="tg ok">Textbook</span>':c.src===2?'<span class="tg">Yours</span>':'<span class="tg">Extra</span>';
+S.cl=(!o.rev&&o.cloze)?cloze(c.a):null;S.hint=false;renderFront();
+$('fbk').innerHTML=`<span class="fl">${secName(c.s)} ${tag}</span><p class="fq">${o.rev?c.a:c.q}</p><div class="fcc ans">${S.cl?S.cl.back:(o.rev?c.q:c.a)}</div><p class="you" id="you"></p>`;
+S.seen=false;$('fflip').hidden=false;$('frate').hidden=true;$('fty').hidden=!o.type;$('ftx').value='';$('ftx').placeholder=S.cl?'Type the missing word(s), then flip':'Type your answer from memory, then flip';$('fstar').textContent=p.st?'Unflag card':'Flag card';document.querySelectorAll('#fmn [data-mo]').forEach(i=>i.checked=!!fs.opt[i.dataset.mo]);
+const nd=b=>{const d=INT[Math.min(5,b)];return d===1?'1 day':d+' days'};const cr=o.mode==='cram';$('r1s').textContent=cr?'repeat':'soon';$('r2s').textContent=cr?'covered':nd(p.b+1);$('r3s').textContent=cr?'covered':nd(p.b+2)}
+function showCard(){if(!S.q.length)return endSession();paint();const fc=$('fcard');S.busy=false;fc.classList.remove('out-l','out-r','in');void fc.offsetWidth;if(!RM)fc.classList.add('in');fc.focus({preventScroll:true})}
+function flip(){if(!S||S.busy||!S.q.length)return;$('fcard').classList.toggle('flipped');
+if(!S.seen){S.seen=true;const t=$('ftx').value.trim().replace(/[<>]/g,'');$('you').textContent=t?'You wrote: '+t:'';$('fflip').hidden=true;$('frate').hidden=false;$('fty').hidden=true}}
+let sx=null,sy=0,sw=0;
+function nav(d){if(!S||S.busy||$('fplay').hidden||S.q.length<2)return;S.busy=true;if(d>0)S.q.push(S.q.shift());else S.q.unshift(S.q.pop());
+fs.resume={q:S.q.map(x=>x.id),total:S.total,done:S.done,g:S.g,e:S.e,again:[...S.again]};fsave();const fc=$('fcard');fc.classList.remove('in');fc.classList.add(d>0?'out-l':'out-r');setTimeout(showCard,RM?0:280)}
+$('fnext').onclick=()=>nav(1);$('fprev').onclick=()=>nav(-1);
+$('fcard').addEventListener('pointerdown',e=>{sx=e.clientX;sy=e.clientY});
+$('fcard').addEventListener('pointerup',e=>{if(sx==null)return;const dx=e.clientX-sx,dy=e.clientY-sy;sx=null;if(Math.abs(dx)>50&&Math.abs(dy)<45){sw=1;setTimeout(()=>{sw=0},80);nav(dx<0?1:-1)}});
+$('fcard').addEventListener('pointercancel',()=>{sx=null});
+$('fcard').onclick=()=>{if(sw){sw=0;return}flip()};$('fflip').onclick=flip;
+$('fhint').onclick=()=>{if(!S||!S.q.length)return;$('fcard').classList.remove('flipped');S.hint=true;renderFront()};
+function rate(r){if(!S||!S.seen||S.busy)return;S.busy=true;const c=S.q[0],p=Object.assign({b:0,n:0,st:false},fs.prog[c.id]),now=Date.now();
+if(r===1){if(!S.again.has(c.id))p.l=(p.l||0)+1;p.b=1;p.n=now;S.again.add(c.id);S.q.shift();S.q.splice(Math.min(3,S.q.length),0,c)}
+else{p.b=Math.min(5,p.b+(r===2?1:2));p.n=now+INT[p.b]*DAY;S.q.shift();S.done++;r===2?S.g++:S.e++;fs.cyc[c.id]=1}
+fs.prog[c.id]=p;fs.resume=S.q.length?{q:S.q.map(x=>x.id),total:S.total,done:S.done,g:S.g,e:S.e,again:[...S.again]}:null;fsave();const fc=$('fcard');fc.classList.remove('in');fc.classList.add(r===1?'out-l':'out-r');setTimeout(showCard,RM?0:280)}
+$('frate').addEventListener('click',e=>{const b=e.target.closest('button');if(b)rate(+b.dataset.r)});
+$('fstar').onclick=()=>{const c=S.q[0],p=Object.assign({b:0,n:0,st:false},fs.prog[c.id]);p.st=!p.st;fs.prog[c.id]=p;fsave();$('fstar').textContent=p.st?'Unflag card':'Flag card'};
+function endSession(){fs.resume=null;fsave();const D2=fdeck(),cs=[...S.again].map(id=>D2.cards.find(x=>x.id===id)).filter(Boolean);$('fplay').hidden=true;$('fpb').style.width='100%';$('fpn').textContent='Complete';
+$('fsum').hidden=false;$('fsum').innerHTML=`<div class="done"><h3>Session complete</h3><div class="stats"><div><b>${S.g}</b><span>Good</span></div><div><b>${S.e}</b><span>Easy</span></div><div><b>${cs.length}</b><span>Needed retries</span></div></div></div>`+
+(cs.length?`<p class="x">Cards that needed another go</p>`+cs.map(x=>`<div class="kr"><b class="kd">${x.q}</b><span class="ke">${x.a}</span></div>`).join(''):'')+
+`<div class="row" style="margin-top:16px"><button class="pri" id="fagain" ${cs.length?'':'hidden'}>Redo these cards</button><button id="fdone">Back to decks</button></div>`;
+$('fagain').onclick=()=>startSession(shuf(cs));$('fdone').onclick=fcSetup}
+$('fback').onclick=fcSetup;
+$('frs').onclick=()=>{const r=fs.resume;if(!r||!r.q)return;const m=new Map(fdeck().cards.map(c=>[c.id,c])),q=r.q.map(id=>m.get(id)).filter(Boolean);if(!q.length){fs.resume=null;fsave();return fcSetup()}startSession(q,r)};
+$('fmn').addEventListener('change',e=>{const k=e.target.dataset.mo;if(!k)return;fs.opt[k]=e.target.checked;fsave();if(S&&S.q.length)paint()});
+$('fshuf').onclick=()=>{if(!S||S.q.length<2)return;S.q=[S.q[0]].concat(shuf(S.q.slice(1)));$('fpn').textContent='Shuffled';setTimeout(()=>{if(S)$('fpn').textContent=`${Math.min(S.done+1,S.total)} of ${S.total}`},900)};
+/* menu */
+$('fmenu').onclick=e=>{e.stopPropagation();const m=$('fmn');m.hidden=!m.hidden;$('fmenu').setAttribute('aria-expanded',!m.hidden)};
+document.addEventListener('click',e=>{if(!$('fmn').hidden&&!e.target.closest('.menuw')){$('fmn').hidden=true;$('fmenu').setAttribute('aria-expanded','false')}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('fmn').hidden){$('fmn').hidden=true;$('fmenu').focus()}});
+$('fmn').addEventListener('click',e=>{if(e.target.closest('button'))$('fmn').hidden=true});
+/* add / edit / import / export */
+function fillTopics(t,sec){$('ftp').innerHTML=FCT.filter(x=>x.g===grp()).map(x=>`<option value="${x.id}" ${x.id===t?'selected':''}>${x.n}</option>`).join('');fillSecs(sec)}
+function fillSecs(sec){const D2=fdeck(),t=$('ftp').value;$('fsc').innerHTML=D2.secs.filter(z=>z.t===t).map(z=>`<option value="${z.id}" ${z.id===sec?'selected':''}>${z.n}</option>`).join('')+'<option value="__new">New section…</option>';newSec()}
+function newSec(){$('fnw').hidden=$('fsc').value!=='__new'}
+$('ftp').onchange=()=>fillSecs();$('fsc').onchange=newSec;
+function openForm(c){editing=c||null;bulk=false;$('fcs').hidden=true;$('fcr').hidden=true;$('fcf').hidden=false;$('fmsg').textContent='';
+const D2=fdeck(),sc=c?D2.secs.find(z=>z.id===c.s):D2.secs.find(z=>sel().includes(z.id))||D2.secs.find(z=>isDoc()?z.t===topic:FG(z.t)===grp())||D2.secs[0];
+fillTopics(sc?sc.t:topic,sc?sc.id:null);$('fq').value=c?c.q:'';$('fa2').value=c?c.a:'';$('fbt').value='';$('fnn').value='';
+$('fch').textContent=c?'Edit card':'Add cards';$('fone').hidden=false;$('fbulk').hidden=true;$('fmode').hidden=!!c;$('fdelc').hidden=!c;$('fmode').textContent='Bulk import instead';$('fsave').textContent='Save';$('fq').focus()}
+$('fedit').onclick=()=>openForm(S.q[0]);
+$('fmode').onclick=()=>{bulk=!bulk;$('fone').hidden=bulk;$('fbulk').hidden=!bulk;$('fmode').textContent=bulk?'Single card instead':'Bulk import instead';$('fsave').textContent=bulk?'Import':'Save'};
+$('fcan').onclick=()=>{$('fcf').hidden=true;S&&S.q.length?($('fcr').hidden=false):fcSetup()};
+function targetSec(){let id=$('fsc').value;if(id==='__new'){const n=clean($('fnn').value);if(!n)return null;id='s'+Date.now();fs.secs.push({id,t:$('ftp').value,n});fs.sel.push(id)}return id}
+function csvParse(t){const rows=[];let r=[],f='',q=false;for(let i=0;i<t.length;i++){const c=t[i];if(q){if(c==='"'){if(t[i+1]==='"'){f+='"';i++}else q=false}else f+=c}else if(c==='"')q=true;else if(c===','){r.push(f);f=''}else if(c==='\n'||c==='\r'){if(c==='\r'&&t[i+1]==='\n')i++;r.push(f);rows.push(r);r=[];f=''}else f+=c}if(f!==''||r.length){r.push(f);rows.push(r)}return rows.filter(r=>r.some(x=>x.trim()))}
+$('fcf').onsubmit=e=>{e.preventDefault();if(bulk){const rows=csvParse($('fbt').value).filter(r=>r.length>=2&&r[0].trim()&&r[1].trim());if(!rows.length){$('fmsg').textContent='No valid rows found. Use question,answer on each line.';return}
+if(/^question$/i.test(rows[0][0].trim()))rows.shift();const sid=targetSec();if(!sid){$('fnn').focus();return}
+rows.forEach((r,i)=>fs.add.push({id:'c'+Date.now()+'_'+i,s:sid,q:clean(r[0]),a:clean(r[1])}));fsave();$('fmsg').textContent=rows.length+' cards imported.';$('fbt').value='';return}
+const q=clean($('fq').value),a=clean($('fa2').value);if(!q||!a){$('fmsg').textContent='Both question and answer are needed.';return}const sid=targetSec();if(!sid){$('fnn').focus();return}
+if(editing){const c=editing;if(c.id[0]==='b')fs.mod[c.id]={q,a,s:sid};else{Object.assign(fs.add.find(z=>z.id===c.id),{q,a,s:sid})}Object.assign(c,{q,a,s:sid});fsave();$('fcf').hidden=true;if(S&&S.q.length){$('fcr').hidden=false;paint()}else fcSetup();return}
+fs.add.push({id:'c'+Date.now(),s:sid,q,a});fsave();$('fmsg').textContent='Card added. Add another, or Cancel to finish.';$('fq').value='';$('fa2').value='';$('fq').focus()};
+$('fdelc').onclick=()=>{const c=editing;if(!c)return;if(c.id[0]==='b')fs.del.push(c.id);else fs.add=fs.add.filter(z=>z.id!==c.id);fsave();if(S){S.q=S.q.filter(x=>x.id!==c.id);S.total=Math.max(S.done,S.total-1)}$('fcf').hidden=true;if(S&&S.q.length){$('fcr').hidden=false;showCard()}else if(S){$('fcr').hidden=false;endSession()}else fcSetup()};
+document.addEventListener('keydown',e=>{if(mode!=='cards'||!S||$('fcr').hidden||$('fplay').hidden||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
+if(e.key===' '||e.key==='Enter'){e.preventDefault();flip()}else if(e.key==='1'||e.key==='2'||e.key==='3')rate(+e.key);else if(e.key==='ArrowRight'){e.preventDefault();nav(1)}else if(e.key==='ArrowLeft'){e.preventDefault();nav(-1)}});
+/* order it */
+let ord,oi,bad;
+function nextOrder(){const p=getPool();if(p.length<4){$('os').textContent='Pick a larger era';return}const s=new Set();while(s.size<4)s.add(pick(p));ord=[...s].sort((a,b)=>a.i-b.i);oi=0;bad=0;
+$('on').hidden=true;$('os').textContent='Tap the events in order, earliest first.';const o=$('oo');o.innerHTML='';
+shuf(ord).forEach(x=>{const b=document.createElement('button');b.innerHTML=x.e;b.onclick=()=>{if(b.classList.contains('done'))return;
+if(x===ord[oi]){b.classList.add('done');b.innerHTML=`<span class="dt">${x.d}</span>${x.e}`;oi++;if(oi===4){$('os').textContent=bad?`Done with ${bad} slip${bad>1?'s':''}.`:'Perfect order.';$('on').hidden=false}}
+else{bad++;b.classList.add('bad');setTimeout(()=>b.classList.remove('bad'),500)}};o.appendChild(b)})}
+$('on').onclick=nextOrder;
+/* quiz */
+let qlist=[],missed=[],fin=false;
+function startQuiz(list){if(list.length<4){$('qq').textContent='Pick a larger era';$('op').innerHTML='';return}qlist=shuf(list).slice(0,10);ok=n=0;missed=[];fin=false;$('qr').hidden=true;$('nx').textContent='Next question';ask()}
+function ask(){if(n>=qlist.length)return endQuiz();cur=qlist[n];const w=Math.random()<.5;$('sc').textContent=`Question ${n+1} of ${qlist.length}  ·  Score ${ok}`;
+const f=w?'d':'e',s=new Set([cur[f]]);let g=0;while(s.size<4&&g++<200)s.add(pick(all)[f]);
+$('qq').textContent=w?'When: '+cur.e+'?':'What happened: '+cur.d+'?';$('qd').textContent=w?cur.x:'';$('nx').hidden=true;
+const o=$('op');o.innerHTML='';shuf([...s]).forEach(v=>{const b=document.createElement('button');b.textContent=v;b.onclick=()=>{if(!$('nx').hidden)return;n++;const r=v===cur[f];if(r)ok++;else missed.push(cur);b.classList.add(r?'right':'wrong');
+if(!r)[...o.children].find(c=>c.textContent===cur[f]).classList.add('right');$('qd').textContent=(r?'Correct. ':'Not quite. ')+(cur.w||cur.x);$('sc').textContent=`Question ${n} of ${qlist.length}  ·  Score ${ok}`;$('nx').textContent=n>=qlist.length?'See results':'Next question';$('nx').hidden=false};o.appendChild(b)})}
+function endQuiz(){fin=true;const t=qlist.length,pc=Math.round(ok/t*100);$('sc').textContent=`Round complete: ${ok} / ${t} (${pc}%)`;
+$('qq').textContent=pc>=80?'Strong. Move on to a new set.':pc>=50?'Getting there. Review the misses below.':'Revise the Key dates tab, then retry.';
+$('qd').textContent=missed.length?'Review these:':'No mistakes this round.';
+$('op').innerHTML=missed.map(x=>`<div class="kr" style="--c:${x.c}"><b class="kd">${x.d}</b><span class="ke">${x.e}${x.w?`<span class="kw">${x.w}</span>`:''}</span></div>`).join('');
+$('nx').textContent='New round';$('nx').hidden=false;$('qr').hidden=!missed.length}
+$('nx').onclick=()=>fin?startQuiz(getPool()):ask();
+$('qr').onclick=()=>startQuiz(missed.slice());
+try{const t=LS.get('last-topic');if(t&&D[t])topic=t}catch(e){}buildTabs();applyLook();
+render();
+LS.onload=()=>{try{look=JSON.parse(LS.get('look')||'{}')}catch(e){look={}}const lt=LS.get('last-topic');if(lt&&D[lt])topic=lt;fload();edits={};buildTabs();applyLook();render()};
+addEventListener('pagehide',()=>{if(gflush)gflush();LS.flush()});document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){if(gflush)gflush();LS.flush()}});
+(function(){
+const ov=$('cb'),esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let showA=false,ex=new Set(),op=new Set(),opS=new Set(),sort='orig',uiLoaded=false,ed=null,subj='all',flt='all',pm='one',armedP=false,undo=null,tmr=null,ioMode=null;
+const isU=c=>c.id[0]!=='b',isE=c=>!isU(c)&&!!fs.mod[c.id],stat=c=>{const b=P(c.id).b;return b>=4?'m':b>=1?'l':'n'};
+const TL=Object.fromEntries(FCT.map(t=>[t.id,t]));
+function toast(msg,fn){$('cbtm').textContent=msg;$('cbtu').hidden=!fn;undo=fn||null;$('cbt').hidden=false;clearTimeout(tmr);tmr=setTimeout(()=>{$('cbt').hidden=true;undo=null},fn?7000:2200)}
+$('cbtu').onclick=()=>{if(undo)undo();undo=null;$('cbt').hidden=true;render()};
+function visible(d){const v=($('cbq').value||'').trim().toLowerCase();return d.cards.filter(c=>{const t=TL[(d.secs.find(z=>z.id===c.s)||{}).t];if(!t)return false;if(subj!=='all'&&t.g!==subj)return false;
+if(v&&!(c.q+' '+c.a).toLowerCase().includes(v))return false;
+if(flt==='yours')return isU(c);if(flt==='edited')return isE(c);if(flt==='flag')return P(c.id).st;if(flt==='weak')return stat(c)==='l'&&P(c.id).b<=2;if(flt==='new')return stat(c)==='n';return true})}
+function chips(d){const all=d.cards,cnt={all:all.length,yours:all.filter(isU).length,edited:all.filter(isE).length,flag:all.filter(c=>P(c.id).st).length,weak:all.filter(c=>stat(c)==='l'&&P(c.id).b<=2).length,new:all.filter(c=>stat(c)==='n').length};
+const L=[['all','All'],['yours','Yours'],['edited','Edited'],['flag','Flagged'],['weak','Needs work'],['new','New']];
+$('cbf').innerHTML=`<div class="seg" role="group" aria-label="Subject">${[['all','All']].concat(SUBJECTS.map(x=>[x.id,x.n])).map(x=>`<button data-sj="${x[0]}" aria-pressed="${subj===x[0]}">${x[1]}</button>`).join('')}</div>`+
+L.filter(x=>x[0]==='all'||cnt[x[0]]||flt===x[0]).map(x=>`<button class="fchip" data-fl="${x[0]}" aria-pressed="${flt===x[0]}">${x[1]} <small>${cnt[x[0]]}</small></button>`).join('')}
+function secOpts(tid,sel,withNew){const d=fdeck();return d.secs.filter(z=>z.t===tid).map(z=>`<option value="${z.id}" ${z.id===sel?'selected':''}>${esc(z.n)}</option>`).join('')+(withNew?'<option value="__new">New section…</option>':'')}
+function topicOpts(sel){return SUBJECTS.map(x=>`<optgroup label="${x.n}">${FCT.filter(t=>t.g===x.id).map(t=>`<option value="${t.id}" ${t.id===sel?'selected':''}>${esc(t.n)}</option>`).join('')}</optgroup>`).join('')}
+function editForm(c,d){const sc=d.secs.find(z=>z.id===c.s)||{},tid=sc.t||FCT[0].id;
+return `<div class="cbed" data-ed="${c.id}"><label>Question<textarea data-f="q" rows="2">${esc(c.q)}</textarea></label><label>Answer<textarea data-f="a" rows="3">${esc(c.a)}</textarea></label>
+<div class="g2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>Topic<select data-f="t">${topicOpts(tid)}</select></label><label>Section<select data-f="s">${secOpts(tid,c.s,false)}</select></label></div>
+<div class="row" style="margin:0"><button class="pri" data-a="save" data-id="${c.id}">Save</button><button data-a="cancel">Cancel</button></div><p class="cbmsg bad" data-f="m"></p></div>`}
+const rk=c=>{const b=P(c.id).b;return b>=4?2:b>=1?0:1};
+function sortCards(cs){if(sort==='az')return cs.slice().sort((x,y)=>x.q.localeCompare(y.q));if(sort==='weak')return cs.slice().sort((x,y)=>rk(x)-rk(y)||P(x.id).b-P(y.id).b);if(sort==='flag')return cs.slice().sort((x,y)=>(P(y.id).st?1:0)-(P(x.id).st?1:0));return cs}
+function cardRow(c,d){if(ed===c.id)return `<div class="cbc on">${editForm(c,d)}</div>`;const on=ex.has(c.id),p=P(c.id);
+return `<div class="cbc${on?' on':''}"><button class="cbq" data-a="tog" data-id="${c.id}" aria-expanded="${on}"><i class="dot ${stat(c)}"></i><span class="qt">${esc(c.q)}${isU(c)?'<span class="tag">Yours</span>':''}${isE(c)?'<span class="tag">Edited</span>':''}</span>${p.st?'<span class="fl" aria-label="Flagged">⚑</span>':''}</button>
+<div class="cba">${esc(c.a)}</div><div class="cbact"><button data-a="edit" data-id="${c.id}">Edit</button><button data-a="flag" data-id="${c.id}">${p.st?'Unflag':'Flag'}</button>${isE(c)?`<button data-a="revert" data-id="${c.id}">Revert to original</button>`:''}<button class="dg" data-a="del" data-id="${c.id}">Delete</button></div></div>`}
+function render(){if(!fs)fload();const d=fdeck(),vis=visible(d),v=($('cbq').value||'').trim(),auto=!!v||flt!=='all';chips(d);
+const mine=d.cards.filter(isU).length,fl=d.cards.filter(c=>P(c.id).st).length,ms=d.cards.filter(c=>stat(c)==='m').length;
+$('cbn').textContent='· '+d.cards.length;$('cbs').textContent=`${mine} yours · ${fl} flagged · ${ms} mastered`+(auto?` · showing ${vis.length}`:'');
+$('cbrs').hidden=!fs.del.length;$('cbrs').textContent=`Restore deleted cards (${fs.del.length})`;$('cbso').value=sort;
+let h='',jo='<option value="">Jump to topic…</option>';
+SUBJECTS.map(x=>[x.id,x.n]).forEach(([g,gn])=>{if(subj!=='all'&&g!==subj)return;let gh='',gc=0,jg='';
+FCT.filter(t=>t.g===g).forEach(t=>{const secs=d.secs.filter(z=>z.t===t.id);let th='',tc=0;
+const tAll=d.cards.filter(c=>secs.some(z=>z.id===c.s)),tm=tAll.filter(c=>stat(c)==='m').length;
+secs.forEach(z=>{const cs=sortCards(vis.filter(c=>c.s===z.id));if(!cs.length&&auto)return;tc+=cs.length;
+const all=d.cards.filter(c=>c.s===z.id),m=all.filter(c=>stat(c)==='m').length,pc=all.length?Math.round(m/all.length*100):0;
+th+=`<details class="sec" data-sec="${z.id}" ${opS.has(z.id)?'open data-filled="1"':''}><summary><span class="sn">${esc(z.n)}</span><span class="sc">${auto?cs.length+' of '+all.length:all.length}</span><span class="pb" title="${m} of ${all.length} mastered"><b style="width:${pc}%"></b></span><span class="sb">${cs.length?`<button data-a="study" data-s="${z.id}">Study</button>`:''}<button data-a="addto" data-s="${z.id}" data-t="${t.id}">+ Card</button></span></summary><div class="secb">${opS.has(z.id)?(cs.map(c=>cardRow(c,d)).join('')||'<p class="x">No cards yet.</p>'):''}</div></details>`});
+if(tc||!auto){gc+=tc;jg+=`<option value="${t.id}">${esc(t.n)} (${tc})</option>`;
+gh+=`<details class="acc" data-t="${t.id}" ${op.has(t.id)?'open':''}><summary><span class="tn">${esc(t.n)}</span><span class="tc">${tc} cards · ${tm} mastered</span>${tc?`<button class="ts" data-a="studyt" data-t="${t.id}">Study</button>`:''}</summary><div class="accb">${th||'<p class="x">No cards yet.</p>'}</div></details>`}});
+if(gh)h+=`<div class="cbg"><h3 class="cbs">${gn} <small>${gc}</small></h3>${gh}</div>`;if(jg)jo+=`<optgroup label="${gn}">${jg}</optgroup>`});
+$('cbl').innerHTML=h||'<p class="x" style="margin-top:24px">No cards match.</p>';$('cbj').innerHTML=jo;
+const sb=$('cbst'),sv=!v&&(flt==='flag'||flt==='weak')&&vis.length;sb.hidden=!sv;if(sv)sb.textContent=`Study ${flt==='flag'?'flagged':'needs-work'} cards · ${vis.length}`}
+function fillSec(el){const d=fdeck(),cs=sortCards(visible(d).filter(c=>c.s===el.dataset.sec));el.querySelector('.secb').innerHTML=cs.map(c=>cardRow(c,d)).join('')||'<p class="x">No cards yet.</p>';el.dataset.filled='1'}
+$('cbl').addEventListener('toggle',e=>{const el=e.target,k=el.dataset||{};let ch=false;
+if(k.t){const had=op.has(k.t);if(el.open!==had){el.open?op.add(k.t):op.delete(k.t);ch=true}}
+else if(k.sec){const had=opS.has(k.sec);if(el.open&&k.filled!=='1')fillSec(el);if(el.open!==had){el.open?opS.add(k.sec):opS.delete(k.sec);ch=true}}
+else return;if(ch)saveUI()},true);
+let ut;function saveUI(){clearTimeout(ut);ut=setTimeout(()=>{try{LS.set('cb-ui',JSON.stringify({op:[...op],opS:[...opS],sort,subj}))}catch(e){}},400)}
+function loadUI(){if(uiLoaded)return;uiLoaded=true;try{const u=JSON.parse(LS.get('cb-ui')||'{}');op=new Set(u.op||[]);opS=new Set(u.opS||[]);if(['orig','weak','flag','az'].includes(u.sort))sort=u.sort;if(['all',...SUBJECTS.map(x=>x.id)].includes(u.subj))subj=u.subj}catch(e){}}
+function expandMatches(){if(!(($('cbq').value||'').trim()||flt!=='all'))return;const d=fdeck();visible(d).forEach(c=>{opS.add(c.s);const z=d.secs.find(z=>z.id===c.s);if(z)op.add(z.t)})}
+function findCard(id){return fdeck().cards.find(c=>c.id===id)}
+$('cbl').addEventListener('click',e=>{const b=e.target.closest('button[data-a]');if(!b)return;if(b.closest('summary'))e.preventDefault();const a=b.dataset.a,id=b.dataset.id;
+if(a==='tog'){ex.has(id)?ex.delete(id):ex.add(id);b.parentNode.classList.toggle('on',ex.has(id));b.setAttribute('aria-expanded',ex.has(id));return}
+if(a==='edit'){ed=id;render();const f=$('cbl').querySelector('[data-f=q]');if(f)f.focus();return}
+if(a==='cancel'){ed=null;render();return}
+if(a==='flag'){const c=Object.assign({b:0,n:0,st:false},fs.prog[id]);c.st=!c.st;fs.prog[id]=c;fsave();render();return}
+if(a==='revert'){const old=fs.mod[id];delete fs.mod[id];fsave();render();toast('Card reverted',()=>{fs.mod[id]=old;fsave()});return}
+if(a==='del'){const c=findCard(id);if(!c)return;if(isU(c)){const i=fs.add.findIndex(z=>z.id===id),obj=fs.add[i];fs.add.splice(i,1);fsave();render();toast('Card deleted',()=>{fs.add.splice(Math.min(i,fs.add.length),0,obj);fsave()})}
+else{fs.del.push(id);fsave();render();toast('Card deleted',()=>{fs.del=fs.del.filter(x=>x!==id);fsave()})}return}
+if(a==='save'){const box=b.closest('.cbed'),q=clean(box.querySelector('[data-f=q]').value),an=clean(box.querySelector('[data-f=a]').value),s=box.querySelector('[data-f=s]').value,m=box.querySelector('[data-f=m]');
+if(!q||!an){m.textContent='Both question and answer are needed.';return}
+if(isU({id})){Object.assign(fs.add.find(z=>z.id===id),{q,a:an,s})}else fs.mod[id]={q,a:an,s};fsave();ed=null;ex.add(id);opS.add(s);const tt=(fdeck().secs.find(z=>z.id===s)||{}).t;if(tt)op.add(tt);saveUI();render();toast('Saved');return}
+if(a==='study'){study([b.dataset.s]);return}
+if(a==='studyt'){study(fdeck().secs.filter(z=>z.t===b.dataset.t).map(z=>z.id));return}
+if(a==='addto'){openAdd(b.dataset.t,b.dataset.s);return}});
+$('cbl').addEventListener('change',e=>{if(e.target.dataset.f==='t'){const box=e.target.closest('.cbed'),sl=box.querySelector('[data-f=s]');sl.innerHTML=secOpts(e.target.value,null,false)}});
+function study(ids,keep){fs.sel=ids.slice();if(!keep){fs.opt.star=false;fs.opt.weak=false}fsave();const t=fdeck().secs.find(z=>z.id===ids[0]).t;close(true);setTopic(t);setMode('cards');if(!$('fgo').disabled)$('fgo').click()}
+$('cbf').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.sj)subj=b.dataset.sj;else if(b.dataset.fl)flt=b.dataset.fl;else return;expandMatches();saveUI();render()});
+$('cbq').oninput=(()=>{let t;return()=>{clearTimeout(t);t=setTimeout(()=>{expandMatches();render()},140)}})();
+$('cba').onchange=e=>{showA=e.target.checked;ex=new Set();if(showA)fdeck().cards.forEach(c=>ex.add(c.id));render()};
+/* add / import panel */
+function fillPanel(t,s){$('cbpt').innerHTML=topicOpts(t);$('cbps').innerHTML=secOpts($('cbpt').value,s,true);$('cbpnw').hidden=$('cbps').value!=='__new'}
+function openAdd(t,s){hideIO();const d=fdeck(),first=s?null:(d.secs.find(z=>fs.sel.includes(z.id))||d.secs[0]);fillPanel(t||(first&&first.t)||lastT_(),s||(first&&first.id)||null);
+$('cbp').hidden=false;$('cbpmsg').textContent='';$('cbpmsg').className='cbmsg';setPM('one');ov.scrollTop=0;$('cbpq').focus()}
+function lastT_(){return $('cbpt').value||FCT[0].id}
+function setPM(m){pm=m;$('cbp1').hidden=m!=='one';$('cbp2').hidden=m!=='many';$('cbpm').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.pm===m));$('cbpsv').textContent=m==='one'?'Save card':'Import cards';$('cbph').textContent=m==='one'?'Add a card':'Import cards'}
+$('cbad').onclick=()=>{$('cbp').hidden?openAdd():($('cbp').hidden=true)};
+$('cbpt').onchange=()=>{$('cbps').innerHTML=secOpts($('cbpt').value,null,true);$('cbpnw').hidden=$('cbps').value!=='__new'};
+$('cbps').onchange=()=>{$('cbpnw').hidden=$('cbps').value!=='__new';if(!$('cbpnw').hidden)$('cbpn').focus()};
+$('cbpm').onclick=e=>{const b=e.target.closest('button');if(b)setPM(b.dataset.pm)};
+$('cbpc').onclick=()=>{$('cbp').hidden=true};
+$('cbpf').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{$('cbpb').value=String(r.result||'');e.target.value=''};r.readAsText(f)};
+function msg(t,bad){$('cbpmsg').textContent=t;$('cbpmsg').className='cbmsg'+(bad?' bad':'')}
+function tgtSec(){let id=$('cbps').value;if(id==='__new'){const n=clean($('cbpn').value);if(!n){msg('Name the new section first.',1);$('cbpn').focus();return null}id='s'+Date.now();fs.secs.push({id,t:$('cbpt').value,n});$('cbpn').value=''}return id}
+function parseMany(t){const lines=t.split(/\r?\n/).filter(l=>l.trim());if(lines.length&&lines.every(l=>l.includes('\t')))return lines.map(l=>l.split('\t'));return csvParse(t)}
+$('cbp').onsubmit=e=>{e.preventDefault();
+if(pm==='many'){let rows=parseMany($('cbpb').value).filter(r=>r.length>=2&&r[0].trim()&&r[1].trim());if(rows.length&&/^question$/i.test(rows[0][0].trim()))rows.shift();
+if(!rows.length){msg('No valid rows found. Use question,answer on each line.',1);return}
+const sid=tgtSec();if(!sid)return;const seen=new Set(fdeck().cards.map(c=>c.q.trim().toLowerCase()));let dup=0;
+rows.forEach((r,i)=>{const q=clean(r[0]),a=clean(r.slice(1).join(', '));if(!q||!a)return;if(seen.has(q.toLowerCase()))dup++;seen.add(q.toLowerCase());fs.add.push({id:'c'+Date.now()+'_'+i,s:sid,q,a})});
+fsave();$('cbpb').value='';fillPanel($('cbpt').value,sid);op.add($('cbpt').value);opS.add(sid);saveUI();msg(`${rows.length} card${rows.length===1?'':'s'} imported`+(dup?` (${dup} may be duplicates)`:'')+'.');render();return}
+const q=clean($('cbpq').value),a=clean($('cbpa').value);if(!q||!a){msg('Both question and answer are needed.',1);(q?$('cbpa'):$('cbpq')).focus();return}
+const dupe=fdeck().cards.some(c=>c.q.trim().toLowerCase()===q.toLowerCase());const sid=tgtSec();if(!sid)return;
+fs.add.push({id:'c'+Date.now(),s:sid,q,a});fsave();$('cbpq').value='';$('cbpa').value='';fillPanel($('cbpt').value,sid);op.add($('cbpt').value);opS.add(sid);saveUI();msg('Card added'+(dupe?' (a card with this question already exists)':'')+'. Add another.');render();$('cbpq').focus()};
+/* more menu */
+function hideIO(){$('cbio').hidden=true;ioMode=null}
+$('cbm').onclick=e=>{e.stopPropagation();const m=$('cbmn');m.hidden=!m.hidden;$('cbm').setAttribute('aria-expanded',!m.hidden)};
+document.addEventListener('click',e=>{if(!$('cbmn').hidden&&!e.target.closest('#cb .menuw')){$('cbmn').hidden=true;$('cbm').setAttribute('aria-expanded','false')}});
+$('cbmn').onclick=e=>{const b=e.target.closest('button');if(!b)return;$('cbmn').hidden=true;$('cbm').setAttribute('aria-expanded','false');const a=b.dataset.ma;
+if(a==='backup'){showBk()}
+else if(a==='import'){$('cbp').hidden=false;$('cbpmsg').textContent='';openAdd();setPM('many')}
+else if(a==='export'){const d=fdeck(),vis=visible(d),q=x=>'"'+x.replace(/"/g,'""')+'"';$('cbp').hidden=true;$('cbioh').textContent=`Export ${vis.length} card${vis.length===1?'':'s'}${vis.length<d.cards.length?' (current filter)':''}`;
+$('cbiot').value='question,answer,section\n'+vis.map(c=>[q(c.q),q(c.a),q(secName(c.s))].join(',')).join('\n');$('cbiom').textContent='';$('cbio').hidden=false;ov.scrollTop=0;$('cbiot').select()}
+else if(a==='restore'){const n=fs.del.length;const old=fs.del.slice();fs.del=[];fsave();render();toast(`${n} card${n===1?'':'s'} restored`,()=>{fs.del=old;fsave()})}
+else if(a==='reset'){if(!armedP){armedP=true;b.textContent='Tap again to confirm';$('cbmn').hidden=false;setTimeout(()=>{armedP=false;b.textContent='Reset progress'},4000);return}
+armedP=false;b.textContent='Reset progress';const old=fs.prog;fs.prog={};fsave();render();toast('Progress reset',()=>{fs.prog=old;fsave()})}};
+$('cbioc').onclick=()=>{const t=$('cbiot');t.select();let ok=false;try{ok=document.execCommand('copy')}catch(e){}if(!ok&&navigator.clipboard)navigator.clipboard.writeText(t.value).then(()=>{$('cbiom').textContent='Copied.'},()=>{});else $('cbiom').textContent=ok?'Copied.':'Press and hold to copy the selected text.'};
+$('cbiox').onclick=hideIO;
+/* navigation tools */
+$('cbj').onchange=e=>{const id=e.target.value;if(!id)return;op.add(id);saveUI();render();const el=$('cbl').querySelector(`details[data-t="${id}"]`);if(el)el.scrollIntoView({behavior:RM?'auto':'smooth',block:'start'})};
+$('cbso').onchange=e=>{sort=e.target.value;saveUI();render()};
+$('cbea').onclick=()=>{const d=fdeck();op=new Set(FCT.map(t=>t.id));opS=new Set(d.secs.map(z=>z.id));saveUI();render()};
+$('cbca').onclick=()=>{op=new Set();opS=new Set();saveUI();render()};
+$('cbst').onclick=()=>{const d=fdeck(),vis=visible(d),gOf=c=>TL[d.secs.find(z=>z.id===c.s).t].g,n={h:0,g:0};vis.forEach(c=>n[gOf(c)]++);if(!vis.length)return;
+const g=n.g>n.h?'g':'h',ids=[...new Set(vis.filter(c=>gOf(c)===g).map(c=>c.s))];fs.opt.star=flt==='flag';fs.opt.weak=flt==='weak';fs.opt.mode='cram';study(ids,true)};
+document.addEventListener('keydown',e=>{if(ov.hidden||e.key!=='/'||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;e.preventDefault();$('cbq').focus()});
+/* open / close */
+function open(){if(!fs)fload();loadUI();$('cbq').value='';$('cba').checked=showA;ed=null;$('cbp').hidden=true;hideIO();render();ov.hidden=false;ov.scrollTop=0;document.body.style.overflow='hidden';$('cbx').focus()}
+function close(skip){ov.hidden=true;document.body.style.overflow='';$('cbmn').hidden=true;$('cbt').hidden=true;if(skip===true)return;$('cbo').focus();
+if(mode==='cards'){if(S&&!$('fcr').hidden&&!$('fplay').hidden){const m=new Map(fdeck().cards.map(c=>[c.id,c])),first=S.q[0]&&S.q[0].id,fq=S.q[0]&&S.q[0].q+S.q[0].a;S.q=S.q.map(c=>m.get(c.id)).filter(Boolean);
+if(!S.q.length)endSession();else if(S.q[0].id!==first||S.q[0].q+S.q[0].a!==fq)showCard()}else if(!$('fcs').hidden)fcSetup()}}
+$('cbo').onclick=open;$('cbx').onclick=()=>close();
+$('fman').onclick=open;
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!ov.hidden){if(!$('cbmn').hidden){$('cbmn').hidden=true;return}close()}});
+/* ===== backup and restore ===== */
+const BKV=1,bkEl=id=>$(id);let bkArm=null,bkHold=null;
+function bkMsg(t,bad){$('bkmsg').textContent=t;$('bkmsg').className='cbmsg'+(bad?' bad':'')}
+function bkPayload(){const data={};LS.keys().forEach(k=>{const v=LS.get(k);if(typeof v==='string')data[k]=v});return{app:'revision-site',v:BKV,exported:new Date().toISOString(),data}}
+function bkSummary(){if(!fs)fload();const n=LS.keys().length;return `${n} saved item${n===1?'':'s'} · ${fs.add.length} card${fs.add.length===1?'':'s'} you added · progress on ${Object.keys(fs.prog).length} card${Object.keys(fs.prog).length===1?'':'s'}`}
+function showBk(){$('cbp').hidden=true;hideIO();$('bkx').textContent=bkSummary();$('bkt').hidden=true;$('bkt').value='';$('bki').value='';$('bkf').value='';bkArm=null;$('bkim').textContent='Import';bkMsg('');$('cbbk').hidden=false;ov.scrollTop=0}
+$('bkcl').onclick=()=>{$('cbbk').hidden=true};
+$('aBk').onclick=()=>{open();showBk()};
+$('bksv').onclick=async()=>{const txt=JSON.stringify(bkPayload()),name=`revision-backup-${new Date().toISOString().slice(0,10)}.json`;
+let dl=null;try{dl=window.claude&&claude.use?await claude.use('downloads'):null}catch(e){}
+if(!dl){$('bkt').value=txt;$('bkt').hidden=false;$('bkt').select();bkMsg('File saving is not available here. Copy the text below and keep it somewhere safe.');return}
+try{await dl.save({filename:name,data:txt});bkMsg('Backup ready. Confirm the save in the prompt.')}catch(e){if(e&&e.code==='declined')bkMsg('Save cancelled.');else{$('bkt').value=txt;$('bkt').hidden=false;bkMsg('Could not save a file. Copy the text below instead.',1)}}};
+$('bkcp').onclick=()=>{const txt=JSON.stringify(bkPayload()),t=$('bkt');t.value=txt;t.hidden=false;t.select();let ok=false;try{ok=document.execCommand('copy')}catch(e){}
+if(!ok&&navigator.clipboard)navigator.clipboard.writeText(txt).then(()=>bkMsg('Copied.'),()=>bkMsg('Press and hold the selected text to copy it.'));else bkMsg(ok?'Copied.':'Press and hold the selected text to copy it.')};
+$('bkf').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{$('bki').value=String(r.result||'');bkArm=null;$('bkim').textContent='Import';bkMsg(`Loaded ${f.name}. Choose how to import, then tap Import.`)};r.readAsText(f)};
+$('bki').oninput=()=>{bkArm=null;$('bkim').textContent='Import'};$('bkm').onchange=()=>{bkArm=null;$('bkim').textContent='Import'};
+function bkParse(t){if(!t.trim())return{err:'Choose a backup file or paste the backup text first.'};if(t.length>9e6)return{err:'That file is too large to be a backup from this site.'};
+let o;try{o=JSON.parse(t)}catch(e){return{err:'That is not valid backup text.'}}
+if(!o||o.app!=='revision-site'||!o.data||typeof o.data!=='object'||Array.isArray(o.data))return{err:'This does not look like a backup from this site.'}
+if(o.v>BKV)return{err:'This backup was made by a newer version of the site.'}
+const ks=Object.keys(o.data).filter(k=>/^[A-Za-z0-9_~:@+-]{1,150}$/.test(k)&&k!=='__proto__'&&typeof o.data[k]==='string');
+return ks.length?{o,ks}:{err:'The backup does not contain any data.'}}
+const cp0=o=>{const r={};Object.keys(o||{}).forEach(k=>{if(k!=='__proto__')r[k]=o[k]});return r};
+function unionBy(a,b){const m=new Map();(a||[]).concat(b||[]).forEach(c=>{if(c&&c.id&&!m.has(c.id))m.set(c.id,c)});return[...m.values()]}
+function mergeFc(l,b){const r=Object.assign({},cp0(b),cp0(l));r.add=unionBy(l.add,b.add);r.secs=unionBy(l.secs,b.secs);r.mod=Object.assign(cp0(b.mod),cp0(l.mod));r.del=[...new Set([].concat(l.del||[],b.del||[]))];
+r.prog=cp0(b.prog);const lp=cp0(l.prog);Object.keys(lp).forEach(id=>{const x=lp[id],y=r.prog[id];r.prog[id]=!y?x:((x.b||0)>=(y.b||0)?Object.assign({},y,x,{st:!!(x.st||y.st)}):Object.assign({},x,y,{st:!!(x.st||y.st)}))});return r}
+function bkRefresh(){try{if(LS.onload)LS.onload()}catch(e){}uiLoaded=false;loadUI();ed=null;render();$('bkx').textContent=bkSummary()}
+function bkApply(o,ks,mode){const prev={};const put=(k,v)=>{if(!(k in prev))prev[k]=LS.get(k);LS.set(k,v)};
+ks.forEach(k=>{const v=o.data[k],cur=LS.get(k);if(mode==='replace'||cur==null){put(k,v);return}
+if(k==='fc-state'){try{put(k,JSON.stringify(mergeFc(JSON.parse(cur),JSON.parse(v))))}catch(e){}return}
+if(/^known-/.test(k)){try{put(k,JSON.stringify([...new Set([].concat(JSON.parse(cur),JSON.parse(v)))]))}catch(e){}}});
+return prev}
+$('bkim').onclick=()=>{const r=bkParse($('bki').value);if(r.err){bkMsg(r.err,1);bkArm=null;$('bkim').textContent='Import';return}
+const mode=$('bkm').value,when=r.o.exported?new Date(r.o.exported).toLocaleDateString():'unknown date';
+const sig=mode+':'+$('bki').value.length+':'+r.ks.length+':'+(r.o.exported||'');if(bkArm!==sig){bkArm=sig;$('bkim').textContent='Confirm import';bkMsg(`Backup from ${when} with ${r.ks.length} items. ${mode==='replace'?'Replace will overwrite matching data here.':'Merge keeps what is here and adds what is missing.'} Tap Confirm import to continue.`);return}
+const prev=bkApply(r.o,r.ks,mode);bkArm=null;$('bkim').textContent='Import';$('bki').value='';$('bkf').value='';bkRefresh();bkMsg(`Imported ${r.ks.length} items (${mode}).`);
+toast('Backup imported',()=>{Object.keys(prev).forEach(k=>prev[k]==null?LS.del(k):LS.set(k,prev[k]));bkRefresh()})};
+
+addEventListener('pagehide',()=>{try{LS.flush()}catch(e){}});document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){try{LS.flush()}catch(e){}}});
+})();
+</script></body></html>

@@ -1,0 +1,6 @@
+{
+  "name": "StudyDeck — Revision & Mock Planner",
+  "description": "Unified History & Geography revision flashcards, timeline study, and mock exam planner with encrypted multi-device cloud sync and RBAC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
