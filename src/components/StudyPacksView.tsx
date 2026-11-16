@@ -23,6 +23,7 @@ import {
   parseStudyPackInput,
   STUDY_PACK_TEMPLATE_TEXT,
 } from '../lib/packParser';
+import { getPackFileName, serializeStudyPackFile } from '../lib/packFileStore';
 import {
   DeckSnapshot,
   StudyPack,
@@ -304,24 +305,12 @@ export function StudyPacksView({
   };
 
   const handleExportPack = (pack: StudyPack) => {
-    const payload = JSON.stringify(
-      {
-        app: 'studydeck-pack',
-        v: 1,
-        exportedAt: new Date().toISOString(),
-        pack,
-      },
-      null,
-      2
-    );
+    const payload = serializeStudyPackFile(pack);
     const blob = new Blob([payload], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${pack.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '') || 'study-pack'}.json`;
+    a.download = getPackFileName(pack.id);
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1210,6 +1199,10 @@ export function StudyPacksView({
                               </span>
                             </>
                           )}
+                          <span className="text-[var(--mute)]">·</span>
+                          <span className="font-mono-num normal-case text-[10px] text-[var(--mute)]">
+                            {getPackFileName(pack.id)}
+                          </span>
                         </div>
                         <h2 className="font-display mt-0.5 text-lg font-bold leading-snug text-[var(--ink)]">
                           {pack.title}

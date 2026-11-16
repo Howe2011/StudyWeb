@@ -1,17 +1,33 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import { getStorage } from 'firebase/storage';
+import defaultFirebaseConfig from '../firebase-applet-config.json';
+
+const env = import.meta.env;
+
+const firebaseConfig = {
+  apiKey: env.VITE_FIREBASE_API_KEY || defaultFirebaseConfig.apiKey,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || defaultFirebaseConfig.authDomain,
+  projectId: env.VITE_FIREBASE_PROJECT_ID || defaultFirebaseConfig.projectId,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || defaultFirebaseConfig.storageBucket,
+  messagingSenderId:
+    env.VITE_FIREBASE_MESSAGING_SENDER_ID || defaultFirebaseConfig.messagingSenderId,
+  appId: env.VITE_FIREBASE_APP_ID || defaultFirebaseConfig.appId,
+};
 
 const app = initializeApp(firebaseConfig);
 export const firebaseProjectId = firebaseConfig.projectId;
-const firestoreDatabaseId = (
-  firebaseConfig as typeof firebaseConfig & { firestoreDatabaseId?: string }
-).firestoreDatabaseId;
+const firestoreDatabaseId =
+  env.VITE_FIREBASE_DATABASE_ID ||
+  (defaultFirebaseConfig as typeof defaultFirebaseConfig & { firestoreDatabaseId?: string })
+    .firestoreDatabaseId;
+
 export const db = firestoreDatabaseId
   ? getFirestore(app, firestoreDatabaseId)
   : getFirestore(app);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });

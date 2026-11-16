@@ -1,0 +1,26 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Public Study Pack JSON files are visible to everyone; authenticated verified users can publish/manage their own
+    match /study-packs/public/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && request.auth.token.email_verified == true
+        && fileName.matches('^[a-zA-Z0-9_-]+\\.json$')
+        && (request.resource == null || request.resource.size <= 1024 * 1024);
+    }
+
+    // Private Study Pack JSON files are only readable/writable by their owner
+    match /study-packs/private/{userId}/{fileName} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId
+        && fileName.matches('^[a-zA-Z0-9_-]+\\.json$')
+        && (request.resource == null || request.resource.size <= 1024 * 1024);
+    }
+
+    // Deny everything else by default
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

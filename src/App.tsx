@@ -20,6 +20,13 @@ import {
   saveTrustedDeviceKey,
 } from './lib/crypto';
 import {
+  deleteLocalPackFile,
+  listPrivatePackFilesFromStorage,
+  listPublicPackFilesFromStorage,
+  loadAllLocalPackFiles,
+  loadStaticPublicPackFiles,
+} from './lib/packFileStore';
+import {
   BOOTSTRAP_ADMIN_EMAIL,
   createUserAccountWithVault,
   deleteStudyPackFromCloud,
@@ -33,6 +40,7 @@ import {
   resetSyncMemoryCache,
   rotateVaultPassphrase,
   saveEncryptedProfile,
+  savePrivatePackFile,
   saveStudyPackToCloud,
   subscribeActivity,
   subscribeDevices,
@@ -173,8 +181,15 @@ export default function App() {
   });
   const [hasGuestData, setHasGuestData] = useState<boolean>(() => detectHasGuestData());
   const [deckSnapshot, setDeckSnapshot] = useState<DeckSnapshot>(EMPTY_DECK_SNAPSHOT);
-  const [customPacks, setCustomPacks] = useState<StudyPack[]>(() => loadCustomPacksFromLocal());
+  const [customPacks, setCustomPacks] = useState<StudyPack[]>(() => {
+    const byId = new Map<string, StudyPack>();
+    for (const p of loadAllLocalPackFiles()) byId.set(p.id, p);
+    for (const p of loadCustomPacksFromLocal()) byId.set(p.id, p);
+    return Array.from(byId.values());
+  });
   const [publicPacks, setPublicPacks] = useState<StudyPack[]>([]);
+  const [filePublicPacks, setFilePublicPacks] = useState<StudyPack[]>([]);
+  const [storagePrivatePacks, setStoragePrivatePacks] = useState<StudyPack[]>([]);
   const [appliedPackIds, setAppliedPackIds] = useState<string[]>(() =>
     loadAppliedPackIdsFromLocal()
   );
@@ -271,14 +286,26 @@ export default function App() {
     [postToApp]
   );
 
-  // Subscribe to community public Study Packs (visible to everyone)
+  const refreshPublicPackFiles = useCallback(async () => {
+    const [staticFiles, storageFiles] = await Promise.all([
+      loadStaticPublicPackFiles(),
+      listPublicPackFilesFromStorage(),
+    ]);
+    const byId = new Map<string, StudyPack>();
+    for (const p of staticFiles) byId.set(p.id, { ...p, visibility: 'public' });
+    for (const p of storageFiles) byId.set(p.id, { ...p, visibility: 'public' });
+    setFilePublicPacks(Array.from(byId.values()));
+  }, []);
+
+  // Subscribe to community public Study Packs (Firestore + static/Storage pack files, visible to everyone)
   useEffect(() => {
+    void refreshPublicPackFiles();
     const unsub = subscribePublicStudyPacks(
       (packs) => setPublicPacks(packs),
       (err) => console.warn('Public study packs listener:', err)
     );
     return () => unsub();
-  }, []);
+  }, [refreshPublicPackFiles]);
 
   // Firebase Auth listener
   useEffect(() => {
@@ -297,13 +324,21 @@ export default function App() {
         setDek(null);
         setSyncState(navigator.onLine ? 'idle' : 'offline');
         setDeckSnapshot(EMPTY_DECK_SNAPSHOT);
-        setCustomPacks(loadCustomPacksFromLocal());
+        setStoragePrivatePacks([]);
+        const byId = new Map<string, StudyPack>();
+        for (const p of loadAllLocalPackFiles()) byId.set(p.id, p);
+        for (const p of loadCustomPacksFromLocal()) byId.set(p.id, p);
+        setCustomPacks(Array.from(byId.values()));
         setAppliedPackIds(loadAppliedPackIdsFromLocal());
         postToApp('revision', { type: 'BRIDGE_SIGNOUT', app: 'revision' });
         postToApp('planner', { type: 'BRIDGE_SIGNOUT', app: 'planner' });
         setHasGuestData(detectHasGuestData());
         return;
       }
+
+      void listPrivatePackFilesFromStorage(user.uid).then((list) => {
+        setStoragePrivatePacks(list);
+      });
 
       try {
         let acc = await fetchUserAccount(user.uid);
@@ -862,7 +897,7 @@ export default function App() {
 
       if (visibility === 'public') {
         if (!firebaseUser || !firebaseUser.emailVerified) {
-          throw new Error('Sign in with Google to publish a Public Study Pack for all users.');
+          throw new Error('Sign in with Google to publish a Public Study Pack file for all users.');
         }
         const enrichedPublic: StudyPack = {
           ...pack,
@@ -872,6 +907,7 @@ export default function App() {
           author: ownerName,
         };
         await saveStudyPackToCloud(enrichedPublic, firebaseUser.uid, ownerName);
+        await refreshPublicPackFiles();
         const exists = customPacks.some((p) => p.id === enrichedPublic.id);
         const nextCustom = exists
           ? customPacks.map((p) => (p.id === enrichedPublic.id ? enrichedPublic : p))
@@ -891,6 +927,7 @@ export default function App() {
         ownerName,
         author: ownerName,
       };
+      await savePrivatePackFile(enrichedPrivate, firebaseUser?.uid);
       const exists = customPacks.some((p) => p.id === enrichedPrivate.id);
       const nextCustom = exists
         ? customPacks.map((p) => (p.id === enrichedPrivate.id ? enrichedPrivate : p))
@@ -898,7 +935,16 @@ export default function App() {
       setCustomPacks(nextCustom);
       await persistPacksToCloud(nextCustom, appliedPackIds);
     },
-    [customPacks, appliedPackIds, persistPacksToCloud, firebaseUser, accountStats.displayName, account, dek]
+    [
+      customPacks,
+      appliedPackIds,
+      persistPacksToCloud,
+      firebaseUser,
+      accountStats.displayName,
+      account,
+      dek,
+      refreshPublicPackFiles,
+    ]
   );
 
   const handleTogglePackVisibility = useCallback(
@@ -917,8 +963,10 @@ export default function App() {
       if (nextVisibility === 'public') {
         await saveStudyPackToCloud(updated, firebaseUser.uid, ownerName);
       } else {
-        await deleteStudyPackFromCloud(pack.id);
+        await deleteStudyPackFromCloud(pack.id, firebaseUser.uid);
+        await savePrivatePackFile(updated, firebaseUser.uid);
       }
+      await refreshPublicPackFiles();
       const exists = customPacks.some((p) => p.id === updated.id);
       const nextCustom = exists
         ? customPacks.map((p) => (p.id === updated.id ? updated : p))
@@ -932,30 +980,66 @@ export default function App() {
         );
       }
     },
-    [firebaseUser, accountStats.displayName, customPacks, appliedPackIds, persistPacksToCloud, account, dek]
+    [
+      firebaseUser,
+      accountStats.displayName,
+      customPacks,
+      appliedPackIds,
+      persistPacksToCloud,
+      account,
+      dek,
+      refreshPublicPackFiles,
+    ]
   );
 
   const handleDeleteCustomPack = useCallback(
     async (packId: string) => {
       const target =
-        customPacks.find((p) => p.id === packId) || publicPacks.find((p) => p.id === packId);
-      if (target?.visibility === 'public' || publicPacks.some((p) => p.id === packId)) {
+        customPacks.find((p) => p.id === packId) ||
+        publicPacks.find((p) => p.id === packId) ||
+        filePublicPacks.find((p) => p.id === packId);
+      if (
+        target?.visibility === 'public' ||
+        publicPacks.some((p) => p.id === packId) ||
+        filePublicPacks.some((p) => p.id === packId)
+      ) {
         if (!firebaseUser || !firebaseUser.emailVerified) {
           throw new Error('Sign in with Google to delete a Public Study Pack.');
         }
-        await deleteStudyPackFromCloud(packId);
+        await deleteStudyPackFromCloud(packId, firebaseUser.uid);
+      } else {
+        deleteLocalPackFile(packId);
+        if (firebaseUser) {
+          await deleteStudyPackFromCloud(packId, firebaseUser.uid);
+        }
       }
+      await refreshPublicPackFiles();
+      setStoragePrivatePacks((prev) => prev.filter((p) => p.id !== packId));
       const nextCustom = customPacks.filter((p) => p.id !== packId);
       setCustomPacks(nextCustom);
       await persistPacksToCloud(nextCustom, appliedPackIds);
     },
-    [customPacks, publicPacks, appliedPackIds, persistPacksToCloud, firebaseUser]
+    [
+      customPacks,
+      publicPacks,
+      filePublicPacks,
+      appliedPackIds,
+      persistPacksToCloud,
+      firebaseUser,
+      refreshPublicPackFiles,
+    ]
   );
 
   const mergedStudyPacks = useMemo(() => {
     const byId = new Map<string, StudyPack>();
+    for (const p of storagePrivatePacks) {
+      byId.set(p.id, { ...p, visibility: p.visibility || 'private' });
+    }
     for (const p of customPacks) {
       byId.set(p.id, { ...p, visibility: p.visibility || 'private' });
+    }
+    for (const pub of filePublicPacks) {
+      byId.set(pub.id, { ...pub, visibility: 'public' });
     }
     for (const pub of publicPacks) {
       byId.set(pub.id, { ...pub, visibility: 'public' });
@@ -963,7 +1047,7 @@ export default function App() {
     return Array.from(byId.values()).sort((a, b) =>
       (b.createdAt || '').localeCompare(a.createdAt || '')
     );
-  }, [customPacks, publicPacks]);
+  }, [storagePrivatePacks, customPacks, filePublicPacks, publicPacks]);
 
   const handleResetWorkspace = useCallback(async () => {
     setCustomPacks([]);
