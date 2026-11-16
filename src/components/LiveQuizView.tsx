@@ -242,6 +242,9 @@ export function LiveQuizView({
   const cloudPlayersRef = useRef<CloudPlayerDoc[]>([]);
   const cloudGradingLocksRef = useRef<Set<string>>(new Set());
   const cloudRevealingIndexRef = useRef<number | null>(null);
+  const cloudRoundIndexRef = useRef<number>(-1);
+  const cloudRoundStatusRef = useRef<string>('lobby');
+  const hostActionPendingRef = useRef<boolean>(false);
 
   useEffect(() => {
     onRequestDecks();
@@ -353,20 +356,29 @@ export function LiveQuizView({
         pId,
         (nextRoom, rawPlayers) => {
           cloudPlayersRef.current = rawPlayers;
+          cloudRoundIndexRef.current = nextRoom.currentIndex;
+          cloudRoundStatusRef.current = nextRoom.status;
           clockOffsetRef.current = 0;
           setRoom(nextRoom);
 
-          // Host-authoritative grading on submit & auto-reveal when everyone is done
+          // Host-authoritative grading on submit & auto-reveal when everyone is done for THIS question
           if (cloudQuestionsRef.current.length > 0 && nextRoom.status === 'question') {
-            const card = cloudQuestionsRef.current[nextRoom.currentIndex];
+            if (
+              cloudRevealingIndexRef.current !== null &&
+              cloudRevealingIndexRef.current !== nextRoom.currentIndex
+            ) {
+              cloudRevealingIndexRef.current = null;
+            }
+            const qIdx = nextRoom.currentIndex;
+            const card = cloudQuestionsRef.current[qIdx];
             if (card) {
               for (const p of rawPlayers) {
                 if (
                   p.hasSubmitted &&
                   p.gradingStatus === 'grading' &&
-                  p.pendingQuestionIndex === nextRoom.currentIndex
+                  p.pendingQuestionIndex === qIdx
                 ) {
-                  const lockKey = `${nextRoom.currentIndex}:${p.id}`;
+                  const lockKey = `${qIdx}:${p.id}`;
                   if (!cloudGradingLocksRef.current.has(lockKey)) {
                     cloudGradingLocksRef.current.add(lockKey);
                     void (async () => {
@@ -375,9 +387,13 @@ export function LiveQuizView({
                         card.answer,
                         p.pendingAnswer || ''
                       );
+                      if (cloudRoundIndexRef.current !== qIdx) {
+                        return;
+                      }
                       await hostApplyPlayerGrade({
                         code: nextRoom.code,
                         player: p,
+                        questionIndex: qIdx,
                         questionStartedAt: nextRoom.questionStartedAt,
                         timerSeconds: nextRoom.timerSeconds,
                         correct: outcome.correct,
@@ -394,13 +410,18 @@ export function LiveQuizView({
             const connected = rawPlayers.filter((p) => p.connected);
             const allDone =
               connected.length > 0 &&
-              connected.every((p) => p.hasSubmitted && p.gradingStatus === 'done');
-            if (allDone && cloudRevealingIndexRef.current !== nextRoom.currentIndex) {
-              cloudRevealingIndexRef.current = nextRoom.currentIndex;
+              connected.every(
+                (p) =>
+                  p.hasSubmitted &&
+                  p.gradingStatus === 'done' &&
+                  p.pendingQuestionIndex === qIdx
+              );
+            if (allDone && cloudRevealingIndexRef.current !== qIdx) {
+              cloudRevealingIndexRef.current = qIdx;
               void hostRevealCloudRound({
                 code: nextRoom.code,
                 questions: cloudQuestionsRef.current,
-                currentIndex: nextRoom.currentIndex,
+                currentIndex: qIdx,
                 players: rawPlayers,
               });
             }
@@ -629,18 +650,36 @@ export function LiveQuizView({
       return;
     }
 
+    const roomCode = room.code;
     const qIdx = room.currentIndex;
     const msRemaining = Math.max(0, room.questionEndsAt - Date.now());
+    let innerTimer: number | null = null;
+
     const timer = window.setTimeout(() => {
-      if (cloudRevealingIndexRef.current === qIdx) return;
+      if (
+        cloudRevealingIndexRef.current === qIdx ||
+        cloudRoundIndexRef.current !== qIdx ||
+        cloudRoundStatusRef.current !== 'question'
+      ) {
+        return;
+      }
       cloudRevealingIndexRef.current = qIdx;
       const hasPendingGrades = cloudPlayersRef.current.some(
-        (p) => p.hasSubmitted && p.gradingStatus === 'grading'
+        (p) =>
+          p.hasSubmitted &&
+          p.pendingQuestionIndex === qIdx &&
+          p.gradingStatus === 'grading'
       );
-      window.setTimeout(
+      innerTimer = window.setTimeout(
         () => {
+          if (
+            cloudRoundIndexRef.current !== qIdx ||
+            cloudRoundStatusRef.current !== 'question'
+          ) {
+            return;
+          }
           void hostRevealCloudRound({
-            code: room.code,
+            code: roomCode,
             questions: cloudQuestionsRef.current,
             currentIndex: qIdx,
             players: cloudPlayersRef.current,
@@ -650,8 +689,19 @@ export function LiveQuizView({
       );
     }, msRemaining);
 
-    return () => window.clearTimeout(timer);
-  }, [backendMode, room]);
+    return () => {
+      window.clearTimeout(timer);
+      if (innerTimer !== null) {
+        window.clearTimeout(innerTimer);
+      }
+    };
+  }, [
+    backendMode,
+    room?.code,
+    room?.status,
+    room?.currentIndex,
+    room?.questionEndsAt,
+  ]);
 
   const sendWs = useCallback(
     async (payload: Record<string, unknown>) => {
@@ -672,10 +722,12 @@ export function LiveQuizView({
         await sendWs({ type: `quiz:${action}` });
         return;
       }
-      if (!room) return;
+      if (!room || hostActionPendingRef.current) return;
+      hostActionPendingRef.current = true;
       setErrorMsg(null);
       try {
         if (action === 'start') {
+          cloudRevealingIndexRef.current = null;
           await hostStartCloudQuestion({
             code: room.code,
             questions: cloudQuestionsRef.current,
@@ -701,6 +753,7 @@ export function LiveQuizView({
               players: cloudPlayersRef.current,
             });
           } else if (room.status === 'reveal') {
+            cloudRevealingIndexRef.current = null;
             await hostStartCloudQuestion({
               code: room.code,
               questions: cloudQuestionsRef.current,
@@ -710,6 +763,7 @@ export function LiveQuizView({
             });
           }
         } else if (action === 'restart') {
+          cloudRevealingIndexRef.current = null;
           const reshuffled = await hostRestartCloudRoom({
             code: room.code,
             questions: cloudQuestionsRef.current,
@@ -719,6 +773,8 @@ export function LiveQuizView({
         }
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : 'Failed to update Cloud quiz room.');
+      } finally {
+        hostActionPendingRef.current = false;
       }
     },
     [backendMode, room, sendWs]
@@ -1156,6 +1212,8 @@ export function LiveQuizView({
   const handleSubmitAnswer = async (e: FormEvent) => {
     e.preventDefault();
     if (!room || room.status !== 'question') return;
+    const currentMe = playerId ? room.players.find((p) => p.id === playerId) : null;
+    if (currentMe?.hasSubmitted) return;
     playQuizTone('submit', muted);
     if (backendMode === 'server') {
       await sendWs({

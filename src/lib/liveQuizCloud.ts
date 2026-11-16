@@ -523,10 +523,15 @@ export function subscribeCloudRoom(
       currentQuestion = null;
     }
 
+    const currentIndex = Number(latestRoomData.currentIndex || 0);
     const mappedPlayers: QuizPlayerState[] = latestPlayers
       .map((p) => {
+        const forThisRound = p.pendingQuestionIndex === currentIndex;
+        const effectiveHasSubmitted = Boolean(p.hasSubmitted && forThisRound);
+        const effectiveGradingStatus = forThisRound ? p.gradingStatus : null;
+
         let parsedSub: QuizPlayerState['lastSubmission'] = null;
-        if (p.lastSubmissionJson) {
+        if (forThisRound && p.lastSubmissionJson) {
           try {
             const rawSub = JSON.parse(p.lastSubmissionJson);
             if (status === 'reveal' || status === 'finished') {
@@ -554,8 +559,8 @@ export function subscribeCloudRoom(
           bestStreak: p.bestStreak,
           correctCount: p.correctCount,
           connected: p.connected,
-          hasSubmitted: p.hasSubmitted,
-          gradingStatus: p.gradingStatus,
+          hasSubmitted: effectiveHasSubmitted,
+          gradingStatus: effectiveGradingStatus,
           lastSubmission: parsedSub,
         };
       })
@@ -651,11 +656,15 @@ export async function submitCloudAnswer(params: {
 export async function hostApplyPlayerGrade(params: {
   code: string;
   player: CloudPlayerDoc;
+  questionIndex: number;
   questionStartedAt: number | null;
   timerSeconds: number;
   correct: boolean;
   source: 'local' | 'ai' | 'fallback';
 }): Promise<void> {
+  if (params.player.pendingQuestionIndex !== params.questionIndex) {
+    return;
+  }
   const submittedAt = params.player.pendingSubmittedAt || Date.now();
   const elapsedMs = Math.max(0, submittedAt - (params.questionStartedAt || submittedAt));
   const answer = params.player.pendingAnswer || '';
@@ -765,7 +774,8 @@ export async function hostRevealCloudRound(params: {
   const batch = writeBatch(db);
 
   for (const p of params.players) {
-    if (!p.hasSubmitted && p.streak !== 0) {
+    const submittedThisRound = p.hasSubmitted && p.pendingQuestionIndex === params.currentIndex;
+    if (!submittedThisRound && p.streak !== 0) {
       batch.update(doc(db, 'quizRooms', params.code, 'players', p.id), {
         streak: 0,
         updatedAt: serverTimestamp(),
