@@ -24,6 +24,24 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
+import {
+  CloudPlayerDoc,
+  CloudQuizCard,
+  CloudQuizDeck,
+  createCloudRoom,
+  deleteCloudDeck,
+  gradeAnswerViaVercelOrLocal,
+  hostApplyPlayerGrade,
+  hostRestartCloudRoom,
+  hostRevealCloudRound,
+  hostStartCloudQuestion,
+  joinCloudRoom,
+  leaveCloudRoom,
+  loadCloudDecks,
+  saveCloudDeck,
+  submitCloudAnswer,
+  subscribeCloudRoom,
+} from '../lib/liveQuizCloud';
 import { DeckFlashcard, DeckSnapshot, QuizDeckSummary, QuizRoomState } from '../types';
 
 interface LiveQuizViewProps {
@@ -212,11 +230,18 @@ export function LiveQuizView({
   const [copiedCode, setCopiedCode] = useState(false);
   const [muted, setMuted] = useState(false);
 
+  const [backendMode, setBackendMode] = useState<'server' | 'cloud'>('server');
+
   const wsRef = useRef<WebSocket | null>(null);
   const clockOffsetRef = useRef<number>(0);
   const lastSoundStatusRef = useRef<string>('');
   const lastRoundIndexRef = useRef<number>(-1);
   const reconnectAttemptedRef = useRef(false);
+  const cloudUnsubRef = useRef<(() => void) | null>(null);
+  const cloudQuestionsRef = useRef<CloudQuizCard[]>([]);
+  const cloudPlayersRef = useRef<CloudPlayerDoc[]>([]);
+  const cloudGradingLocksRef = useRef<Set<string>>(new Set());
+  const cloudRevealingIndexRef = useRef<number | null>(null);
 
   useEffect(() => {
     onRequestDecks();
@@ -229,13 +254,8 @@ export function LiveQuizView({
     }
   }, [defaultNickname]);
 
-  const fetchDecks = useCallback(async () => {
-    setLoadingDecks(true);
-    try {
-      const res = await fetch('/api/quiz/decks');
-      const data = (await res.json()) as { decks?: QuizDeckSummary[]; error?: string };
-      if (!res.ok) throw new Error(data.error || 'Could not load decks.');
-      const list = Array.isArray(data.decks) ? data.decks : [];
+  const applyFetchedDecks = useCallback(
+    (list: QuizDeckSummary[]) => {
       setDecks(list);
       if (list.length > 0 && (!selectedDeckId || !list.some((d) => d.id === selectedDeckId))) {
         setSelectedDeckId(list[0].id);
@@ -249,16 +269,167 @@ export function LiveQuizView({
           setHostSource('saved');
         }
       }
+    },
+    [selectedDeckId, deckSnapshot.cards.length]
+  );
+
+  const fetchDecks = useCallback(async () => {
+    setLoadingDecks(true);
+    try {
+      if (backendMode === 'cloud') {
+        const cloudList = await loadCloudDecks();
+        applyFetchedDecks(cloudList);
+        return;
+      }
+
+      const res = await fetch('/api/quiz/decks');
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        // Static deployment (e.g. Vercel without Express/SQLite server) -> switch to Cloud Mode silently
+        setBackendMode('cloud');
+        const cloudList = await loadCloudDecks();
+        applyFetchedDecks(cloudList);
+        return;
+      }
+
+      const data = (await res.json()) as { decks?: QuizDeckSummary[]; error?: string };
+      if (!res.ok) throw new Error(data.error || 'Could not load decks.');
+      const list = Array.isArray(data.decks) ? data.decks : [];
+      applyFetchedDecks(list);
     } catch (err) {
+      if (backendMode === 'server') {
+        try {
+          setBackendMode('cloud');
+          const cloudList = await loadCloudDecks();
+          applyFetchedDecks(cloudList);
+          setErrorMsg(null);
+          return;
+        } catch {
+          // fall through to show error if both failed
+        }
+      }
       setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch saved decks.');
     } finally {
       setLoadingDecks(false);
     }
-  }, [selectedDeckId, deckSnapshot.cards.length]);
+  }, [backendMode, applyFetchedDecks]);
 
   useEffect(() => {
     void fetchDecks();
   }, [fetchDecks]);
+
+  const attachCloudSubscription = useCallback(
+    (code: string, pId: string, hostQuestions?: CloudQuizCard[]) => {
+      if (cloudUnsubRef.current) {
+        cloudUnsubRef.current();
+        cloudUnsubRef.current = null;
+      }
+      if (hostQuestions) {
+        cloudQuestionsRef.current = hostQuestions;
+      }
+      cloudGradingLocksRef.current.clear();
+      cloudRevealingIndexRef.current = null;
+      setPlayerId(pId);
+      setWsConnected(true);
+      setErrorMsg(null);
+      setInfoMsg(null);
+
+      try {
+        sessionStorage.setItem(
+          SESSION_STORAGE_KEY,
+          JSON.stringify({
+            mode: 'cloud',
+            code,
+            playerId: pId,
+            questions: hostQuestions || undefined,
+          })
+        );
+      } catch {
+        // ignore
+      }
+
+      cloudUnsubRef.current = subscribeCloudRoom(
+        code,
+        pId,
+        (nextRoom, rawPlayers) => {
+          cloudPlayersRef.current = rawPlayers;
+          clockOffsetRef.current = 0;
+          setRoom(nextRoom);
+
+          // Host-authoritative grading on submit & auto-reveal when everyone is done
+          if (cloudQuestionsRef.current.length > 0 && nextRoom.status === 'question') {
+            const card = cloudQuestionsRef.current[nextRoom.currentIndex];
+            if (card) {
+              for (const p of rawPlayers) {
+                if (
+                  p.hasSubmitted &&
+                  p.gradingStatus === 'grading' &&
+                  p.pendingQuestionIndex === nextRoom.currentIndex
+                ) {
+                  const lockKey = `${nextRoom.currentIndex}:${p.id}`;
+                  if (!cloudGradingLocksRef.current.has(lockKey)) {
+                    cloudGradingLocksRef.current.add(lockKey);
+                    void (async () => {
+                      const outcome = await gradeAnswerViaVercelOrLocal(
+                        card.question,
+                        card.answer,
+                        p.pendingAnswer || ''
+                      );
+                      await hostApplyPlayerGrade({
+                        code: nextRoom.code,
+                        player: p,
+                        questionStartedAt: nextRoom.questionStartedAt,
+                        timerSeconds: nextRoom.timerSeconds,
+                        correct: outcome.correct,
+                        source: outcome.source,
+                      });
+                    })().catch(() => {
+                      cloudGradingLocksRef.current.delete(lockKey);
+                    });
+                  }
+                }
+              }
+            }
+
+            const connected = rawPlayers.filter((p) => p.connected);
+            const allDone =
+              connected.length > 0 &&
+              connected.every((p) => p.hasSubmitted && p.gradingStatus === 'done');
+            if (allDone && cloudRevealingIndexRef.current !== nextRoom.currentIndex) {
+              cloudRevealingIndexRef.current = nextRoom.currentIndex;
+              void hostRevealCloudRound({
+                code: nextRoom.code,
+                questions: cloudQuestionsRef.current,
+                currentIndex: nextRoom.currentIndex,
+                players: rawPlayers,
+              });
+            }
+          } else if (nextRoom.status !== 'question') {
+            cloudRevealingIndexRef.current = null;
+          }
+        },
+        () => {
+          if (cloudUnsubRef.current) {
+            cloudUnsubRef.current();
+            cloudUnsubRef.current = null;
+          }
+          cloudQuestionsRef.current = [];
+          try {
+            sessionStorage.removeItem(SESSION_STORAGE_KEY);
+          } catch {
+            // ignore
+          }
+          setRoom(null);
+          setPlayerId(null);
+          setErrorMsg('Quiz room closed by host.');
+        },
+        (msg) => {
+          setErrorMsg(msg);
+        }
+      );
+    },
+    []
+  );
 
   // Connect WebSocket once and keep clean heartbeat/reconnect awareness
   const connectWebSocket = useCallback((): Promise<WebSocket> => {
@@ -348,8 +519,30 @@ export function LiveQuizView({
     try {
       const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as { code?: string; playerId?: string };
+      const saved = JSON.parse(raw) as {
+        mode?: 'server' | 'cloud';
+        code?: string;
+        playerId?: string;
+        questions?: CloudQuizCard[];
+      };
       if (!saved.code || !saved.playerId) return;
+
+      if (saved.mode === 'cloud') {
+        setBackendMode('cloud');
+        void joinCloudRoom({ code: saved.code, prevPlayerId: saved.playerId })
+          .then((res) => {
+            attachCloudSubscription(
+              res.code,
+              res.playerId,
+              Array.isArray(saved.questions) ? saved.questions : undefined
+            );
+          })
+          .catch(() => {
+            sessionStorage.removeItem(SESSION_STORAGE_KEY);
+          });
+        return;
+      }
+
       void connectWebSocket()
         .then((ws) => {
           ws.send(
@@ -366,7 +559,7 @@ export function LiveQuizView({
     } catch {
       // ignore
     }
-  }, [connectWebSocket]);
+  }, [connectWebSocket, attachCloudSubscription]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -374,6 +567,10 @@ export function LiveQuizView({
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
+      }
+      if (cloudUnsubRef.current) {
+        cloudUnsubRef.current();
+        cloudUnsubRef.current = null;
       }
     };
   }, []);
@@ -420,6 +617,42 @@ export function LiveQuizView({
     return () => window.clearInterval(id);
   }, [room]);
 
+  // Host countdown auto-reveal timer when running in Cloud Mode
+  useEffect(() => {
+    if (
+      backendMode !== 'cloud' ||
+      !room ||
+      room.status !== 'question' ||
+      !room.questionEndsAt ||
+      cloudQuestionsRef.current.length === 0
+    ) {
+      return;
+    }
+
+    const qIdx = room.currentIndex;
+    const msRemaining = Math.max(0, room.questionEndsAt - Date.now());
+    const timer = window.setTimeout(() => {
+      if (cloudRevealingIndexRef.current === qIdx) return;
+      cloudRevealingIndexRef.current = qIdx;
+      const hasPendingGrades = cloudPlayersRef.current.some(
+        (p) => p.hasSubmitted && p.gradingStatus === 'grading'
+      );
+      window.setTimeout(
+        () => {
+          void hostRevealCloudRound({
+            code: room.code,
+            questions: cloudQuestionsRef.current,
+            currentIndex: qIdx,
+            players: cloudPlayersRef.current,
+          });
+        },
+        hasPendingGrades ? 1400 : 0
+      );
+    }, msRemaining);
+
+    return () => window.clearTimeout(timer);
+  }, [backendMode, room]);
+
   const sendWs = useCallback(
     async (payload: Record<string, unknown>) => {
       setErrorMsg(null);
@@ -431,6 +664,64 @@ export function LiveQuizView({
       }
     },
     [connectWebSocket]
+  );
+
+  const sendHostAction = useCallback(
+    async (action: 'start' | 'reveal' | 'next' | 'restart') => {
+      if (backendMode === 'server') {
+        await sendWs({ type: `quiz:${action}` });
+        return;
+      }
+      if (!room) return;
+      setErrorMsg(null);
+      try {
+        if (action === 'start') {
+          await hostStartCloudQuestion({
+            code: room.code,
+            questions: cloudQuestionsRef.current,
+            index: 0,
+            timerSeconds: room.timerSeconds,
+            players: cloudPlayersRef.current,
+          });
+        } else if (action === 'reveal') {
+          cloudRevealingIndexRef.current = room.currentIndex;
+          await hostRevealCloudRound({
+            code: room.code,
+            questions: cloudQuestionsRef.current,
+            currentIndex: room.currentIndex,
+            players: cloudPlayersRef.current,
+          });
+        } else if (action === 'next') {
+          if (room.status === 'question') {
+            cloudRevealingIndexRef.current = room.currentIndex;
+            await hostRevealCloudRound({
+              code: room.code,
+              questions: cloudQuestionsRef.current,
+              currentIndex: room.currentIndex,
+              players: cloudPlayersRef.current,
+            });
+          } else if (room.status === 'reveal') {
+            await hostStartCloudQuestion({
+              code: room.code,
+              questions: cloudQuestionsRef.current,
+              index: room.currentIndex + 1,
+              timerSeconds: room.timerSeconds,
+              players: cloudPlayersRef.current,
+            });
+          }
+        } else if (action === 'restart') {
+          const reshuffled = await hostRestartCloudRoom({
+            code: room.code,
+            questions: cloudQuestionsRef.current,
+            players: cloudPlayersRef.current,
+          });
+          cloudQuestionsRef.current = reshuffled;
+        }
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to update Cloud quiz room.');
+      }
+    },
+    [backendMode, room, sendWs]
   );
 
   // Parsed CSV live preview
@@ -600,6 +891,31 @@ export function LiveQuizView({
     }
   };
 
+  const persistQuizDeck = async (
+    title: string,
+    payload: { csvText?: string; cards?: Array<{ question: string; answer: string; section: string }> }
+  ): Promise<QuizDeckSummary> => {
+    if (backendMode === 'server') {
+      const res = await fetch('/api/quiz/decks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, ...payload }),
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = (await res.json()) as { deck?: QuizDeckSummary; error?: string };
+        if (!res.ok || !data.deck) throw new Error(data.error || 'Failed to save deck.');
+        return data.deck;
+      }
+      setBackendMode('cloud');
+    }
+
+    const cards = payload.csvText
+      ? parseCsvPreview(payload.csvText)
+      : (payload.cards || []);
+    return await saveCloudDeck(title, cards);
+  };
+
   const handleSaveDeck = async (e: FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -616,23 +932,16 @@ export function LiveQuizView({
 
     setSavingDeck(true);
     try {
-      const res = await fetch('/api/quiz/decks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, csvText }),
-      });
-      const data = (await res.json()) as { deck?: QuizDeckSummary; error?: string };
-      if (!res.ok || !data.deck) throw new Error(data.error || 'Failed to save deck.');
-
+      const deck = await persistQuizDeck(title, { csvText });
       await fetchDecks();
-      setSelectedDeckId(data.deck.id);
-      setSelectedSections(data.deck.sections.map((s) => s.name));
+      setSelectedDeckId(deck.id);
+      setSelectedSections(deck.sections.map((s) => s.name));
       setHostSource('saved');
       setImportTitle('');
       setCsvText('');
       setInfoMsg(
-        `Saved "${data.deck.title}" permanently (${data.deck.cardCount} cards across ${data.deck.sections.length} section${
-          data.deck.sections.length === 1 ? '' : 's'
+        `Saved "${deck.title}" permanently (${deck.cardCount} cards across ${deck.sections.length} section${
+          deck.sections.length === 1 ? '' : 's'
         }). Ready to host!`
       );
     } catch (err) {
@@ -655,24 +964,17 @@ export function LiveQuizView({
       const uniqueSubjects = Array.from(new Set(sourceCards.map((c) => c.subjName).filter(Boolean)));
       const subjectLabel = uniqueSubjects.slice(0, 2).join(' & ') || 'My Flashcards';
       const title = (customTitle || '').trim() || `StudyDeck · ${subjectLabel}`;
-      const res = await fetch('/api/quiz/decks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          cards: buildQuizCardsFromFlashcards(sourceCards),
-        }),
+      const deck = await persistQuizDeck(title, {
+        cards: buildQuizCardsFromFlashcards(sourceCards),
       });
-      const data = (await res.json()) as { deck?: QuizDeckSummary; error?: string };
-      if (!res.ok || !data.deck) throw new Error(data.error || 'Import failed.');
       await fetchDecks();
-      setSelectedDeckId(data.deck.id);
-      setSelectedSections(data.deck.sections.map((s) => s.name));
+      setSelectedDeckId(deck.id);
+      setSelectedSections(deck.sections.map((s) => s.name));
       setHostSource('saved');
       setShowCurrentImporter(false);
       setImportDeckTitle('');
       setInfoMsg(
-        `Saved ${data.deck.cardCount} StudyDeck flashcards into "${data.deck.title}".`
+        `Saved ${deck.cardCount} StudyDeck flashcards into "${deck.title}".`
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to import StudyDeck cards.');
@@ -683,8 +985,18 @@ export function LiveQuizView({
 
   const handleDeleteDeck = async (id: string) => {
     try {
-      const res = await fetch(`/api/quiz/decks/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Delete failed.');
+      if (backendMode === 'server') {
+        const res = await fetch(`/api/quiz/decks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          if (!res.ok) throw new Error('Delete failed.');
+        } else {
+          setBackendMode('cloud');
+          await deleteCloudDeck(id);
+        }
+      } else {
+        await deleteCloudDeck(id);
+      }
       setConfirmDeleteDeckId(null);
       await fetchDecks();
     } catch (err) {
@@ -702,66 +1014,107 @@ export function LiveQuizView({
 
   const handleCreateRoom = async (e: FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
     if (!hostNickname.trim()) {
       setErrorMsg('Enter your nickname so you can play alongside friends.');
       return;
     }
+
+    let deckIdToUse = selectedDeck?.id || '';
+    let deckTitleToUse = selectedDeck?.title || '';
+    let sectionsToUse = selectedSections;
+    let inlineCards: Array<{ question: string; answer: string; section: string }> | null = null;
 
     if (hostSource === 'current') {
       if (!selectedCurrentCards.length) {
         setErrorMsg('Select at least one flashcard section with matching cards to play.');
         return;
       }
-      const inlineCards = buildQuizCardsFromFlashcards(selectedCurrentCards);
-      const inlineDeckTitle = derivedCurrentQuizTitle;
+      inlineCards = buildQuizCardsFromFlashcards(selectedCurrentCards);
+      deckTitleToUse = derivedCurrentQuizTitle;
+      deckIdToUse = `live_${Date.now().toString(36)}`;
+      sectionsToUse = Array.from(new Set(inlineCards.map((c) => c.section)));
 
       if (saveCurrentToDb) {
         try {
-          const res = await fetch('/api/quiz/decks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              title: inlineDeckTitle,
-              cards: inlineCards,
-            }),
-          });
-          if (res.ok) {
-            void fetchDecks();
-          }
+          await persistQuizDeck(deckTitleToUse, { cards: inlineCards });
+          void fetchDecks();
         } catch {
           // Non-fatal: still launch live quiz with inline cards
         }
       }
+    } else {
+      if (!selectedDeck) {
+        setErrorMsg('Create or pick a saved deck first, or switch to My Current Flashcards.');
+        return;
+      }
+      if (!selectedSections.length) {
+        setErrorMsg('Select at least one Section to include in the quiz.');
+        return;
+      }
+    }
 
-      await sendWs({
-        type: 'quiz:create',
-        inlineDeckTitle,
-        inlineCards,
+    if (backendMode === 'server') {
+      try {
+        const ws = await connectWebSocket();
+        ws.send(
+          JSON.stringify(
+            inlineCards
+              ? {
+                  type: 'quiz:create',
+                  inlineDeckTitle: deckTitleToUse,
+                  inlineCards,
+                  timerSeconds,
+                  nickname: hostNickname.trim(),
+                }
+              : {
+                  type: 'quiz:create',
+                  deckId: deckIdToUse,
+                  selectedSections: sectionsToUse,
+                  timerSeconds,
+                  nickname: hostNickname.trim(),
+                }
+          )
+        );
+        return;
+      } catch {
+        // Fallback transparently to Cloud Mode if WebSocket server isn't running
+        setBackendMode('cloud');
+      }
+    }
+
+    try {
+      let cardsForCloud: Array<{ question: string; answer: string; section: string }> =
+        inlineCards || [];
+      if (!inlineCards && selectedDeck) {
+        const cloudDecks = await loadCloudDecks();
+        const found = cloudDecks.find((d) => d.id === selectedDeck.id) as CloudQuizDeck | undefined;
+        const secSet = new Set(sectionsToUse);
+        cardsForCloud = (found?.cards || [])
+          .filter((c) => secSet.size === 0 || secSet.has(c.section))
+          .map((c) => ({ question: c.question, answer: c.answer, section: c.section }));
+      }
+      if (!cardsForCloud.length) {
+        setErrorMsg('No flashcards found in the selected deck/sections.');
+        return;
+      }
+      const created = await createCloudRoom({
+        deckId: deckIdToUse,
+        deckTitle: deckTitleToUse,
+        selectedSections: sectionsToUse,
         timerSeconds,
         nickname: hostNickname.trim(),
+        cards: cardsForCloud,
       });
-      return;
+      attachCloudSubscription(created.code, created.playerId, created.questions);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to create Live Quiz room.');
     }
-
-    if (!selectedDeck) {
-      setErrorMsg('Create or pick a saved deck first, or switch to My Current Flashcards.');
-      return;
-    }
-    if (!selectedSections.length) {
-      setErrorMsg('Select at least one Section to include in the quiz.');
-      return;
-    }
-    await sendWs({
-      type: 'quiz:create',
-      deckId: selectedDeck.id,
-      selectedSections,
-      timerSeconds,
-      nickname: hostNickname.trim(),
-    });
   };
 
   const handleJoinRoom = async (e: FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
     const cleanCode = joinCode.trim().toUpperCase();
     if (cleanCode.length < 4) {
       setErrorMsg('Enter the 4-letter room code.');
@@ -771,21 +1124,58 @@ export function LiveQuizView({
       setErrorMsg('Enter your nickname to join.');
       return;
     }
-    await sendWs({
-      type: 'quiz:join',
-      code: cleanCode,
-      nickname: joinNickname.trim(),
-    });
+
+    if (backendMode === 'server') {
+      try {
+        const ws = await connectWebSocket();
+        ws.send(
+          JSON.stringify({
+            type: 'quiz:join',
+            code: cleanCode,
+            nickname: joinNickname.trim(),
+          })
+        );
+        return;
+      } catch {
+        setBackendMode('cloud');
+      }
+    }
+
+    try {
+      const joined = await joinCloudRoom({
+        code: cleanCode,
+        nickname: joinNickname.trim(),
+      });
+      cloudQuestionsRef.current = [];
+      attachCloudSubscription(joined.code, joined.playerId);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Could not join quiz room.');
+    }
   };
 
   const handleSubmitAnswer = async (e: FormEvent) => {
     e.preventDefault();
     if (!room || room.status !== 'question') return;
     playQuizTone('submit', muted);
-    await sendWs({
-      type: 'quiz:submit',
-      answer: answerInput,
-    });
+    if (backendMode === 'server') {
+      await sendWs({
+        type: 'quiz:submit',
+        answer: answerInput,
+      });
+      return;
+    }
+    if (!playerId) return;
+    try {
+      await submitCloudAnswer({
+        code: room.code,
+        playerId,
+        questionIndex: room.currentIndex,
+        questionStartedAt: room.questionStartedAt,
+        answer: answerInput,
+      });
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to submit answer.');
+    }
   };
 
   const handleLeaveRoom = async () => {
@@ -794,8 +1184,19 @@ export function LiveQuizView({
     } catch {
       // ignore
     }
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'quiz:leave' }));
+    if (backendMode === 'server') {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'quiz:leave' }));
+      }
+    } else {
+      if (cloudUnsubRef.current) {
+        cloudUnsubRef.current();
+        cloudUnsubRef.current = null;
+      }
+      if (room && playerId) {
+        await leaveCloudRoom(room.code, playerId, Boolean(me?.isHost));
+      }
+      cloudQuestionsRef.current = [];
     }
     setRoom(null);
     setPlayerId(null);
@@ -862,7 +1263,7 @@ export function LiveQuizView({
               {isHost && room.status === 'lobby' && (
                 <button
                   type="button"
-                  onClick={() => void sendWs({ type: 'quiz:start' })}
+                  onClick={() => void sendHostAction('start')}
                   className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
                 >
                   <Play className="h-3.5 w-3.5" aria-hidden="true" />
@@ -872,7 +1273,7 @@ export function LiveQuizView({
               {isHost && room.status === 'question' && (
                 <button
                   type="button"
-                  onClick={() => void sendWs({ type: 'quiz:reveal' })}
+                  onClick={() => void sendHostAction('reveal')}
                   className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                 >
                   <Zap className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
@@ -882,7 +1283,7 @@ export function LiveQuizView({
               {isHost && room.status === 'reveal' && (
                 <button
                   type="button"
-                  onClick={() => void sendWs({ type: 'quiz:next' })}
+                  onClick={() => void sendHostAction('next')}
                   className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
                 >
                   <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
@@ -896,7 +1297,7 @@ export function LiveQuizView({
               {isHost && room.status === 'finished' && (
                 <button
                   type="button"
-                  onClick={() => void sendWs({ type: 'quiz:restart' })}
+                  onClick={() => void sendHostAction('restart')}
                   className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
                 >
                   <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1003,7 +1404,7 @@ export function LiveQuizView({
                   <div className="pt-1">
                     <button
                       type="button"
-                      onClick={() => void sendWs({ type: 'quiz:start' })}
+                      onClick={() => void sendHostAction('start')}
                       className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap"
                     >
                       <Play className="h-4 w-4" aria-hidden="true" />
@@ -1192,7 +1593,7 @@ export function LiveQuizView({
                   {isHost && (
                     <button
                       type="button"
-                      onClick={() => void sendWs({ type: 'quiz:next' })}
+                      onClick={() => void sendHostAction('next')}
                       className="sd-btn-pri px-4 py-1.5 text-xs whitespace-nowrap"
                     >
                       <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1383,7 +1784,7 @@ export function LiveQuizView({
                   {isHost && (
                     <button
                       type="button"
-                      onClick={() => void sendWs({ type: 'quiz:restart' })}
+                      onClick={() => void sendHostAction('restart')}
                       className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap"
                     >
                       <RotateCcw className="h-4 w-4" aria-hidden="true" />
@@ -1606,7 +2007,9 @@ export function LiveQuizView({
 
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                   <span className="text-xs text-[var(--mute)]">
-                    Saved permanently in the built-in SQLite database.
+                    {backendMode === 'cloud'
+                      ? 'Saved permanently in your Cloud Quiz library & browser.'
+                      : 'Saved permanently in the built-in SQLite database.'}
                   </span>
 
                   <button
@@ -1615,7 +2018,13 @@ export function LiveQuizView({
                     className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                   >
                     <Database className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{savingDeck ? 'Saving Deck…' : 'Save Deck to Database'}</span>
+                    <span>
+                      {savingDeck
+                        ? 'Saving Deck…'
+                        : backendMode === 'cloud'
+                        ? 'Save Cloud Deck'
+                        : 'Save Deck to Database'}
+                    </span>
                   </button>
                 </div>
               </form>

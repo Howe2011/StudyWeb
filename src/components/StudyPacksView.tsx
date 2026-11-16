@@ -8,7 +8,9 @@ import {
   Copy,
   Download,
   FileText,
+  Globe,
   Layers,
+  Lock,
   Package,
   Plus,
   Search,
@@ -37,8 +39,13 @@ interface StudyPacksViewProps {
   deckSnapshot: DeckSnapshot;
   customPacks: StudyPack[];
   appliedPackIds: string[];
+  currentUserUid?: string | null;
+  isSignedInVerified?: boolean;
+  isAdmin?: boolean;
+  onOpenAuth?: () => void;
   onApplyPack: (pack: StudyPack) => Promise<void>;
   onSaveCustomPack: (pack: StudyPack) => Promise<void>;
+  onTogglePackVisibility?: (pack: StudyPack, nextVisibility: 'public' | 'private') => Promise<void>;
   onDeleteCustomPack: (packId: string) => Promise<void>;
   onGetWorkspaceSnapshot: () => Promise<WorkspaceSnapshot>;
   onOpenFlashcards: () => void;
@@ -46,15 +53,20 @@ interface StudyPacksViewProps {
   onOpenSubjects: () => void;
 }
 
-type FilterTab = 'all' | 'combo' | 'flashcards' | 'notes';
+type FilterTab = 'all' | 'public' | 'private' | 'combo' | 'flashcards' | 'notes';
 type BuilderSourceMode = 'template' | 'workspace';
 
 export function StudyPacksView({
   deckSnapshot,
   customPacks,
   appliedPackIds,
+  currentUserUid,
+  isSignedInVerified = false,
+  isAdmin = false,
+  onOpenAuth,
   onApplyPack,
   onSaveCustomPack,
+  onTogglePackVisibility,
   onDeleteCustomPack,
   onGetWorkspaceSnapshot,
   onOpenFlashcards,
@@ -82,6 +94,8 @@ export function StudyPacksView({
   const [packSubtitle, setPackSubtitle] = useState('');
   const [packBoard, setPackBoard] = useState('Custom Study Pack');
   const [packCategory, setPackCategory] = useState<StudyPackCategory>('combo');
+  const [packVisibility, setPackVisibility] = useState<'private' | 'public'>('private');
+  const [togglingVisId, setTogglingVisId] = useState<string | null>(null);
   const [includeSubjects, setIncludeSubjects] = useState(true);
   const [includeFlashcards, setIncludeFlashcards] = useState(true);
   const [includeNotes, setIncludeNotes] = useState(true);
@@ -102,15 +116,32 @@ export function StudyPacksView({
     });
   }, [templateText, uploadedWordHtml, packTitle, uploadedFileName]);
 
+  const publicCount = useMemo(
+    () => customPacks.filter((p) => p.visibility === 'public').length,
+    [customPacks]
+  );
+  const privateCount = useMemo(
+    () => customPacks.filter((p) => p.visibility !== 'public').length,
+    [customPacks]
+  );
+
   const filteredPacks = useMemo(() => {
     const q = search.trim().toLowerCase();
     return customPacks.filter((pack) => {
-      if (filter !== 'all' && pack.category !== filter) return false;
+      if (filter === 'public' && pack.visibility !== 'public') return false;
+      if (filter === 'private' && pack.visibility === 'public') return false;
+      if (
+        (filter === 'combo' || filter === 'flashcards' || filter === 'notes') &&
+        pack.category !== filter
+      ) {
+        return false;
+      }
       if (!q) return true;
       const hay = [
         pack.title,
         pack.subtitle,
         pack.examBoard,
+        pack.ownerName || '',
         ...(pack.tags || []),
         ...(pack.highlights || []),
       ]
@@ -159,6 +190,8 @@ export function StudyPacksView({
           ...candidate,
           id: `custom_${Date.now().toString(36)}`,
           isCustom: true,
+          visibility: 'private',
+          ownerId: currentUserUid || undefined,
           createdAt: new Date().toISOString(),
         };
         await onSaveCustomPack(imported);
@@ -234,6 +267,8 @@ export function StudyPacksView({
         ...candidate,
         id: `custom_${Date.now().toString(36)}`,
         isCustom: true,
+        visibility: 'private',
+        ownerId: currentUserUid || undefined,
         createdAt: new Date().toISOString(),
       };
       await onSaveCustomPack(imported);
@@ -307,10 +342,18 @@ export function StudyPacksView({
       return;
     }
 
+    if (packVisibility === 'public' && !isSignedInVerified) {
+      setBannerMsg({
+        text: 'Sign in with Google to publish a Public Study Pack, or switch visibility to Private.',
+        ok: false,
+      });
+      return;
+    }
+
     setSavingCustom(true);
     setBannerMsg(null);
     try {
-      const pack = buildStudyPackFromDraft(parsedDraft, {
+      const built = buildStudyPackFromDraft(parsedDraft, {
         title: packTitle.trim() || parsedDraft.title,
         subtitle: packSubtitle.trim() || parsedDraft.subtitle,
         examBoard: packBoard.trim() || parsedDraft.examBoard,
@@ -320,6 +363,11 @@ export function StudyPacksView({
         includeNotes,
         includeTodos,
       });
+      const pack: StudyPack = {
+        ...built,
+        visibility: packVisibility,
+        ownerId: currentUserUid || undefined,
+      };
 
       await onSaveCustomPack(pack);
       if (applyImmediately) {
@@ -334,8 +382,8 @@ export function StudyPacksView({
       setPackSubtitle('');
       setBannerMsg({
         text: applyImmediately
-          ? `Created & applied Study Pack "${pack.title}" into your workspace.`
-          : `Saved Study Pack "${pack.title}". Click "Use Study Pack" anytime to load it.`,
+          ? `Created & applied ${packVisibility} Study Pack "${pack.title}" into your workspace.`
+          : `Saved ${packVisibility} Study Pack "${pack.title}".`,
         ok: true,
       });
     } catch (err) {
@@ -357,6 +405,13 @@ export function StudyPacksView({
     if (!selectedSubjectIds.length) {
       setBannerMsg({
         text: 'Select at least one subject from your workspace to package.',
+        ok: false,
+      });
+      return;
+    }
+    if (packVisibility === 'public' && !isSignedInVerified) {
+      setBannerMsg({
+        text: 'Sign in with Google to publish a Public Study Pack, or switch visibility to Private.',
         ok: false,
       });
       return;
@@ -402,6 +457,8 @@ export function StudyPacksView({
           } flashcard${chosenCards.length === 1 ? '' : 's'}`,
         category: packCategory,
         examBoard: packBoard.trim() || 'Custom Study Pack',
+        visibility: packVisibility,
+        ownerId: currentUserUid || undefined,
         isCustom: true,
         createdAt: new Date().toISOString(),
         subjectCountPreview: chosenSubjects.length,
@@ -715,6 +772,60 @@ export function StudyPacksView({
               </label>
             </div>
 
+            {/* Visibility: Public vs Private */}
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-[var(--ink)]">
+                    Who can see this Study Pack?
+                  </div>
+                  <p className="mt-0.5 text-xs text-[var(--mute)]">
+                    {packVisibility === 'public'
+                      ? 'Public packs appear in the Study Packs library for every StudyDeck student.'
+                      : 'Private packs stay in your encrypted workspace and never appear to other users.'}
+                  </p>
+                </div>
+
+                <div className="sd-seg shrink-0">
+                  <button
+                    type="button"
+                    aria-pressed={packVisibility === 'private'}
+                    onClick={() => setPackVisibility('private')}
+                    className="sd-seg-btn"
+                  >
+                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Private (Only Me)</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={packVisibility === 'public'}
+                    onClick={() => setPackVisibility('public')}
+                    className="sd-seg-btn"
+                  >
+                    <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Public (Everyone)</span>
+                  </button>
+                </div>
+              </div>
+
+              {packVisibility === 'public' && !isSignedInVerified && (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--e2)] bg-[var(--card)] px-3 py-2 text-xs">
+                  <span className="text-[var(--ink)]">
+                    Sign in with Google to publish Public Study Packs so every user can see them.
+                  </span>
+                  {onOpenAuth && (
+                    <button
+                      type="button"
+                      onClick={onOpenAuth}
+                      className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
+                    >
+                      Sign In
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
             {sourceMode === 'template' ? (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -960,6 +1071,8 @@ export function StudyPacksView({
             {(
               [
                 ['all', `All Packs (${customPacks.length})`],
+                ['public', `Public (${publicCount})`],
+                ['private', `My Private (${privateCount})`],
                 ['combo', 'Subject Combos'],
                 ['flashcards', 'Flashcard Sets'],
                 ['notes', 'Notes & Topics'],
@@ -1052,6 +1165,12 @@ export function StudyPacksView({
               const isApplied = appliedSet.has(pack.id);
               const isExpanded = expandedId === pack.id;
               const isBusy = applyingId === pack.id;
+              const isPublic = pack.visibility === 'public';
+              const isOwner = Boolean(
+                !pack.ownerId || (currentUserUid && pack.ownerId === currentUserUid)
+              );
+              const canManage = isAdmin || isOwner;
+              const authorLabel = pack.ownerName || pack.author;
 
               return (
                 <article
@@ -1063,8 +1182,34 @@ export function StudyPacksView({
                   <div>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--e3)]">
-                          {pack.examBoard}
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--e3)]">
+                          <span>{pack.examBoard}</span>
+                          <span className="text-[var(--mute)]">·</span>
+                          <span
+                            className={`inline-flex items-center gap-1 ${
+                              isPublic ? 'text-[var(--ok)]' : 'text-[var(--mute)]'
+                            }`}
+                          >
+                            {isPublic ? (
+                              <>
+                                <Globe className="h-3 w-3" aria-hidden="true" />
+                                <span>Public</span>
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="h-3 w-3" aria-hidden="true" />
+                                <span>Private</span>
+                              </>
+                            )}
+                          </span>
+                          {authorLabel && (
+                            <>
+                              <span className="text-[var(--mute)]">·</span>
+                              <span className="normal-case text-[var(--mute)]">
+                                By {authorLabel}
+                              </span>
+                            </>
+                          )}
                         </div>
                         <h2 className="font-display mt-0.5 text-lg font-bold leading-snug text-[var(--ink)]">
                           {pack.title}
@@ -1138,7 +1283,7 @@ export function StudyPacksView({
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-2 pt-2">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => setExpandedId(isExpanded ? null : pack.id)}
@@ -1165,21 +1310,78 @@ export function StudyPacksView({
                       >
                         <Download className="h-3.5 w-3.5" aria-hidden="true" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (confirmDeleteId === pack.id) {
-                            setConfirmDeleteId(null);
-                            void onDeleteCustomPack(pack.id);
-                          } else {
-                            setConfirmDeleteId(pack.id);
-                          }
-                        }}
-                        className="sd-btn px-2.5 py-1.5 text-xs text-[var(--bad)] whitespace-nowrap"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>{confirmDeleteId === pack.id ? 'Confirm' : 'Delete'}</span>
-                      </button>
+                      {canManage && onTogglePackVisibility && isSignedInVerified && (
+                        <button
+                          type="button"
+                          disabled={togglingVisId === pack.id}
+                          onClick={async () => {
+                            setTogglingVisId(pack.id);
+                            setBannerMsg(null);
+                            try {
+                              const nextVis = isPublic ? 'private' : 'public';
+                              await onTogglePackVisibility(pack, nextVis);
+                              setBannerMsg({
+                                text:
+                                  nextVis === 'public'
+                                    ? `"${pack.title}" is now Public for all StudyDeck users.`
+                                    : `"${pack.title}" is now Private.`,
+                                ok: true,
+                              });
+                            } catch (err) {
+                              setBannerMsg({
+                                text:
+                                  err instanceof Error
+                                    ? err.message
+                                    : 'Could not update pack visibility.',
+                                ok: false,
+                              });
+                            } finally {
+                              setTogglingVisId(null);
+                            }
+                          }}
+                          title={isPublic ? 'Make Private' : 'Make Public for all users'}
+                          className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          {isPublic ? (
+                            <>
+                              <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>Make Private</span>
+                            </>
+                          ) : (
+                            <>
+                              <Globe className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
+                              <span>Make Public</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {canManage && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (confirmDeleteId === pack.id) {
+                              setConfirmDeleteId(null);
+                              try {
+                                await onDeleteCustomPack(pack.id);
+                              } catch (err) {
+                                setBannerMsg({
+                                  text:
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Could not delete pack.',
+                                  ok: false,
+                                });
+                              }
+                            } else {
+                              setConfirmDeleteId(pack.id);
+                            }
+                          }}
+                          className="sd-btn px-2.5 py-1.5 text-xs text-[var(--bad)] whitespace-nowrap"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>{confirmDeleteId === pack.id ? 'Confirm' : 'Delete'}</span>
+                        </button>
+                      )}
                     </div>
 
                     <button

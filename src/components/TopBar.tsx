@@ -18,6 +18,7 @@ import {
   User as UserIcon,
 } from 'lucide-react';
 import { getDeviceInfo } from '../lib/device';
+import { BOOTSTRAP_ADMIN_EMAIL } from '../lib/syncService';
 import {
   DecryptedProfile,
   LiveTimerState,
@@ -414,7 +415,9 @@ export function TopBar({
                   {firebaseUser && (
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                       <div className="flex items-center gap-2">
-                        {account?.role === 'admin' && (
+                        {(account?.role === 'admin' ||
+                          (Boolean(firebaseUser?.emailVerified) &&
+                            firebaseUser?.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL)) && (
                           <button
                             type="button"
                             onClick={() => {

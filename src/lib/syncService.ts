@@ -30,6 +30,10 @@ import {
   AppModule,
   DecryptedProfile,
   EncryptedSyncDocRecord,
+  StudyPack,
+  StudyPackCategory,
+  StudyPackPlannerPayload,
+  StudyPackRevisionPayload,
   UserAccountDoc,
   UserActivityDoc,
   UserDeviceDoc,
@@ -37,7 +41,7 @@ import {
 } from '../types';
 
 const CHUNK_SIZE = 200000;
-const BOOTSTRAP_ADMIN_EMAIL = 'howezhou2011@gmail.com';
+export const BOOTSTRAP_ADMIN_EMAIL = 'howezhou2011@gmail.com';
 
 const pushedChecksums = new Map<string, string>();
 const knownSyncDocIds = new Set<string>();
@@ -101,6 +105,13 @@ export async function createUserAccountWithVault(params: {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    if (initialRole === 'admin') {
+      await setDoc(doc(db, 'admins', uid), {
+        uid,
+        grantedBy: uid,
+        createdAt: serverTimestamp(),
+      });
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, path);
   }
@@ -373,6 +384,7 @@ export function subscribeEncryptedSyncDocs(
   const q = query(collection(db, 'users', uid, 'syncDocs'), where('ownerId', '==', uid));
   const localDeviceId = getDeviceInfo().deviceId;
   let seq = 0;
+  let isFirstSnapshot = true;
 
   return onSnapshot(
     q,
@@ -442,11 +454,13 @@ export function subscribeEncryptedSyncDocs(
       }
 
       if (currentSeq !== seq) return;
+      const fromRemote = isFirstSnapshot || anyFromRemote;
+      isFirstSnapshot = false;
       onSyncUpdate({
         revision,
         planner,
         chunkCount: snapshot.size,
-        fromRemoteDevice: anyFromRemote || !snapshot.metadata.fromCache,
+        fromRemoteDevice: fromRemote,
       });
     },
     (error) => {
@@ -615,3 +629,184 @@ export async function updateUserRole(
     handleFirestoreError(err, OperationType.UPDATE, `${userPath} / ${adminPath}`);
   }
 }
+
+export async function ensureBootstrapAdminRole(
+  uid: string,
+  email: string | null | undefined,
+  account: UserAccountDoc | null
+): Promise<UserAccountDoc | null> {
+  if (!account || !email || email.toLowerCase() !== BOOTSTRAP_ADMIN_EMAIL) {
+    return account;
+  }
+  try {
+    const admRef = doc(db, 'admins', uid);
+    const admSnap = await getDoc(admRef);
+    if (!admSnap.exists()) {
+      await setDoc(admRef, {
+        uid,
+        grantedBy: uid,
+        createdAt: serverTimestamp(),
+      });
+    }
+    if (account.role !== 'admin') {
+      await updateDoc(doc(db, 'users', uid), {
+        role: 'admin',
+        updatedAt: serverTimestamp(),
+      });
+      return { ...account, role: 'admin' };
+    }
+  } catch (err) {
+    console.warn('Bootstrap admin role sync skipped:', err);
+  }
+  return account;
+}
+
+interface CloudStudyPackRecord {
+  id: string;
+  title: string;
+  subtitle: string;
+  category: StudyPackCategory;
+  examBoard: string;
+  visibility: 'public' | 'private';
+  ownerId: string;
+  ownerName: string;
+  subjectCountPreview: number;
+  topicCountPreview: number;
+  cardCountPreview: number;
+  payloadJson: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export async function saveStudyPackToCloud(
+  pack: StudyPack,
+  uid: string,
+  ownerName: string
+): Promise<void> {
+  const safeId = pack.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+  const path = `studyPacks/${safeId}`;
+  const payloadJson = JSON.stringify({
+    tags: pack.tags || [],
+    highlights: pack.highlights || [],
+    revision: pack.revision || {},
+    planner: pack.planner || {},
+  });
+  if (payloadJson.length > 650000) {
+    throw new Error('This Study Pack exceeds the 650 KB cloud sharing limit.');
+  }
+  const ref = doc(db, 'studyPacks', safeId);
+  const visibility: 'public' | 'private' = pack.visibility === 'public' ? 'public' : 'private';
+  try {
+    const existing = await getDoc(ref);
+    if (existing.exists()) {
+      await updateDoc(ref, {
+        title: (pack.title || 'Untitled Study Pack').slice(0, 140),
+        subtitle: (pack.subtitle || '').slice(0, 240),
+        category: pack.category || 'combo',
+        examBoard: (pack.examBoard || 'Custom Study Pack').slice(0, 80),
+        visibility,
+        ownerName: (ownerName || pack.ownerName || 'StudyDeck User').slice(0, 100),
+        subjectCountPreview: Number(pack.subjectCountPreview || 0),
+        topicCountPreview: Number(pack.topicCountPreview || 0),
+        cardCountPreview: Number(pack.cardCountPreview || 0),
+        payloadJson,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ref, {
+        id: safeId,
+        title: (pack.title || 'Untitled Study Pack').slice(0, 140),
+        subtitle: (pack.subtitle || '').slice(0, 240),
+        category: pack.category || 'combo',
+        examBoard: (pack.examBoard || 'Custom Study Pack').slice(0, 80),
+        visibility,
+        ownerId: uid,
+        ownerName: (ownerName || pack.ownerName || 'StudyDeck User').slice(0, 100),
+        subjectCountPreview: Number(pack.subjectCountPreview || 0),
+        topicCountPreview: Number(pack.topicCountPreview || 0),
+        cardCountPreview: Number(pack.cardCountPreview || 0),
+        payloadJson,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteStudyPackFromCloud(packId: string): Promise<void> {
+  const safeId = packId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+  const path = `studyPacks/${safeId}`;
+  try {
+    const ref = doc(db, 'studyPacks', safeId);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await deleteDoc(ref);
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+function parseCloudPackRecord(rec: CloudStudyPackRecord): StudyPack | null {
+  try {
+    const parsed = JSON.parse(rec.payloadJson) as {
+      tags?: string[];
+      highlights?: string[];
+      revision?: StudyPackRevisionPayload;
+      planner?: StudyPackPlannerPayload;
+    };
+    return {
+      id: rec.id,
+      title: rec.title,
+      subtitle: rec.subtitle,
+      category: rec.category,
+      examBoard: rec.examBoard,
+      visibility: rec.visibility,
+      ownerId: rec.ownerId,
+      ownerName: rec.ownerName,
+      author: rec.ownerName,
+      isCustom: true,
+      createdAt:
+        rec.createdAt instanceof Timestamp
+          ? rec.createdAt.toDate().toISOString()
+          : new Date().toISOString(),
+      subjectCountPreview: rec.subjectCountPreview,
+      topicCountPreview: rec.topicCountPreview,
+      cardCountPreview: rec.cardCountPreview,
+      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+      highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
+      revision: parsed.revision || {},
+      planner: parsed.planner || {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function subscribePublicStudyPacks(
+  onPacks: (packs: StudyPack[]) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  const path = 'studyPacks';
+  const q = query(collection(db, 'studyPacks'), where('visibility', '==', 'public'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => parseCloudPackRecord(d.data() as CloudStudyPackRecord))
+        .filter((x): x is StudyPack => Boolean(x))
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      onPacks(list);
+    },
+    (err) => {
+      try {
+        handleFirestoreError(err, OperationType.LIST, path);
+      } catch (wrapped) {
+        if (onError) onError(wrapped);
+      }
+    }
+  );
+}
+

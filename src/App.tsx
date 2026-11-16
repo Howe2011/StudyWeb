@@ -20,7 +20,10 @@ import {
   saveTrustedDeviceKey,
 } from './lib/crypto';
 import {
+  BOOTSTRAP_ADMIN_EMAIL,
   createUserAccountWithVault,
+  deleteStudyPackFromCloud,
+  ensureBootstrapAdminRole,
   fetchUserAccount,
   loadEncryptedProfile,
   pushEncryptedSyncEntry,
@@ -30,9 +33,11 @@ import {
   resetSyncMemoryCache,
   rotateVaultPassphrase,
   saveEncryptedProfile,
+  saveStudyPackToCloud,
   subscribeActivity,
   subscribeDevices,
   subscribeEncryptedSyncDocs,
+  subscribePublicStudyPacks,
   unlockVaultWithPassphrase,
   unlockVaultWithRecoveryCode,
   updateDisplayName,
@@ -169,6 +174,7 @@ export default function App() {
   const [hasGuestData, setHasGuestData] = useState<boolean>(() => detectHasGuestData());
   const [deckSnapshot, setDeckSnapshot] = useState<DeckSnapshot>(EMPTY_DECK_SNAPSHOT);
   const [customPacks, setCustomPacks] = useState<StudyPack[]>(() => loadCustomPacksFromLocal());
+  const [publicPacks, setPublicPacks] = useState<StudyPack[]>([]);
   const [appliedPackIds, setAppliedPackIds] = useState<string[]>(() =>
     loadAppliedPackIdsFromLocal()
   );
@@ -180,6 +186,10 @@ export default function App() {
     planner: Record<string, string>;
   }>({ revision: {}, planner: {} });
   const readyAppsRef = useRef<{ revision: boolean; planner: boolean }>({
+    revision: false,
+    planner: false,
+  });
+  const hydratedAppsRef = useRef<{ revision: boolean; planner: boolean }>({
     revision: false,
     planner: false,
   });
@@ -261,11 +271,21 @@ export default function App() {
     [postToApp]
   );
 
+  // Subscribe to community public Study Packs (visible to everyone)
+  useEffect(() => {
+    const unsub = subscribePublicStudyPacks(
+      (packs) => setPublicPacks(packs),
+      (err) => console.warn('Public study packs listener:', err)
+    );
+    return () => unsub();
+  }, []);
+
   // Firebase Auth listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       resetSyncMemoryCache();
       latestEntriesRef.current = { revision: {}, planner: {} };
+      hydratedAppsRef.current = { revision: false, planner: false };
       setFirebaseUser(user);
       setProfile(null);
       setDevices([]);
@@ -286,7 +306,8 @@ export default function App() {
       }
 
       try {
-        const acc = await fetchUserAccount(user.uid);
+        let acc = await fetchUserAccount(user.uid);
+        acc = await ensureBootstrapAdminRole(user.uid, user.email, acc);
         setAccount(acc);
         if (!acc) {
           setDek(null);
@@ -336,7 +357,7 @@ export default function App() {
     const unsubDocs = subscribeEncryptedSyncDocs(
       uid,
       dek,
-      ({ revision, planner, chunkCount: count }) => {
+      ({ revision, planner, chunkCount: count, fromRemoteDevice }) => {
         if (cancelled) return;
         latestEntriesRef.current = { revision, planner };
         setChunkCount(count);
@@ -363,8 +384,14 @@ export default function App() {
             // ignore
           }
         }
-        if (readyAppsRef.current.revision) hydrateIframe('revision', uid, revision);
-        if (readyAppsRef.current.planner) hydrateIframe('planner', uid, planner);
+        if (readyAppsRef.current.revision && (!hydratedAppsRef.current.revision || fromRemoteDevice)) {
+          hydratedAppsRef.current.revision = true;
+          hydrateIframe('revision', uid, revision);
+        }
+        if (readyAppsRef.current.planner && (!hydratedAppsRef.current.planner || fromRemoteDevice)) {
+          hydratedAppsRef.current.planner = true;
+          hydrateIframe('planner', uid, planner);
+        }
       },
       (err) => {
         console.error(err);
@@ -483,6 +510,7 @@ export default function App() {
         readyAppsRef.current[data.app] = true;
         postToApp(data.app, { type: 'BRIDGE_APPEARANCE', app: data.app, look });
         if (firebaseUser && dek) {
+          hydratedAppsRef.current[data.app] = true;
           hydrateIframe(data.app, firebaseUser.uid, latestEntriesRef.current[data.app]);
         }
         if (data.app === 'revision') {
@@ -827,24 +855,115 @@ export default function App() {
 
   const handleSaveCustomPack = useCallback(
     async (pack: StudyPack) => {
-      const exists = customPacks.some((p) => p.id === pack.id);
+      const visibility: 'public' | 'private' =
+        pack.visibility === 'public' ? 'public' : 'private';
+      const ownerId = pack.ownerId || firebaseUser?.uid;
+      const ownerName = pack.ownerName || accountStats.displayName || 'StudyDeck User';
+
+      if (visibility === 'public') {
+        if (!firebaseUser || !firebaseUser.emailVerified) {
+          throw new Error('Sign in with Google to publish a Public Study Pack for all users.');
+        }
+        const enrichedPublic: StudyPack = {
+          ...pack,
+          visibility: 'public',
+          ownerId: firebaseUser.uid,
+          ownerName,
+          author: ownerName,
+        };
+        await saveStudyPackToCloud(enrichedPublic, firebaseUser.uid, ownerName);
+        const exists = customPacks.some((p) => p.id === enrichedPublic.id);
+        const nextCustom = exists
+          ? customPacks.map((p) => (p.id === enrichedPublic.id ? enrichedPublic : p))
+          : [enrichedPublic, ...customPacks];
+        setCustomPacks(nextCustom);
+        await persistPacksToCloud(nextCustom, appliedPackIds);
+        if (account && dek) {
+          await recordActivity(firebaseUser.uid, `Published Public Pack: ${enrichedPublic.title}`);
+        }
+        return;
+      }
+
+      const enrichedPrivate: StudyPack = {
+        ...pack,
+        visibility: 'private',
+        ownerId,
+        ownerName,
+        author: ownerName,
+      };
+      const exists = customPacks.some((p) => p.id === enrichedPrivate.id);
       const nextCustom = exists
-        ? customPacks.map((p) => (p.id === pack.id ? pack : p))
-        : [pack, ...customPacks];
+        ? customPacks.map((p) => (p.id === enrichedPrivate.id ? enrichedPrivate : p))
+        : [enrichedPrivate, ...customPacks];
       setCustomPacks(nextCustom);
       await persistPacksToCloud(nextCustom, appliedPackIds);
     },
-    [customPacks, appliedPackIds, persistPacksToCloud]
+    [customPacks, appliedPackIds, persistPacksToCloud, firebaseUser, accountStats.displayName, account, dek]
+  );
+
+  const handleTogglePackVisibility = useCallback(
+    async (pack: StudyPack, nextVisibility: 'public' | 'private') => {
+      if (!firebaseUser || !firebaseUser.emailVerified) {
+        throw new Error('Sign in with Google to change Study Pack visibility.');
+      }
+      const ownerName = pack.ownerName || accountStats.displayName || 'StudyDeck User';
+      const updated: StudyPack = {
+        ...pack,
+        visibility: nextVisibility,
+        ownerId: pack.ownerId || firebaseUser.uid,
+        ownerName,
+        author: ownerName,
+      };
+      if (nextVisibility === 'public') {
+        await saveStudyPackToCloud(updated, firebaseUser.uid, ownerName);
+      } else {
+        await deleteStudyPackFromCloud(pack.id);
+      }
+      const exists = customPacks.some((p) => p.id === updated.id);
+      const nextCustom = exists
+        ? customPacks.map((p) => (p.id === updated.id ? updated : p))
+        : [updated, ...customPacks];
+      setCustomPacks(nextCustom);
+      await persistPacksToCloud(nextCustom, appliedPackIds);
+      if (account && dek) {
+        await recordActivity(
+          firebaseUser.uid,
+          `Set pack "${updated.title}" to ${nextVisibility}`
+        );
+      }
+    },
+    [firebaseUser, accountStats.displayName, customPacks, appliedPackIds, persistPacksToCloud, account, dek]
   );
 
   const handleDeleteCustomPack = useCallback(
     async (packId: string) => {
+      const target =
+        customPacks.find((p) => p.id === packId) || publicPacks.find((p) => p.id === packId);
+      if (target?.visibility === 'public' || publicPacks.some((p) => p.id === packId)) {
+        if (!firebaseUser || !firebaseUser.emailVerified) {
+          throw new Error('Sign in with Google to delete a Public Study Pack.');
+        }
+        await deleteStudyPackFromCloud(packId);
+      }
       const nextCustom = customPacks.filter((p) => p.id !== packId);
       setCustomPacks(nextCustom);
       await persistPacksToCloud(nextCustom, appliedPackIds);
     },
-    [customPacks, appliedPackIds, persistPacksToCloud]
+    [customPacks, publicPacks, appliedPackIds, persistPacksToCloud, firebaseUser]
   );
+
+  const mergedStudyPacks = useMemo(() => {
+    const byId = new Map<string, StudyPack>();
+    for (const p of customPacks) {
+      byId.set(p.id, { ...p, visibility: p.visibility || 'private' });
+    }
+    for (const pub of publicPacks) {
+      byId.set(pub.id, { ...pub, visibility: 'public' });
+    }
+    return Array.from(byId.values()).sort((a, b) =>
+      (b.createdAt || '').localeCompare(a.createdAt || '')
+    );
+  }, [customPacks, publicPacks]);
 
   const handleResetWorkspace = useCallback(async () => {
     setCustomPacks([]);
@@ -943,6 +1062,7 @@ export default function App() {
       await clearTrustedDeviceKey(firebaseUser.uid);
     }
     resetSyncMemoryCache();
+    hydratedAppsRef.current = { revision: false, planner: false };
     setDek(null);
     setAccount(null);
     setProfile(null);
@@ -999,6 +1119,7 @@ export default function App() {
     if (!firebaseUser) return;
     await clearTrustedDeviceKey(firebaseUser.uid);
     resetSyncMemoryCache();
+    hydratedAppsRef.current = { revision: false, planner: false };
     setDek(null);
     setProfile(null);
     postToApp('revision', { type: 'BRIDGE_SIGNOUT', app: 'revision' });
@@ -1196,6 +1317,7 @@ export default function App() {
             chunkCount={chunkCount}
             syncState={syncState}
             hasGuestData={hasGuestData}
+            deckSnapshot={deckSnapshot}
             initialSection={activeTab === 'admin' ? 'admin' : vaultSection}
             onOpenAuth={() => setAuthModalOpen(true)}
             onSignOut={handleSignOut}
@@ -1211,6 +1333,7 @@ export default function App() {
             onOpenPlannerOptions={handleOpenPlannerOptions}
             onGetWorkspaceSnapshot={handleGetWorkspaceSnapshot}
             onImportWorkspaceData={handleImportWorkspaceData}
+            onApplyImportedPack={handleApplyStudyPack}
             onResetWorkspace={handleResetWorkspace}
           />
         )}
@@ -1218,10 +1341,19 @@ export default function App() {
         {activeTab === 'packs' && (
           <StudyPacksView
             deckSnapshot={deckSnapshot}
-            customPacks={customPacks}
+            customPacks={mergedStudyPacks}
             appliedPackIds={appliedPackIds}
+            currentUserUid={firebaseUser?.uid || null}
+            isSignedInVerified={Boolean(firebaseUser?.emailVerified)}
+            isAdmin={Boolean(
+              account?.role === 'admin' ||
+                (firebaseUser?.emailVerified &&
+                  firebaseUser.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL)
+            )}
+            onOpenAuth={() => setAuthModalOpen(true)}
             onApplyPack={handleApplyStudyPack}
             onSaveCustomPack={handleSaveCustomPack}
+            onTogglePackVisibility={handleTogglePackVisibility}
             onDeleteCustomPack={handleDeleteCustomPack}
             onGetWorkspaceSnapshot={handleGetWorkspaceSnapshot}
             onOpenFlashcards={() => handleSelectRevisionMode('cards')}

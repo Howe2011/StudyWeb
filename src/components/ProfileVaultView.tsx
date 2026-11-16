@@ -22,8 +22,12 @@ import {
 } from 'lucide-react';
 import { AdminPanel } from './AdminPanel';
 import { getDeviceInfo, setCustomDeviceName } from '../lib/device';
+import { buildStudyPackFromDraft, parseStudyPackInput } from '../lib/packParser';
+import { BOOTSTRAP_ADMIN_EMAIL } from '../lib/syncService';
 import {
+  DeckSnapshot,
   DecryptedProfile,
+  StudyPack,
   UserAccountDoc,
   UserActivityDoc,
   UserDeviceDoc,
@@ -53,6 +57,7 @@ interface ProfileVaultViewProps {
   chunkCount: number;
   syncState: 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
   hasGuestData: boolean;
+  deckSnapshot?: DeckSnapshot;
   initialSection?: VaultSection;
   onOpenAuth: () => void;
   onSignOut: () => Promise<void>;
@@ -72,6 +77,7 @@ interface ProfileVaultViewProps {
     planner: Record<string, string>;
     mode: 'merge' | 'replace';
   }) => Promise<void>;
+  onApplyImportedPack?: (pack: StudyPack) => Promise<void>;
   onResetWorkspace: () => Promise<void>;
 }
 
@@ -88,13 +94,13 @@ const ALL_CATEGORIES: {
 ];
 
 function classifyRevisionKey(key: string): BackupCategory {
-  if (/^gdoc-/.test(key)) return 'notes';
+  if (/^gdoc-/.test(key) && !/-cfg$/.test(key)) return 'notes';
   if (/^(fc-state|cb-ui)$/.test(key)) return 'flashcards';
   if (/^(edits-|known-|mindmap-)/.test(key)) return 'timelines';
   return 'subjects';
 }
 
-function summarizeSnapshot(snap: WorkspaceSnapshot) {
+function summarizeSnapshot(snap: WorkspaceSnapshot, deckSnapshot?: DeckSnapshot) {
   let noteDocs = 0;
   let customCards = 0;
   let cardProgress = 0;
@@ -116,7 +122,10 @@ function summarizeSnapshot(snap: WorkspaceSnapshot) {
   for (const [k, v] of Object.entries(snap.revision || {})) {
     const cat = classifyRevisionKey(k);
     countsByCat[cat] += 1;
-    if (cat === 'notes' && v && v.trim()) noteDocs += 1;
+    if (cat === 'notes' && v) {
+      const stripped = v.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim();
+      if (stripped.length > 0) noteDocs += 1;
+    }
     if (k === 'fc-state') {
       try {
         const fc = JSON.parse(v) as { add?: unknown[]; prog?: Record<string, unknown> };
@@ -126,13 +135,35 @@ function summarizeSnapshot(snap: WorkspaceSnapshot) {
         // ignore
       }
     }
-    if (/^edits-/.test(k)) timelineEdits += 1;
+    if (/^edits-/.test(k)) {
+      try {
+        const ed = JSON.parse(v) as {
+          add?: unknown[];
+          mod?: Record<string, unknown>;
+          del?: unknown[];
+          ne?: unknown[];
+        };
+        const hasAny =
+          (Array.isArray(ed.add) && ed.add.length > 0) ||
+          (ed.mod && Object.keys(ed.mod).length > 0) ||
+          (Array.isArray(ed.del) && ed.del.length > 0) ||
+          (Array.isArray(ed.ne) && ed.ne.length > 0);
+        if (hasAny) timelineEdits += 1;
+      } catch {
+        timelineEdits += 1;
+      }
+    }
     if (/^mindmap-/.test(k)) mindmaps += 1;
     if (k === 'user-subjects') {
       try {
-        const reg = JSON.parse(v) as { subs?: unknown[]; extraTopics?: unknown[] };
-        customSubjects = (Array.isArray(reg.subs) ? reg.subs.length : 0) +
-          (Array.isArray(reg.extraTopics) ? reg.extraTopics.length : 0);
+        const reg = JSON.parse(v) as {
+          subs?: unknown[];
+          extraTopics?: unknown[];
+          baseTopics?: unknown[];
+        };
+        customSubjects =
+          (Array.isArray(reg.subs) ? reg.subs.length : 0) +
+          (Array.isArray(reg.baseTopics) && reg.baseTopics.length > 0 ? 1 : 0);
       } catch {
         // ignore
       }
@@ -144,20 +175,38 @@ function summarizeSnapshot(snap: WorkspaceSnapshot) {
     try {
       const pl = JSON.parse(v) as {
         todos?: unknown[];
+        td?: { items?: unknown[] };
         mocks?: unknown[];
-        subs?: unknown[];
+        scores?: unknown[];
+        subs?: Array<{ on?: boolean; ex?: unknown[] }>;
       };
-      if (Array.isArray(pl.todos)) plannerTasks += pl.todos.length;
+      if (Array.isArray(pl.td?.items)) plannerTasks += pl.td.items.length;
+      else if (Array.isArray(pl.todos)) plannerTasks += pl.todos.length;
+
+      if (Array.isArray(pl.scores)) plannerMocks += pl.scores.length;
       if (Array.isArray(pl.mocks)) plannerMocks += pl.mocks.length;
-      if (Array.isArray(pl.subs)) plannerSubjects += pl.subs.length;
+      if (Array.isArray(pl.subs)) {
+        const activeSubs = pl.subs.filter((s) => s && s.on !== false);
+        plannerSubjects += activeSubs.length;
+        for (const s of activeSubs) {
+          if (Array.isArray(s.ex)) plannerMocks += s.ex.length;
+        }
+      }
     } catch {
       // ignore
     }
   }
 
+  const totalCards = deckSnapshot ? deckSnapshot.cards.length : customCards;
+  const activeSubjects = deckSnapshot
+    ? Math.max(deckSnapshot.subjects.length, plannerSubjects)
+    : Math.max(customSubjects, plannerSubjects);
+  const totalTopics = deckSnapshot ? deckSnapshot.topics.length : 0;
+
   return {
     countsByCat,
     noteDocs,
+    totalCards,
     customCards,
     cardProgress,
     timelineEdits,
@@ -166,6 +215,8 @@ function summarizeSnapshot(snap: WorkspaceSnapshot) {
     plannerMocks,
     plannerSubjects,
     customSubjects,
+    activeSubjects,
+    totalTopics,
   };
 }
 
@@ -213,6 +264,7 @@ export function ProfileVaultView({
   chunkCount,
   syncState,
   hasGuestData,
+  deckSnapshot,
   initialSection = 'account',
   onOpenAuth,
   onSignOut,
@@ -228,6 +280,7 @@ export function ProfileVaultView({
   onOpenPlannerOptions,
   onGetWorkspaceSnapshot,
   onImportWorkspaceData,
+  onApplyImportedPack,
   onResetWorkspace,
 }: ProfileVaultViewProps) {
   const currentDev = getDeviceInfo();
@@ -265,11 +318,15 @@ export function ProfileVaultView({
   });
   const [exportStatus, setExportStatus] = useState<string | null>(null);
 
+  const [importSourceTab, setImportSourceTab] = useState<'file' | 'text'>('file');
+  const [importTextRaw, setImportTextRaw] = useState('');
   const [parsedImport, setParsedImport] = useState<{
     fileName: string;
     revision: Record<string, string>;
     planner: Record<string, string>;
     available: Record<BackupCategory, boolean>;
+    textPack?: StudyPack;
+    textStats?: { subjects: number; topics: number; cards: number; notes: number; todos: number };
   } | null>(null);
   const [importCats, setImportCats] = useState<Record<BackupCategory, boolean>>({
     notes: true,
@@ -314,7 +371,10 @@ export function ProfileVaultView({
     }
   }, [profile, firebaseUser]);
 
-  const snapSummary = useMemo(() => summarizeSnapshot(snapshot), [snapshot]);
+  const snapSummary = useMemo(
+    () => summarizeSnapshot(snapshot, deckSnapshot),
+    [snapshot, deckSnapshot]
+  );
 
   const handleProfileSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -440,7 +500,7 @@ export function ProfileVaultView({
     const fresh = await onGetWorkspaceSnapshot();
     setSnapshot(fresh);
     const docs = Object.entries(fresh.revision).filter(
-      ([k, v]) => /^gdoc-/.test(k) && v && v.trim()
+      ([k, v]) => /^gdoc-/.test(k) && !/-cfg$/.test(k) && v && v.replace(/<[^>]*>/g, '').trim()
     );
     if (!docs.length) {
       setExportStatus('No edited notes saved yet.');
@@ -464,42 +524,72 @@ export function ProfileVaultView({
     }
     try {
       const pl = JSON.parse(rawPl) as {
+        subs?: { n?: string }[];
+        td?: {
+          items?: {
+            t?: string;
+            i?: number | null;
+            d?: string;
+            pri?: number;
+            c?: string;
+            done?: number | boolean;
+          }[];
+        };
         todos?: { text?: string; subj?: string; due?: string; pri?: string; done?: boolean }[];
       };
-      const todos = pl.todos || [];
-      if (!todos.length) {
+      const rows =
+        Array.isArray(pl.td?.items) && pl.td.items.length
+          ? pl.td.items.map((item) => ({
+              task: item.t || '',
+              subject:
+                item.i != null && pl.subs?.[item.i]?.n ? pl.subs[item.i].n || '' : '',
+              due: item.d || '',
+              priority: item.pri === 3 ? 'High' : item.pri === 2 ? 'Medium' : 'Normal',
+              done: Boolean(item.done),
+            }))
+          : (pl.todos || []).map((t) => ({
+              task: t.text || '',
+              subject: t.subj || '',
+              due: t.due || '',
+              priority: t.pri || '',
+              done: Boolean(t.done),
+            }));
+
+      if (!rows.length) {
         setExportStatus('No to-do tasks saved yet.');
         return;
       }
       const csv =
         'task,subject,due_date,priority,completed\n' +
-        todos
+        rows
           .map((t) =>
             [
-              csvCell(t.text || ''),
-              csvCell(t.subj || ''),
-              csvCell(t.due || ''),
-              csvCell(t.pri || ''),
+              csvCell(t.task),
+              csvCell(t.subject),
+              csvCell(t.due),
+              csvCell(t.priority),
               csvCell(t.done ? 'Yes' : 'No'),
             ].join(',')
           )
           .join('\n');
       downloadBlob(`studydeck-todos-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
-      setExportStatus(`Exported ${todos.length} to-do task(s) as CSV.`);
+      setExportStatus(`Exported ${rows.length} to-do task(s) as CSV.`);
     } catch {
       setExportStatus('Could not parse to-do tasks.');
     }
   };
 
-  const handleImportFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImportStatus(null);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const raw = String(reader.result || '');
+  const parseRawImportText = (raw: string, sourceLabel: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      setParsedImport(null);
+      setImportStatus({ ok: false, msg: 'Paste JSON backup data or study text first.' });
+      return;
+    }
+
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       try {
-        const obj = JSON.parse(raw) as Record<string, unknown>;
+        const obj = JSON.parse(trimmed) as Record<string, unknown>;
         const rev: Record<string, string> = {};
         const pln: Record<string, string> = {};
 
@@ -516,11 +606,27 @@ export function ProfileVaultView({
           for (const [k, v] of Object.entries(obj.data as Record<string, unknown>)) {
             if (typeof v === 'string') rev[k] = v;
           }
-        } else if (obj && (Array.isArray(obj.subs) || Array.isArray(obj.todos) || Array.isArray(obj.blocks))) {
+        } else if (
+          obj &&
+          obj.app === 'mock-revision-planner' &&
+          obj.data &&
+          typeof obj.data === 'object'
+        ) {
+          pln['mockplanner.v1'] = JSON.stringify(obj.data);
+        } else if (
+          obj &&
+          (Array.isArray(obj.subs) ||
+            Array.isArray(obj.todos) ||
+            Array.isArray(obj.blocks) ||
+            (obj.td && typeof obj.td === 'object'))
+        ) {
           pln['mockplanner.v1'] = JSON.stringify(obj);
         } else {
           setParsedImport(null);
-          setImportStatus({ ok: false, msg: 'Unrecognized JSON file format. Select a StudyDeck, Revision, or Planner JSON backup.' });
+          setImportStatus({
+            ok: false,
+            msg: 'Unrecognized JSON format. Paste a StudyDeck, Revision, or Planner JSON backup — or plain study text/CSV.',
+          });
           return;
         }
 
@@ -537,24 +643,144 @@ export function ProfileVaultView({
 
         if (!Object.values(available).some(Boolean)) {
           setParsedImport(null);
-          setImportStatus({ ok: false, msg: 'This backup file contains no data records.' });
+          setImportStatus({ ok: false, msg: 'This JSON contains no data records.' });
           return;
         }
 
-        setParsedImport({ fileName: file.name, revision: rev, planner: pln, available });
+        setParsedImport({ fileName: sourceLabel, revision: rev, planner: pln, available });
         setImportCats({ ...available });
+        setImportStatus(null);
+        return;
       } catch {
         setParsedImport(null);
-        setImportStatus({ ok: false, msg: 'Could not read JSON file.' });
-      } finally {
-        e.target.value = '';
+        setImportStatus({
+          ok: false,
+          msg: 'Invalid JSON syntax. Check for missing braces/quotes, or import plain text instead.',
+        });
+        return;
       }
+    }
+
+    // Parse plain text / Markdown / CSV / Study Pack template format
+    const draft = parseStudyPackInput(trimmed, {
+      fallbackTitle: 'Imported Text Data',
+    });
+    const hasContent =
+      draft.subjects.length > 0 ||
+      draft.cards.length > 0 ||
+      draft.notesByTopic.some((n) => n.notesLines.length > 0) ||
+      draft.todos.length > 0;
+
+    if (!hasContent) {
+      setParsedImport(null);
+      setImportStatus({
+        ok: false,
+        msg: 'Could not detect subjects, flashcards (Q | A or CSV), notes, or to-dos in that text.',
+      });
+      return;
+    }
+
+    const pack = buildStudyPackFromDraft(draft, {
+      title: draft.title || 'Text Import',
+      subtitle: draft.subtitle || 'Imported from pasted text',
+      examBoard: draft.examBoard || 'Imported Data',
+      category:
+        draft.cards.length && !draft.notesByTopic.some((n) => n.notesLines.length)
+          ? 'flashcards'
+          : 'combo',
+      includeSubjects: true,
+      includeFlashcards: draft.cards.length > 0,
+      includeNotes: draft.notesByTopic.some((n) => n.notesLines.length > 0),
+      includeTodos: draft.todos.length > 0,
+    });
+
+    const available: Record<BackupCategory, boolean> = {
+      notes: draft.notesByTopic.some((n) => n.notesLines.length > 0),
+      flashcards: draft.cards.length > 0,
+      timelines: false,
+      planner: draft.todos.length > 0 || draft.subjects.length > 0,
+      subjects: draft.subjects.length > 0,
+    };
+
+    setParsedImport({
+      fileName: sourceLabel,
+      revision: {},
+      planner: {},
+      available,
+      textPack: pack,
+      textStats: {
+        subjects: draft.subjects.length,
+        topics: draft.subjects.reduce((sum, s) => sum + s.topics.length, 0),
+        cards: draft.cards.length,
+        notes: draft.notesByTopic.filter((n) => n.notesLines.length > 0).length,
+        todos: draft.todos.length,
+      },
+    });
+    setImportCats({ ...available });
+    setImportStatus(null);
+  };
+
+  const handleImportFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportStatus(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      parseRawImportText(String(reader.result || ''), file.name);
+      e.target.value = '';
     };
     reader.readAsText(file);
   };
 
   const handleRunImport = async () => {
     if (!parsedImport) return;
+    if (parsedImport.textPack && onApplyImportedPack) {
+      setImporting(true);
+      setImportStatus(null);
+      try {
+        const src = parsedImport.textPack;
+        const filteredPack: StudyPack = {
+          ...src,
+          revision: {
+            ...src.revision,
+            subjects:
+              importCats.subjects || importCats.notes || importCats.flashcards
+                ? (src.revision.subjects || []).map((s) => ({
+                    ...s,
+                    topics: s.topics.map((t) => ({
+                      ...t,
+                      notesHtml: importCats.notes ? t.notesHtml : '',
+                    })),
+                  }))
+                : [],
+            sections: importCats.flashcards ? src.revision.sections : [],
+            cards: importCats.flashcards ? src.revision.cards : [],
+          },
+          planner: {
+            ...src.planner,
+            subjects: importCats.subjects || importCats.planner ? src.planner.subjects : [],
+            todos: importCats.planner ? src.planner.todos : [],
+          },
+        };
+        await onApplyImportedPack(filteredPack);
+        await refreshSnapshot();
+        setImportStatus({
+          ok: true,
+          msg: `Imported study data from ${parsedImport.fileName} into your workspace.`,
+        });
+        setParsedImport(null);
+        setImportTextRaw('');
+      } catch (err) {
+        setImportStatus({
+          ok: false,
+          msg: err instanceof Error ? err.message : 'Text import failed.',
+        });
+      } finally {
+        setImporting(false);
+      }
+      return;
+    }
+
     const filtered = filterSnapshotByCategories(
       { revision: parsedImport.revision, planner: parsedImport.planner },
       importCats
@@ -579,6 +805,7 @@ export function ProfileVaultView({
         msg: `Imported ${totalKeys} section(s) from ${parsedImport.fileName} (${importMode} mode).`,
       });
       setParsedImport(null);
+      setImportTextRaw('');
     } catch (err) {
       setImportStatus({
         ok: false,
@@ -589,7 +816,11 @@ export function ProfileVaultView({
     }
   };
 
-  const isAdmin = account?.role === 'admin' && Boolean(firebaseUser);
+  const isAdmin =
+    Boolean(firebaseUser) &&
+    (account?.role === 'admin' ||
+      (Boolean(firebaseUser?.emailVerified) &&
+        firebaseUser?.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL));
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--bg)]">
@@ -693,10 +924,10 @@ export function ProfileVaultView({
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
                   <div className="text-xs font-semibold text-[var(--mute)]">Flashcards</div>
                   <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
-                    {snapSummary.customCards}
+                    {snapSummary.totalCards}
                   </div>
                   <div className="mt-0.5 text-[11px] text-[var(--mute)]">
-                    custom · {snapSummary.cardProgress} tracked
+                    {snapSummary.customCards} custom · {snapSummary.cardProgress} tracked
                   </div>
                 </div>
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
@@ -714,15 +945,17 @@ export function ProfileVaultView({
                     {snapSummary.plannerTasks}
                   </div>
                   <div className="mt-0.5 text-[11px] text-[var(--mute)]">
-                    tasks · {snapSummary.plannerMocks} mocks
+                    tasks · {snapSummary.plannerMocks} papers/scores
                   </div>
                 </div>
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
                   <div className="text-xs font-semibold text-[var(--mute)]">Subjects</div>
                   <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
-                    {snapSummary.customSubjects || snapSummary.plannerSubjects}
+                    {snapSummary.activeSubjects}
                   </div>
-                  <div className="mt-0.5 text-[11px] text-[var(--mute)]">custom items &amp; prefs</div>
+                  <div className="mt-0.5 text-[11px] text-[var(--mute)]">
+                    {snapSummary.totalTopics} topics total
+                  </div>
                 </div>
               </div>
             </div>
@@ -861,33 +1094,78 @@ export function ProfileVaultView({
               {/* Import Card */}
               <div className="sd-card flex flex-col justify-between p-6">
                 <div>
-                  <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                    Import Backup
-                  </h2>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="font-display text-lg font-bold text-[var(--ink)]">
+                      Import Data
+                    </h2>
+                    <div className="sd-seg">
+                      <button
+                        type="button"
+                        aria-pressed={importSourceTab === 'file'}
+                        onClick={() => setImportSourceTab('file')}
+                        className="sd-seg-btn"
+                      >
+                        Upload File
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={importSourceTab === 'text'}
+                        onClick={() => setImportSourceTab('text')}
+                        className="sd-seg-btn"
+                      >
+                        Paste Text / JSON
+                      </button>
+                    </div>
+                  </div>
                   <p className="mt-1 text-xs text-[var(--mute)]">
-                    Restore a StudyDeck backup file, or import an older Revision / Planner JSON export. You can choose which sections to restore.
+                    Restore a StudyDeck, Revision, or Planner JSON backup, or paste formatted notes, CSV flashcards, and study text directly.
                   </p>
 
-                  <label className="mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-6 text-center transition-colors hover:border-[var(--e3)]">
-                    <Upload className="h-5 w-5 text-[var(--e3)]" aria-hidden="true" />
-                    <span className="text-sm font-bold text-[var(--ink)]">
-                      {parsedImport ? parsedImport.fileName : 'Choose backup .json file'}
-                    </span>
-                    <span className="text-xs text-[var(--mute)]">
-                      Supports unified StudyDeck, Revision-site, and Planner JSON files
-                    </span>
-                    <input
-                      type="file"
-                      accept=".json,application/json"
-                      onChange={handleImportFileChange}
-                      className="hidden"
-                    />
-                  </label>
+                  {importSourceTab === 'file' ? (
+                    <label className="mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-6 text-center transition-colors hover:border-[var(--e3)]">
+                      <Upload className="h-5 w-5 text-[var(--e3)]" aria-hidden="true" />
+                      <span className="text-sm font-bold text-[var(--ink)]">
+                        {parsedImport ? parsedImport.fileName : 'Choose .json, .txt, .md, or .csv file'}
+                      </span>
+                      <span className="text-xs text-[var(--mute)]">
+                        Supports StudyDeck JSON backups as well as text, Markdown, and CSV flashcards
+                      </span>
+                      <input
+                        type="file"
+                        accept=".json,.txt,.md,.csv,application/json,text/plain,text/csv"
+                        onChange={handleImportFileChange}
+                        className="hidden"
+                      />
+                    </label>
+                  ) : (
+                    <div className="mt-4 space-y-2.5">
+                      <textarea
+                        rows={6}
+                        value={importTextRaw}
+                        onChange={(e) => setImportTextRaw(e.target.value)}
+                        placeholder={
+                          'Paste a StudyDeck JSON backup, or study text/CSV:\n\n[Subject: Biology]\nTopics: Cells, Enzymes\n[Flashcards | Biology > Cells]\nDefine osmosis | Water movement across a partially permeable membrane'
+                        }
+                        className="sd-input font-mono-num text-xs leading-relaxed"
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => parseRawImportText(importTextRaw, 'Pasted Text')}
+                          className="sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          Parse &amp; Preview Text
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {parsedImport && (
                     <div className="mt-4 space-y-3">
                       <div className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
-                        Sections found in file
+                        {parsedImport.textStats
+                          ? `Detected from ${parsedImport.fileName}: ${parsedImport.textStats.subjects} subjects · ${parsedImport.textStats.topics} topics · ${parsedImport.textStats.cards} cards · ${parsedImport.textStats.notes} notes · ${parsedImport.textStats.todos} to-dos`
+                          : 'Sections found in backup'}
                       </div>
                       <div className="space-y-1.5">
                         {ALL_CATEGORIES.filter((c) => parsedImport.available[c.id]).map((c) => (
@@ -908,25 +1186,27 @@ export function ProfileVaultView({
                         ))}
                       </div>
 
-                      <div className="pt-1">
-                        <label className="block text-xs font-semibold text-[var(--mute)]">
-                          Import mode
-                          <select
-                            value={importMode}
-                            onChange={(e) =>
-                              setImportMode(e.target.value === 'replace' ? 'replace' : 'merge')
-                            }
-                            className="sd-input mt-1 py-1.5 text-xs"
-                          >
-                            <option value="merge">
-                              Merge — keep existing data &amp; add missing items
-                            </option>
-                            <option value="replace">
-                              Replace — overwrite selected sections with backup
-                            </option>
-                          </select>
-                        </label>
-                      </div>
+                      {!parsedImport.textPack && (
+                        <div className="pt-1">
+                          <label className="block text-xs font-semibold text-[var(--mute)]">
+                            Import mode
+                            <select
+                              value={importMode}
+                              onChange={(e) =>
+                                setImportMode(e.target.value === 'replace' ? 'replace' : 'merge')
+                              }
+                              className="sd-input mt-1 py-1.5 text-xs"
+                            >
+                              <option value="merge">
+                                Merge — keep existing data &amp; add missing items
+                              </option>
+                              <option value="replace">
+                                Replace — overwrite selected sections with backup
+                              </option>
+                            </select>
+                          </label>
+                        </div>
+                      )}
 
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <button
@@ -1062,7 +1342,11 @@ export function ProfileVaultView({
 
         {section === 'admin' && isAdmin && firebaseUser && (
           <div className="sd-card overflow-hidden">
-            <AdminPanel currentAdminUid={firebaseUser.uid} />
+            <AdminPanel
+              currentAdminUid={firebaseUser.uid}
+              currentAdminEmail={firebaseUser.email}
+              currentAdminAccount={account}
+            />
           </div>
         )}
 

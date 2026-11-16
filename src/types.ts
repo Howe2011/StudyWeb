@@ -208,6 +208,9 @@ export interface StudyPack {
   tags: string[];
   author?: string;
   isCustom?: boolean;
+  visibility?: 'private' | 'public';
+  ownerId?: string;
+  ownerName?: string;
   createdAt?: string;
   cardCountPreview: number;
   topicCountPreview: number;

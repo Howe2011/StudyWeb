@@ -136,10 +136,111 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isRoomCode(code) {
+      return code is string && code.size() >= 4 && code.size() <= 8 && code.matches('^[A-Z0-9]+$');
+    }
+
+    function isValidStudyPackDoc(data) {
+      return data.keys().hasAll([
+          'id', 'title', 'subtitle', 'category', 'examBoard', 'visibility',
+          'ownerId', 'ownerName', 'subjectCountPreview', 'topicCountPreview',
+          'cardCountPreview', 'payloadJson', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'title', 'subtitle', 'category', 'examBoard', 'visibility',
+          'ownerId', 'ownerName', 'subjectCountPreview', 'topicCountPreview',
+          'cardCountPreview', 'payloadJson', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.subtitle is string && data.subtitle.size() <= 240
+        && data.category in ['combo', 'flashcards', 'notes']
+        && data.examBoard is string && data.examBoard.size() >= 1 && data.examBoard.size() <= 80
+        && data.visibility in ['public', 'private']
+        && isValidId(data.ownerId)
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 100
+        && data.subjectCountPreview is number && data.subjectCountPreview >= 0
+        && data.topicCountPreview is number && data.topicCountPreview >= 0
+        && data.cardCountPreview is number && data.cardCountPreview >= 0
+        && data.payloadJson is string && data.payloadJson.size() >= 2 && data.payloadJson.size() <= 650000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuizDeckDoc(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'title', 'cardCount', 'sectionsJson', 'cardsJson', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'title', 'cardCount', 'sectionsJson', 'cardsJson', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.cardCount is number && data.cardCount >= 0 && data.cardCount <= 5000
+        && data.sectionsJson is string && data.sectionsJson.size() >= 2 && data.sectionsJson.size() <= 50000
+        && data.cardsJson is string && data.cardsJson.size() >= 2 && data.cardsJson.size() <= 650000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuizRoomDoc(data) {
+      return data.keys().hasAll([
+          'code', 'hostUid', 'deckId', 'deckTitle', 'selectedSectionsJson',
+          'timerSeconds', 'status', 'totalQuestions', 'currentIndex',
+          'currentQuestionJson', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'code', 'hostUid', 'deckId', 'deckTitle', 'selectedSectionsJson',
+          'timerSeconds', 'status', 'totalQuestions', 'currentIndex',
+          'questionStartedAt', 'questionEndsAt', 'currentQuestionJson',
+          'createdAt', 'updatedAt'
+        ])
+        && isRoomCode(data.code)
+        && isValidId(data.hostUid)
+        && data.deckId is string && data.deckId.size() >= 1 && data.deckId.size() <= 128
+        && data.deckTitle is string && data.deckTitle.size() >= 1 && data.deckTitle.size() <= 140
+        && data.selectedSectionsJson is string && data.selectedSectionsJson.size() >= 2 && data.selectedSectionsJson.size() <= 50000
+        && data.timerSeconds in [15, 20, 30]
+        && data.status in ['lobby', 'question', 'reveal', 'finished']
+        && data.totalQuestions is number && data.totalQuestions >= 1 && data.totalQuestions <= 1000
+        && data.currentIndex is number && data.currentIndex >= -1 && data.currentIndex <= 1000
+        && (!('questionStartedAt' in data) || data.questionStartedAt == null || data.questionStartedAt is number)
+        && (!('questionEndsAt' in data) || data.questionEndsAt == null || data.questionEndsAt is number)
+        && data.currentQuestionJson is string && data.currentQuestionJson.size() >= 2 && data.currentQuestionJson.size() <= 50000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuizPlayerDoc(data) {
+      return data.keys().hasAll([
+          'id', 'uid', 'nickname', 'isHost', 'score', 'streak', 'bestStreak',
+          'correctCount', 'connected', 'hasSubmitted', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'uid', 'nickname', 'isHost', 'score', 'streak', 'bestStreak',
+          'correctCount', 'connected', 'hasSubmitted', 'gradingStatus',
+          'pendingAnswer', 'pendingSubmittedAt', 'pendingQuestionIndex',
+          'lastSubmissionJson', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.uid)
+        && data.nickname is string && data.nickname.size() >= 1 && data.nickname.size() <= 40
+        && data.isHost is bool
+        && data.score is number && data.score >= 0
+        && data.streak is number && data.streak >= 0
+        && data.bestStreak is number && data.bestStreak >= 0
+        && data.correctCount is number && data.correctCount >= 0
+        && data.connected is bool
+        && data.hasSubmitted is bool
+        && (!('gradingStatus' in data) || data.gradingStatus == null || data.gradingStatus in ['grading', 'done'])
+        && (!('pendingAnswer' in data) || (data.pendingAnswer is string && data.pendingAnswer.size() <= 1000))
+        && (!('pendingSubmittedAt' in data) || data.pendingSubmittedAt is number)
+        && (!('pendingQuestionIndex' in data) || data.pendingQuestionIndex is number)
+        && (!('lastSubmissionJson' in data) || data.lastSubmissionJson == null || (data.lastSubmissionJson is string && data.lastSubmissionJson.size() <= 10000))
+        && data.updatedAt is timestamp;
+    }
+
     // --- Collection Rules ---
     match /users/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isAdmin() && resource.data.uid is string;
+      allow list: if isAdmin();
 
       allow create: if isValidId(userId)
         && isOwner(userId)
@@ -269,7 +370,7 @@ service cloud.firestore {
 
     match /admins/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isAdmin() && resource.data.uid is string;
+      allow list: if isAdmin();
 
       allow create: if isValidId(userId)
         && isAdmin()
@@ -280,6 +381,115 @@ service cloud.firestore {
 
       allow update: if false;
       allow delete: if isValidId(userId) && isAdmin() && userId != request.auth.uid;
+    }
+
+    match /studyPacks/{packId} {
+      allow get: if isValidId(packId) && (
+        existing().visibility == 'public' ||
+        (isSignedIn() && existing().ownerId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow list: if existing().visibility == 'public' || (isSignedIn() && existing().ownerId == request.auth.uid);
+
+      allow create: if isValidId(packId)
+        && isVerified()
+        && isValidStudyPackDoc(incoming())
+        && incoming().id == packId
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(packId)
+        && isVerified()
+        && (existing().ownerId == request.auth.uid || isAdmin())
+        && isValidStudyPackDoc(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(packId) && isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /quizDecks/{deckId} {
+      allow get: if isValidId(deckId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+
+      allow create: if isValidId(deckId)
+        && isSignedIn()
+        && isValidQuizDeckDoc(incoming())
+        && incoming().id == deckId
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(deckId)
+        && isSignedIn()
+        && existing().ownerId == request.auth.uid
+        && isValidQuizDeckDoc(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(deckId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    match /quizRooms/{roomCode} {
+      allow get: if isRoomCode(roomCode) && isSignedIn();
+      allow list: if false;
+
+      allow create: if isRoomCode(roomCode)
+        && isSignedIn()
+        && isValidQuizRoomDoc(incoming())
+        && incoming().code == roomCode
+        && incoming().hostUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isRoomCode(roomCode)
+        && isSignedIn()
+        && existing().hostUid == request.auth.uid
+        && isValidQuizRoomDoc(incoming())
+        && incoming().code == existing().code
+        && incoming().hostUid == existing().hostUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isRoomCode(roomCode) && isSignedIn() && existing().hostUid == request.auth.uid;
+
+      match /players/{playerId} {
+        allow get: if isRoomCode(roomCode) && isValidId(playerId) && isSignedIn();
+        allow list: if isRoomCode(roomCode) && isSignedIn();
+
+        allow create: if isRoomCode(roomCode)
+          && isValidId(playerId)
+          && isSignedIn()
+          && isValidQuizPlayerDoc(incoming())
+          && incoming().id == playerId
+          && incoming().uid == request.auth.uid
+          && incoming().updatedAt == request.time;
+
+        allow update: if isRoomCode(roomCode)
+          && isValidId(playerId)
+          && isSignedIn()
+          && isValidQuizPlayerDoc(incoming())
+          && incoming().id == existing().id
+          && incoming().uid == existing().uid
+          && incoming().updatedAt == request.time
+          && (
+            existing().uid == request.auth.uid ||
+            get(/databases/$(database)/documents/quizRooms/$(roomCode)).data.hostUid == request.auth.uid
+          );
+
+        allow delete: if isRoomCode(roomCode)
+          && isValidId(playerId)
+          && isSignedIn()
+          && (
+            existing().uid == request.auth.uid ||
+            get(/databases/$(database)/documents/quizRooms/$(roomCode)).data.hostUid == request.auth.uid
+          );
+      }
     }
   }
 }

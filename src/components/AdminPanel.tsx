@@ -1,35 +1,53 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
-import { listAllUserAccounts, updateUserRole } from '../lib/syncService';
+import { ensureBootstrapAdminRole, listAllUserAccounts, updateUserRole } from '../lib/syncService';
 import { UserAccountDoc, UserRole } from '../types';
 
 interface AdminPanelProps {
   currentAdminUid: string;
+  currentAdminEmail?: string | null;
+  currentAdminAccount?: UserAccountDoc | null;
 }
 
-export function AdminPanel({ currentAdminUid }: AdminPanelProps) {
+export function AdminPanel({
+  currentAdminUid,
+  currentAdminEmail,
+  currentAdminAccount,
+}: AdminPanelProps) {
   const [users, setUsers] = useState<UserAccountDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      if (currentAdminEmail && currentAdminAccount) {
+        await ensureBootstrapAdminRole(currentAdminUid, currentAdminEmail, currentAdminAccount);
+      }
       const list = await listAllUserAccounts();
-      list.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      list.sort((a, b) =>
+        (a.displayName || a.uid || '').localeCompare(b.displayName || b.uid || '')
+      );
       setUsers(list);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load users.');
+      let msg = err instanceof Error ? err.message : 'Unable to load users.';
+      try {
+        const parsed = JSON.parse(msg) as { error?: string };
+        if (parsed?.error) msg = parsed.error;
+      } catch {
+        // keep original string
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentAdminUid, currentAdminEmail, currentAdminAccount]);
 
   useEffect(() => {
     void loadUsers();
-  }, []);
+  }, [loadUsers]);
 
   const handleRoleChange = async (targetUid: string, role: UserRole) => {
     setUpdatingUid(targetUid);
@@ -40,7 +58,14 @@ export function AdminPanel({ currentAdminUid }: AdminPanelProps) {
         prev.map((u) => (u.uid === targetUid ? { ...u, role } : u))
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update role.');
+      let msg = err instanceof Error ? err.message : 'Failed to update role.';
+      try {
+        const parsed = JSON.parse(msg) as { error?: string };
+        if (parsed?.error) msg = parsed.error;
+      } catch {
+        // keep original string
+      }
+      setError(msg);
     } finally {
       setUpdatingUid(null);
     }
