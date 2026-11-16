@@ -207,6 +207,7 @@ export interface StudyPack {
   highlights: string[];
   tags: string[];
   author?: string;
+  isStandard?: boolean;
   isCustom?: boolean;
   visibility?: 'private' | 'public';
   ownerId?: string;

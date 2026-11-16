@@ -554,7 +554,7 @@ body[data-m=cards] #vbar,body[data-m=cards] #mmwrap{display:none!important}
 </section>
 <script>
 /* storage: browser + encrypted parent cloud bridge */
-const LS=(()=>{const mem={},dirty={};let cloudUid=null,tm=null;const api={cloud:false,err:null,onload:null,onsync:null,onlook:null,oncmd:null,onimport:null,onflush:null,onapply:null,onaddcards:null,onreset:null};
+const LS=(()=>{const mem={},dirty={};let cloudUid=null,tm=null;const api={cloud:false,err:null,onload:null,onsync:null,onlook:null,oncmd:null,onimport:null,onflush:null,onapply:null,ondisable:null,onaddcards:null,onreset:null};
 const RESERVED_PREFIX=/^(studydeck_|mockplanner\.)/;
 const loadGuest=()=>{for(const k of Object.keys(mem))delete mem[k];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&!RESERVED_PREFIX.test(k))mem[k]=localStorage.getItem(k)}}catch(e){}};
 loadGuest();
@@ -596,7 +596,10 @@ window.addEventListener("message",(ev)=>{
     if(api.onimport)api.onimport(d.entries,d.mode==="replace"?"replace":"merge",!!d.clearExisting);
     flush();
   }else if(d.type==="BRIDGE_APPLY_PACK"&&d.packRevision){
-    if(api.onapply)api.onapply(d.packRevision);
+    if(api.onapply)api.onapply(d.packRevision,d.packId||"");
+    flush();
+  }else if(d.type==="BRIDGE_DISABLE_PACK"&&d.packId){
+    if(api.ondisable)api.ondisable(d.packId);
     flush();
   }else if(d.type==="BRIDGE_ADD_CARDS"){
     if(api.onaddcards)api.onaddcards(d);
@@ -1877,7 +1880,8 @@ function loadUserReg(){
     hiddenSubs:hidden,
     renamedSubs:(o&&o.renamedSubs&&typeof o.renamedSubs==='object')?o.renamedSubs:{},
     topicTitles:(o&&o.topicTitles&&typeof o.topicTitles==='object')?o.topicTitles:{},
-    baseTopics
+    baseTopics,
+    packLinks:(o&&o.packLinks&&typeof o.packLinks==='object')?o.packLinks:{}
   };
 }
 function saveUserReg(){try{LS.set('user-subjects',JSON.stringify(USER_REG))}catch(e){}}
@@ -2505,16 +2509,20 @@ LS.onreset=()=>{
   edits={};MM=null;fs=null;topic='';lastT={};
   rebuildRegistry();fload();buildTabs();render();renderSubjMgr();syncParentRev();emitStudyStats();
 };
-LS.onapply=pr=>{
+LS.onapply=(pr,packId)=>{
   if(!pr||typeof pr!=='object')return;
   if(!fs)fload();
   loadUserReg();
+  const pid=packId?clean(String(packId)):'';
+  if(pid&&!USER_REG.packLinks)USER_REG.packLinks={};
+  const pLink=pid?(USER_REG.packLinks[pid]=USER_REG.packLinks[pid]||{baseTopics:[],subIds:[],topicIds:[],noteKeys:[]}):null;
   let firstTid='';
   const addedBase=[];
   if(Array.isArray(pr.baseTopics)){
     pr.baseTopics.forEach(bt=>{
       if(bt in BASE_D){
         if(!USER_REG.baseTopics.includes(bt))USER_REG.baseTopics.push(bt);
+        if(pLink&&!pLink.baseTopics.includes(bt))pLink.baseTopics.push(bt);
         addedBase.push(bt);
         if(!firstTid)firstTid=bt;
         const bs=BASE_SUBJECTS.find(s=>s.topics.some(t=>t[0]===bt));
@@ -2532,8 +2540,9 @@ LS.onapply=pr=>{
       if(!subjObj){
         const vw=normViews(ps.views,ps.kind==='tl'?'tl':'doc');
         const sid=ps.id&&!USER_REG.subs.some(u=>u.id===ps.id)?ps.id:('us_'+Date.now().toString(36)+'_'+si);
-        subjObj={id:sid,n:nm,kind:(vw.timeline&&!vw.notes)?'tl':'doc',views:vw,topics:[]};
+        subjObj={id:sid,n:nm,kind:(vw.timeline&&!vw.notes)?'tl':'doc',views:vw,topics:[],packId:pid||undefined};
         USER_REG.subs.push(subjObj);
+        if(pLink&&!pLink.subIds.includes(sid))pLink.subIds.push(sid);
       }
       subjMap.set(nm.toLowerCase(),subjObj.id);
       (ps.topics||[]).forEach((pt,ti)=>{
@@ -2544,14 +2553,18 @@ LS.onapply=pr=>{
           const tid=(pt.id&&!D[pt.id]&&!USER_REG.subs.some(u=>u.topics.some(t=>t.id===pt.id)))?pt.id:('ut_'+Date.now().toString(36)+'_'+si+'_'+ti);
           const vw=normViews(ps.views,subjObj.kind);
           const secs=Array.isArray(pt.sections)&&pt.sections.length?pt.sections:['Key concepts & notes'];
-          topObj={id:tid,label:lbl,title:pt.title||nm+': '+lbl,sub:nm+' · '+viewsLabel(vw),views:vw,sections:secs};
+          topObj={id:tid,label:lbl,title:pt.title||nm+': '+lbl,sub:nm+' · '+viewsLabel(vw),views:vw,sections:secs,packId:pid||undefined};
           subjObj.topics.push(topObj);
+          if(pLink&&!pLink.topicIds.includes(tid))pLink.topicIds.push(tid);
         }
         if(!firstTid)firstTid=topObj.id;
         if(pt.id)topicMap.set(pt.id,topObj.id);
         topicMap.set(nm.toLowerCase()+'::'+lbl.toLowerCase(),topObj.id);
         if(pt.notesHtml&&!LS.get('gdoc-'+topObj.id)){
-          try{LS.set('gdoc-'+topObj.id,cleanHTML(pt.notesHtml,true))}catch(e){}
+          try{
+            LS.set('gdoc-'+topObj.id,cleanHTML(pt.notesHtml,true));
+            if(pLink&&!pLink.noteKeys.includes('gdoc-'+topObj.id))pLink.noteKeys.push('gdoc-'+topObj.id);
+          }catch(e){}
         }
       });
     });
@@ -2573,7 +2586,7 @@ LS.onapply=pr=>{
         if(!fs.sel.includes(exSec.id))fs.sel.push(exSec.id);
       }else{
         const nid=(sc.id&&!curDeck.secs.some(z=>z.id===sc.id))?sc.id:('s_'+Date.now().toString(36)+'_'+si);
-        fs.secs.push({id:nid,t:tid,n:clean(sc.name)});
+        fs.secs.push({id:nid,t:tid,n:clean(sc.name),packId:pid||undefined});
         secIdMap.set(sc.id,nid);
         if(!fs.sel.includes(nid))fs.sel.push(nid);
       }
@@ -2591,17 +2604,85 @@ LS.onapply=pr=>{
         const sname=clean(cd.sectionName||'Core Flashcards');
         const ex=fdeck().secs.find(z=>z.t===tid&&z.n.toLowerCase()===sname.toLowerCase());
         if(ex)sid=ex.id;
-        else{sid='s_'+Date.now().toString(36)+'_c'+ci;fs.secs.push({id:sid,t:tid,n:sname});if(!fs.sel.includes(sid))fs.sel.push(sid)}
+        else{sid='s_'+Date.now().toString(36)+'_c'+ci;fs.secs.push({id:sid,t:tid,n:sname,packId:pid||undefined});if(!fs.sel.includes(sid))fs.sel.push(sid)}
       }
       const sig=sid+'::'+q.toLowerCase();
       if(!seen.has(sig)){
         seen.add(sig);
-        fs.add.push({id:'c'+Date.now().toString(36)+'_p'+ci,s:sid,q,a});
+        fs.add.push({id:'c'+Date.now().toString(36)+'_p'+ci,s:sid,q,a,packId:pid||undefined});
       }
     });
   }
   fsave();
   if(firstTid&&D[firstTid])topic=firstTid;
+  buildTabs();render();renderSubjMgr();syncParentRev();emitStudyStats();
+};
+LS.ondisable=packId=>{
+  const pid=clean(String(packId||''));
+  if(!pid)return;
+  if(!fs)fload();
+  loadUserReg();
+  const removedCardIds=new Set();
+  fs.add=fs.add.filter(c=>{
+    if(c.packId===pid){removedCardIds.add(c.id);return false}
+    return true;
+  });
+  removedCardIds.forEach(cid=>{
+    delete fs.prog[cid];
+    delete fs.cyc[cid];
+  });
+  if(fs.resume&&Array.isArray(fs.resume.q)){
+    fs.resume.q=fs.resume.q.filter(id=>!removedCardIds.has(id));
+    if(!fs.resume.q.length)fs.resume=null;
+  }
+  const usedSecIds=new Set(fs.add.map(c=>c.s));
+  const removedSecIds=new Set();
+  fs.secs=fs.secs.filter(s=>{
+    if(s.packId===pid&&!usedSecIds.has(s.id)){removedSecIds.add(s.id);return false}
+    if(s.packId===pid)delete s.packId;
+    return true;
+  });
+  fs.sel=fs.sel.filter(id=>!removedSecIds.has(id));
+  const keepTopicIds=new Set(fs.secs.map(s=>s.t));
+  const links=USER_REG.packLinks||{};
+  const pLink=links[pid]||null;
+  const otherLinks=Object.entries(links).filter(([k])=>k!==pid).map(([,v])=>v);
+  const otherBase=new Set(otherLinks.flatMap(v=>Array.isArray(v.baseTopics)?v.baseTopics:[]));
+  const otherNoteKeys=new Set(otherLinks.flatMap(v=>Array.isArray(v.noteKeys)?v.noteKeys:[]));
+  if(pLink&&Array.isArray(pLink.noteKeys)){
+    pLink.noteKeys.forEach(nk=>{if(!otherNoteKeys.has(nk))try{LS.del(nk)}catch(e){}});
+  }
+  if(pLink&&Array.isArray(pLink.baseTopics)){
+    const rmBase=new Set(pLink.baseTopics.filter(bt=>!otherBase.has(bt)));
+    USER_REG.baseTopics=(USER_REG.baseTopics||[]).filter(bt=>!rmBase.has(bt));
+  }
+  const linkedTopicSet=new Set(pLink&&Array.isArray(pLink.topicIds)?pLink.topicIds:[]);
+  const linkedSubSet=new Set(pLink&&Array.isArray(pLink.subIds)?pLink.subIds:[]);
+  USER_REG.extraTopics=USER_REG.extraTopics.filter(et=>{
+    if(et.packId===pid&&!keepTopicIds.has(et.id)){cleanupTopicStorage(et.id);return false}
+    if(et.packId===pid)delete et.packId;
+    return true;
+  });
+  USER_REG.subs=USER_REG.subs.filter(us=>{
+    us.topics=(us.topics||[]).filter(tp=>{
+      const ownedByPack=tp.packId===pid||linkedTopicSet.has(tp.id);
+      if(ownedByPack&&!keepTopicIds.has(tp.id)){cleanupTopicStorage(tp.id);return false}
+      if(tp.packId===pid)delete tp.packId;
+      return true;
+    });
+    const hasExtra=USER_REG.extraTopics.some(et=>et.subjId===us.id);
+    const subOwned=us.packId===pid||linkedSubSet.has(us.id);
+    if(subOwned&&!us.topics.length&&!hasExtra)return false;
+    if(us.packId===pid)delete us.packId;
+    return true;
+  });
+  if(USER_REG.packLinks)delete USER_REG.packLinks[pid];
+  saveUserReg();
+  rebuildRegistry();
+  const validSecs=new Set(fdeck().secs.map(z=>z.id));
+  fs.sel=fs.sel.filter(id=>validSecs.has(id));
+  if(S&&S.q)S=null;
+  fsave();
   buildTabs();render();renderSubjMgr();syncParentRev();emitStudyStats();
 };
 LS.onaddcards=payload=>{

@@ -9,6 +9,7 @@ import { Sidebar } from './components/Sidebar';
 import { StudyPacksView } from './components/StudyPacksView';
 import { TopBar } from './components/TopBar';
 import {
+  CURATED_STUDY_PACKS,
   loadAppliedPackIdsFromLocal,
   loadCustomPacksFromLocal,
   saveAppliedPackIdsToLocal,
@@ -208,6 +209,7 @@ export default function App() {
     planner: false,
   });
   const latestStudyStatsRef = useRef<unknown>(null);
+  const latestActivePacksRef = useRef<{ count: number; titles: string[] }>({ count: 0, titles: [] });
   const pendingGuestResolveRef = useRef<{
     revision?: (entries: Record<string, string>) => void;
     planner?: (entries: Record<string, string>) => void;
@@ -571,6 +573,12 @@ export default function App() {
             app: 'planner',
             accountStats,
           });
+          postToApp('planner', {
+            type: 'BRIDGE_ACTIVE_PACKS',
+            app: 'planner',
+            count: latestActivePacksRef.current.count,
+            titles: latestActivePacksRef.current.titles,
+          });
         }
         return;
       }
@@ -829,10 +837,11 @@ export default function App() {
 
   const persistPacksToCloud = useCallback(
     async (nextCustom: StudyPack[], nextApplied: string[]) => {
-      saveCustomPacksToLocal(nextCustom);
+      const customOnly = nextCustom.filter((p) => !p.isStandard);
+      saveCustomPacksToLocal(customOnly);
       saveAppliedPackIdsToLocal(nextApplied);
       if (!firebaseUser || !account || !dek) return;
-      const customStr = JSON.stringify(nextCustom);
+      const customStr = JSON.stringify(customOnly);
       const appliedStr = JSON.stringify(nextApplied);
       latestEntriesRef.current.revision['studydeck-packs'] = customStr;
       latestEntriesRef.current.revision['studydeck-applied-packs'] = appliedStr;
@@ -863,12 +872,71 @@ export default function App() {
     [firebaseUser, account, dek]
   );
 
+  const handleDisableStudyPack = useCallback(
+    async (packId: string) => {
+      postToApp('revision', {
+        type: 'BRIDGE_DISABLE_PACK',
+        app: 'revision',
+        packId,
+      });
+      postToApp('planner', {
+        type: 'BRIDGE_DISABLE_PACK',
+        app: 'planner',
+        packId,
+      });
+      const nextApplied = appliedPackIds.filter((id) => id !== packId);
+      setAppliedPackIds(nextApplied);
+      await persistPacksToCloud(customPacks, nextApplied);
+      if (firebaseUser && account && dek) {
+        await recordActivity(firebaseUser.uid, `Disabled Study Pack: ${packId}`);
+      }
+    },
+    [postToApp, appliedPackIds, customPacks, persistPacksToCloud, firebaseUser, account, dek]
+  );
+
+  const handleDisableAllPacks = useCallback(async () => {
+    for (const id of appliedPackIds) {
+      postToApp('revision', {
+        type: 'BRIDGE_DISABLE_PACK',
+        app: 'revision',
+        packId: id,
+      });
+      postToApp('planner', {
+        type: 'BRIDGE_DISABLE_PACK',
+        app: 'planner',
+        packId: id,
+      });
+    }
+    setAppliedPackIds([]);
+    await persistPacksToCloud(customPacks, []);
+    if (firebaseUser && account && dek && appliedPackIds.length > 0) {
+      await recordActivity(firebaseUser.uid, 'Disabled all active Study Packs');
+    }
+  }, [appliedPackIds, postToApp, customPacks, persistPacksToCloud, firebaseUser, account, dek]);
+
   const handleApplyStudyPack = useCallback(
-    async (pack: StudyPack) => {
+    async (pack: StudyPack, options?: { replaceExisting?: boolean }) => {
+      const replaceExisting = Boolean(options?.replaceExisting);
+      if (replaceExisting) {
+        for (const oldId of appliedPackIds) {
+          if (oldId === pack.id) continue;
+          postToApp('revision', {
+            type: 'BRIDGE_DISABLE_PACK',
+            app: 'revision',
+            packId: oldId,
+          });
+          postToApp('planner', {
+            type: 'BRIDGE_DISABLE_PACK',
+            app: 'planner',
+            packId: oldId,
+          });
+        }
+      }
       if (pack.revision) {
         postToApp('revision', {
           type: 'BRIDGE_APPLY_PACK',
           app: 'revision',
+          packId: pack.id,
           packRevision: pack.revision,
         });
       }
@@ -876,16 +944,22 @@ export default function App() {
         postToApp('planner', {
           type: 'BRIDGE_APPLY_PACK',
           app: 'planner',
+          packId: pack.id,
           packPlanner: pack.planner,
         });
       }
-      const nextApplied = appliedPackIds.includes(pack.id)
+      const nextApplied = replaceExisting
+        ? [pack.id]
+        : appliedPackIds.includes(pack.id)
         ? appliedPackIds
         : [...appliedPackIds, pack.id];
       setAppliedPackIds(nextApplied);
       await persistPacksToCloud(customPacks, nextApplied);
       if (firebaseUser && account && dek) {
-        await recordActivity(firebaseUser.uid, `Applied Study Pack: ${pack.title}`);
+        await recordActivity(
+          firebaseUser.uid,
+          `${replaceExisting ? 'Switched to' : 'Enabled'} Study Pack: ${pack.title}`
+        );
       }
     },
     [postToApp, appliedPackIds, customPacks, persistPacksToCloud, firebaseUser, account, dek]
@@ -1041,11 +1115,16 @@ export default function App() {
 
   const mergedStudyPacks = useMemo(() => {
     const byId = new Map<string, StudyPack>();
+    for (const std of CURATED_STUDY_PACKS) {
+      byId.set(std.id, std);
+    }
     for (const p of userCloudPacks) {
       byId.set(p.id, { ...p, visibility: p.visibility || 'private' });
     }
     for (const p of customPacks) {
-      byId.set(p.id, { ...p, visibility: p.visibility || 'private' });
+      if (!p.isStandard) {
+        byId.set(p.id, { ...p, visibility: p.visibility || 'private' });
+      }
     }
     for (const pub of filePublicPacks) {
       byId.set(pub.id, { ...pub, visibility: 'public' });
@@ -1053,10 +1132,30 @@ export default function App() {
     for (const pub of publicPacks) {
       byId.set(pub.id, { ...pub, visibility: 'public' });
     }
-    return Array.from(byId.values()).sort((a, b) =>
-      (b.createdAt || '').localeCompare(a.createdAt || '')
-    );
+    return Array.from(byId.values()).sort((a, b) => {
+      // Surface active packs & community/custom packs cleanly while preserving standard combos
+      const aDate = a.createdAt || '';
+      const bDate = b.createdAt || '';
+      if (a.isStandard !== b.isStandard) {
+        return bDate.localeCompare(aDate);
+      }
+      return bDate.localeCompare(aDate);
+    });
   }, [userCloudPacks, customPacks, filePublicPacks, publicPacks]);
+
+  useEffect(() => {
+    const titles = appliedPackIds
+      .map((id) => mergedStudyPacks.find((p) => p.id === id)?.title || '')
+      .filter(Boolean);
+    latestActivePacksRef.current = { count: appliedPackIds.length, titles };
+    if (!readyAppsRef.current.planner) return;
+    postToApp('planner', {
+      type: 'BRIDGE_ACTIVE_PACKS',
+      app: 'planner',
+      count: appliedPackIds.length,
+      titles,
+    });
+  }, [appliedPackIds, mergedStudyPacks, postToApp]);
 
   const handleResetWorkspace = useCallback(async () => {
     setCustomPacks([]);
@@ -1445,6 +1544,8 @@ export default function App() {
             )}
             onOpenAuth={() => setAuthModalOpen(true)}
             onApplyPack={handleApplyStudyPack}
+            onDisablePack={handleDisableStudyPack}
+            onDisableAllPacks={handleDisableAllPacks}
             onSaveCustomPack={handleSaveCustomPack}
             onTogglePackVisibility={handleTogglePackVisibility}
             onDeleteCustomPack={handleDeleteCustomPack}

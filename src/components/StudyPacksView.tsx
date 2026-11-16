@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  Copy,
   Download,
   FileText,
   Globe,
@@ -13,12 +12,19 @@ import {
   Lock,
   Package,
   Plus,
+  Power,
+  RefreshCw,
+  Repeat,
   Search,
+  Sparkles,
   Trash2,
   Upload,
+  Users,
+  X,
 } from 'lucide-react';
 import {
   buildStudyPackFromDraft,
+  markdownLinesToHtml,
   parseDocxFile,
   parseStudyPackInput,
   STUDY_PACK_TEMPLATE_TEXT,
@@ -44,7 +50,9 @@ interface StudyPacksViewProps {
   isSignedInVerified?: boolean;
   isAdmin?: boolean;
   onOpenAuth?: () => void;
-  onApplyPack: (pack: StudyPack) => Promise<void>;
+  onApplyPack: (pack: StudyPack, options?: { replaceExisting?: boolean }) => Promise<void>;
+  onDisablePack: (packId: string) => Promise<void>;
+  onDisableAllPacks: () => Promise<void>;
   onSaveCustomPack: (pack: StudyPack) => Promise<void>;
   onTogglePackVisibility?: (pack: StudyPack, nextVisibility: 'public' | 'private') => Promise<void>;
   onDeleteCustomPack: (packId: string) => Promise<void>;
@@ -54,8 +62,27 @@ interface StudyPacksViewProps {
   onOpenSubjects: () => void;
 }
 
-type FilterTab = 'all' | 'public' | 'private' | 'combo' | 'flashcards' | 'notes';
-type BuilderSourceMode = 'template' | 'workspace';
+type FilterTab = 'all' | 'standard' | 'community' | 'mine' | 'active';
+type BuilderSourceMode = 'quick' | 'file' | 'workspace';
+
+interface QuickCardRow {
+  id: string;
+  q: string;
+  a: string;
+}
+
+function stripHtmlPreview(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function inferCategory(subjCount: number, cardCount: number, noteCount: number): StudyPackCategory {
+  if (subjCount > 1 || (cardCount > 0 && noteCount > 0)) return 'combo';
+  if (cardCount > 0) return 'flashcards';
+  return 'notes';
+}
 
 export function StudyPacksView({
   deckSnapshot,
@@ -66,6 +93,8 @@ export function StudyPacksView({
   isAdmin = false,
   onOpenAuth,
   onApplyPack,
+  onDisablePack,
+  onDisableAllPacks,
   onSaveCustomPack,
   onTogglePackVisibility,
   onDeleteCustomPack,
@@ -77,67 +106,97 @@ export function StudyPacksView({
   const [filter, setFilter] = useState<FilterTab>('all');
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [bannerMsg, setBannerMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Builder state
   const [builderOpen, setBuilderOpen] = useState<boolean>(false);
-  const [sourceMode, setSourceMode] = useState<BuilderSourceMode>('template');
+  const [sourceMode, setSourceMode] = useState<BuilderSourceMode>('quick');
   const [showTemplateGuide, setShowTemplateGuide] = useState<boolean>(false);
-  const [copiedTemplate, setCopiedTemplate] = useState<boolean>(false);
 
-  // Template / File upload input state
+  // Shared creator fields (minimal, clean)
+  const [packTitle, setPackTitle] = useState('');
+  const [packSubtitle, setPackSubtitle] = useState('');
+  const [packBoard, setPackBoard] = useState('GCSE');
+  const [packVisibility, setPackVisibility] = useState<'private' | 'public'>('private');
+  const [togglingVisId, setTogglingVisId] = useState<string | null>(null);
+  const [savingCustom, setSavingCustom] = useState(false);
+
+  // Quick Form fields (no bracket syntax needed)
+  const [quickSubject, setQuickSubject] = useState('');
+  const [quickSpecs, setQuickSpecs] = useState('');
+  const [quickNotes, setQuickNotes] = useState('');
+  const [quickCards, setQuickCards] = useState<QuickCardRow[]>([
+    { id: 'c1', q: '', a: '' },
+    { id: 'c2', q: '', a: '' },
+  ]);
+
+  // File / Template mode fields
   const [templateText, setTemplateText] = useState('');
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [uploadedWordHtml, setUploadedWordHtml] = useState<string | undefined>(undefined);
-  const [packTitle, setPackTitle] = useState('');
-  const [packSubtitle, setPackSubtitle] = useState('');
-  const [packBoard, setPackBoard] = useState('Custom Study Pack');
-  const [packCategory, setPackCategory] = useState<StudyPackCategory>('combo');
-  const [packVisibility, setPackVisibility] = useState<'private' | 'public'>('private');
-  const [togglingVisId, setTogglingVisId] = useState<string | null>(null);
+
+  // Workspace packaging mode
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
+
+  // Advanced include toggles (tucked inside <details>)
   const [includeSubjects, setIncludeSubjects] = useState(true);
   const [includeFlashcards, setIncludeFlashcards] = useState(true);
   const [includeNotes, setIncludeNotes] = useState(true);
   const [includeTodos, setIncludeTodos] = useState(true);
-  const [savingCustom, setSavingCustom] = useState(false);
-
-  // Package from Workspace state
-  const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
 
   const docInputRef = useRef<HTMLInputElement | null>(null);
   const jsonImportRef = useRef<HTMLInputElement | null>(null);
 
+  const appliedSet = useMemo(() => new Set(appliedPackIds), [appliedPackIds]);
+
+  const activePacks = useMemo(
+    () => customPacks.filter((p) => appliedSet.has(p.id)),
+    [customPacks, appliedSet]
+  );
+
   const parsedDraft = useMemo(() => {
+    if (sourceMode !== 'file') return null;
     if (!templateText.trim() && !uploadedWordHtml) return null;
     return parseStudyPackInput(templateText, {
       fallbackTitle: packTitle.trim() || uploadedFileName.replace(/\.[^.]+$/, ''),
       rawWordHtml: uploadedWordHtml,
     });
-  }, [templateText, uploadedWordHtml, packTitle, uploadedFileName]);
+  }, [sourceMode, templateText, uploadedWordHtml, packTitle, uploadedFileName]);
 
-  const publicCount = useMemo(
-    () => customPacks.filter((p) => p.visibility === 'public').length,
-    [customPacks]
-  );
-  const privateCount = useMemo(
-    () => customPacks.filter((p) => p.visibility !== 'public').length,
-    [customPacks]
-  );
+  const counts = useMemo(() => {
+    let standard = 0;
+    let community = 0;
+    let mine = 0;
+    for (const p of customPacks) {
+      if (p.isStandard) standard++;
+      else if (p.visibility === 'public') community++;
+      if (!p.isStandard && (!p.ownerId || (currentUserUid && p.ownerId === currentUserUid))) {
+        mine++;
+      }
+    }
+    return {
+      all: customPacks.length,
+      standard,
+      community,
+      mine,
+      active: activePacks.length,
+    };
+  }, [customPacks, currentUserUid, activePacks.length]);
 
   const filteredPacks = useMemo(() => {
     const q = search.trim().toLowerCase();
     return customPacks.filter((pack) => {
-      if (filter === 'public' && pack.visibility !== 'public') return false;
-      if (filter === 'private' && pack.visibility === 'public') return false;
-      if (
-        (filter === 'combo' || filter === 'flashcards' || filter === 'notes') &&
-        pack.category !== filter
-      ) {
-        return false;
-      }
+      const isMine =
+        !pack.isStandard && (!pack.ownerId || (currentUserUid && pack.ownerId === currentUserUid));
+      if (filter === 'standard' && !pack.isStandard) return false;
+      if (filter === 'community' && (pack.isStandard || pack.visibility !== 'public')) return false;
+      if (filter === 'mine' && !isMine) return false;
+      if (filter === 'active' && !appliedSet.has(pack.id)) return false;
+
       if (!q) return true;
+      const subjNames = (pack.planner?.subjects || []).map((s) => `${s.name} ${s.topics.join(' ')}`);
       const hay = [
         pack.title,
         pack.subtitle,
@@ -145,14 +204,13 @@ export function StudyPacksView({
         pack.ownerName || '',
         ...(pack.tags || []),
         ...(pack.highlights || []),
+        ...subjNames,
       ]
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [customPacks, filter, search]);
-
-  const appliedSet = useMemo(() => new Set(appliedPackIds), [appliedPackIds]);
+  }, [customPacks, filter, search, currentUserUid, appliedSet]);
 
   const handleDownloadTemplate = () => {
     const blob = new Blob([STUDY_PACK_TEMPLATE_TEXT], { type: 'text/plain;charset=utf-8' });
@@ -162,12 +220,6 @@ export function StudyPacksView({
     a.download = 'studydeck-pack-template.txt';
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  const handleCopyTemplate = () => {
-    void navigator.clipboard.writeText(STUDY_PACK_TEMPLATE_TEXT);
-    setCopiedTemplate(true);
-    window.setTimeout(() => setCopiedTemplate(false), 1800);
   };
 
   const handleUploadTemplateDocument = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -190,6 +242,7 @@ export function StudyPacksView({
         const imported: StudyPack = {
           ...candidate,
           id: `custom_${Date.now().toString(36)}`,
+          isStandard: false,
           isCustom: true,
           visibility: 'private',
           ownerId: currentUserUid || undefined,
@@ -197,7 +250,7 @@ export function StudyPacksView({
         };
         await onSaveCustomPack(imported);
         setBannerMsg({
-          text: `Imported pack "${imported.title}". Click "Use Study Pack" to load it into your workspace.`,
+          text: `Imported "${imported.title}". Click Use Study Pack whenever you want to enable it.`,
           ok: true,
         });
         return;
@@ -218,7 +271,7 @@ export function StudyPacksView({
           setPackBoard(draft.examBoard);
         }
         setBuilderOpen(true);
-        setSourceMode('template');
+        setSourceMode('file');
         return;
       }
 
@@ -241,7 +294,7 @@ export function StudyPacksView({
         setPackBoard(draft.examBoard);
       }
       setBuilderOpen(true);
-      setSourceMode('template');
+      setSourceMode('file');
     } catch (err) {
       setBannerMsg({
         text: err instanceof Error ? err.message : 'Could not parse that uploaded file.',
@@ -267,6 +320,7 @@ export function StudyPacksView({
       const imported: StudyPack = {
         ...candidate,
         id: `custom_${Date.now().toString(36)}`,
+        isStandard: false,
         isCustom: true,
         visibility: 'private',
         ownerId: currentUserUid || undefined,
@@ -274,7 +328,7 @@ export function StudyPacksView({
       };
       await onSaveCustomPack(imported);
       setBannerMsg({
-        text: `Imported pack "${imported.title}". Click "Use Study Pack" to add it into your workspace.`,
+        text: `Imported "${imported.title}". Enable it anytime below.`,
         ok: true,
       });
     } catch (err) {
@@ -285,22 +339,43 @@ export function StudyPacksView({
     }
   };
 
-  const handleUsePack = async (pack: StudyPack) => {
-    setApplyingId(pack.id);
+  const handleEnablePack = async (pack: StudyPack, replaceExisting: boolean) => {
+    setBusyId(pack.id);
     setBannerMsg(null);
     try {
-      await onApplyPack(pack);
+      await onApplyPack(pack, { replaceExisting });
       setBannerMsg({
-        text: `Loaded "${pack.title}" into your workspace — Subjects, Flashcards, and Notes are ready.`,
+        text: replaceExisting
+          ? `Switched to "${pack.title}" — previous pack disabled and new Subjects, Spec Topics, Flashcards & Notes loaded.`
+          : `Enabled "${pack.title}" — Subjects, Specification subtopics, Flashcards & Notes added.`,
         ok: true,
       });
     } catch (err) {
       setBannerMsg({
-        text: err instanceof Error ? err.message : 'Could not apply this Study Pack.',
+        text: err instanceof Error ? err.message : 'Could not enable this Study Pack.',
         ok: false,
       });
     } finally {
-      setApplyingId(null);
+      setBusyId(null);
+    }
+  };
+
+  const handleDisable = async (pack: StudyPack) => {
+    setBusyId(pack.id);
+    setBannerMsg(null);
+    try {
+      await onDisablePack(pack.id);
+      setBannerMsg({
+        text: `Disabled "${pack.title}" — its subjects, spec topics, flashcards, and notes were removed cleanly.`,
+        ok: true,
+      });
+    } catch (err) {
+      setBannerMsg({
+        text: err instanceof Error ? err.message : 'Could not disable this Study Pack.',
+        ok: false,
+      });
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -315,17 +390,45 @@ export function StudyPacksView({
     URL.revokeObjectURL(url);
   };
 
-  const handleCreateFromTemplate = async (applyImmediately: boolean) => {
-    if (!parsedDraft) {
-      setBannerMsg({
-        text: 'Upload a .txt, .md, .csv, or .docx document or paste template content first.',
-        ok: false,
-      });
+  const resetBuilderFields = () => {
+    setBuilderOpen(false);
+    setPackTitle('');
+    setPackSubtitle('');
+    setQuickSubject('');
+    setQuickSpecs('');
+    setQuickNotes('');
+    setQuickCards([
+      { id: 'c1', q: '', a: '' },
+      { id: 'c2', q: '', a: '' },
+    ]);
+    setTemplateText('');
+    setUploadedFileName('');
+    setUploadedWordHtml(undefined);
+  };
+
+  const handleCreateQuickPack = async (applyImmediately: boolean) => {
+    const title = packTitle.trim() || (quickSubject.trim() ? `${quickSubject.trim()} Study Pack` : '');
+    if (!title) {
+      setBannerMsg({ text: 'Give your Study Pack a title or subject name.', ok: false });
       return;
     }
-    if (!includeSubjects && !includeFlashcards && !includeNotes && !includeTodos) {
+
+    const subjName = quickSubject.trim() || title;
+    const specList = quickSpecs
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const topics = specList.length ? specList : ['Core Topic'];
+    const validCards = quickCards
+      .map((c) => ({ q: c.q.trim(), a: c.a.trim() }))
+      .filter((c) => c.q && c.a);
+    const notesHtml = quickNotes.trim()
+      ? markdownLinesToHtml(quickNotes.replace(/\r/g, '').split('\n'))
+      : '';
+
+    if (!specList.length && !validCards.length && !notesHtml) {
       setBannerMsg({
-        text: 'Check at least one option to include (Subjects & Topics, Flashcards, Notes, or To-dos).',
+        text: 'Add at least some specification topics, study notes, or flashcards first.',
         ok: false,
       });
       return;
@@ -333,7 +436,7 @@ export function StudyPacksView({
 
     if (packVisibility === 'public' && !isSignedInVerified) {
       setBannerMsg({
-        text: 'Sign in with Google to publish a Public Study Pack, or switch visibility to Private.',
+        text: 'Sign in with Google to share a Public Study Pack, or keep it Private.',
         ok: false,
       });
       return;
@@ -342,11 +445,140 @@ export function StudyPacksView({
     setSavingCustom(true);
     setBannerMsg(null);
     try {
+      const packId = `custom_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`;
+      const sid = `${packId}_s0`;
+      const firstTid = `${packId}_s0_t0`;
+      const secId = `${packId}_sec0`;
+
+      const revTopics = topics.map((label, ti) => ({
+        id: `${packId}_s0_t${ti}`,
+        label,
+        title: `${subjName}: ${label}`,
+        sections: ['Specification Notes'],
+        notesHtml: ti === 0 && includeNotes ? notesHtml : '',
+      }));
+
+      const category = inferCategory(1, validCards.length, notesHtml ? 1 : 0);
+      const highlights: string[] = [
+        `${subjName} · ${topics.length} specification topic${topics.length === 1 ? '' : 's'}`,
+      ];
+      if (validCards.length > 0 && includeFlashcards) {
+        highlights.push(`${validCards.length} active-recall flashcard${validCards.length === 1 ? '' : 's'}`);
+      }
+      if (notesHtml && includeNotes) {
+        highlights.push('Includes formatted study notes');
+      }
+
+      const newPack: StudyPack = {
+        id: packId,
+        title,
+        subtitle:
+          packSubtitle.trim() ||
+          `${subjName}: ${topics.slice(0, 3).join(', ')}${topics.length > 3 ? '…' : ''}`,
+        category,
+        examBoard: packBoard.trim() || 'Custom',
+        visibility: packVisibility,
+        ownerId: currentUserUid || undefined,
+        isCustom: true,
+        createdAt: new Date().toISOString(),
+        subjectCountPreview: includeSubjects ? 1 : 0,
+        topicCountPreview: topics.length,
+        cardCountPreview: includeFlashcards ? validCards.length : 0,
+        tags: [packBoard.trim() || 'Custom', subjName],
+        highlights,
+        revision: {
+          subjects: [
+            {
+              id: sid,
+              name: subjName,
+              kind: 'doc',
+              views: { notes: true, timeline: false, mindmap: true },
+              topics: revTopics,
+            },
+          ],
+          sections:
+            includeFlashcards && validCards.length > 0
+              ? [
+                  {
+                    id: secId,
+                    topicId: firstTid,
+                    topicLabel: topics[0],
+                    subjectName: subjName,
+                    name: topics[0],
+                  },
+                ]
+              : [],
+          cards:
+            includeFlashcards && validCards.length > 0
+              ? validCards.map((c) => ({
+                  sectionId: secId,
+                  sectionName: topics[0],
+                  topicId: firstTid,
+                  topicLabel: topics[0],
+                  subjectName: subjName,
+                  q: c.q,
+                  a: c.a,
+                }))
+              : [],
+        },
+        planner: {
+          subjects: includeSubjects
+            ? [{ name: subjName, weight: 2, topics }]
+            : [],
+          todos: [],
+        },
+      };
+
+      await onSaveCustomPack(newPack);
+      if (applyImmediately) {
+        await onApplyPack(newPack, { replaceExisting: false });
+      }
+      resetBuilderFields();
+      setBannerMsg({
+        text: applyImmediately
+          ? `Created & enabled "${newPack.title}" (${packVisibility}).`
+          : `Saved "${newPack.title}" (${packVisibility}).`,
+        ok: true,
+      });
+    } catch (err) {
+      setBannerMsg({
+        text: err instanceof Error ? err.message : 'Failed to create Study Pack.',
+        ok: false,
+      });
+    } finally {
+      setSavingCustom(false);
+    }
+  };
+
+  const handleCreateFromFile = async (applyImmediately: boolean) => {
+    if (!parsedDraft) {
+      setBannerMsg({
+        text: 'Upload a .docx, .txt, .md, or .csv file or paste notes/flashcards first.',
+        ok: false,
+      });
+      return;
+    }
+    if (packVisibility === 'public' && !isSignedInVerified) {
+      setBannerMsg({
+        text: 'Sign in with Google to share a Public Study Pack, or keep it Private.',
+        ok: false,
+      });
+      return;
+    }
+
+    setSavingCustom(true);
+    setBannerMsg(null);
+    try {
+      const category = inferCategory(
+        parsedDraft.subjects.length,
+        parsedDraft.cards.length,
+        parsedDraft.notesByTopic.length
+      );
       const built = buildStudyPackFromDraft(parsedDraft, {
         title: packTitle.trim() || parsedDraft.title,
         subtitle: packSubtitle.trim() || parsedDraft.subtitle,
         examBoard: packBoard.trim() || parsedDraft.examBoard,
-        category: packCategory,
+        category,
         includeSubjects,
         includeFlashcards,
         includeNotes,
@@ -360,19 +592,13 @@ export function StudyPacksView({
 
       await onSaveCustomPack(pack);
       if (applyImmediately) {
-        await onApplyPack(pack);
+        await onApplyPack(pack, { replaceExisting: false });
       }
-
-      setBuilderOpen(false);
-      setTemplateText('');
-      setUploadedFileName('');
-      setUploadedWordHtml(undefined);
-      setPackTitle('');
-      setPackSubtitle('');
+      resetBuilderFields();
       setBannerMsg({
         text: applyImmediately
-          ? `Created & applied ${packVisibility} Study Pack "${pack.title}" into your workspace.`
-          : `Saved ${packVisibility} Study Pack "${pack.title}".`,
+          ? `Created & enabled "${pack.title}" (${packVisibility}).`
+          : `Saved "${pack.title}" (${packVisibility}).`,
         ok: true,
       });
     } catch (err) {
@@ -385,7 +611,7 @@ export function StudyPacksView({
     }
   };
 
-  const handleCreateFromWorkspace = async () => {
+  const handleCreateFromWorkspace = async (applyImmediately: boolean) => {
     const title = packTitle.trim();
     if (!title) {
       setBannerMsg({ text: 'Give your Study Pack a title first.', ok: false });
@@ -400,7 +626,7 @@ export function StudyPacksView({
     }
     if (packVisibility === 'public' && !isSignedInVerified) {
       setBannerMsg({
-        text: 'Sign in with Google to publish a Public Study Pack, or switch visibility to Private.',
+        text: 'Sign in with Google to share a Public Study Pack, or keep it Private.',
         ok: false,
       });
       return;
@@ -436,16 +662,20 @@ export function StudyPacksView({
         })
       );
 
+      const category = inferCategory(
+        chosenSubjects.length,
+        includeFlashcards ? chosenCards.length : 0,
+        includeNotes ? chosenTopics.length : 0
+      );
+
       const newPack: StudyPack = {
         id: `custom_${Date.now().toString(36)}`,
         title,
         subtitle:
           packSubtitle.trim() ||
-          `${chosenSubjects.length} subject${chosenSubjects.length === 1 ? '' : 's'} · ${
-            chosenCards.length
-          } flashcard${chosenCards.length === 1 ? '' : 's'}`,
-        category: packCategory,
-        examBoard: packBoard.trim() || 'Custom Study Pack',
+          `${chosenSubjects.map((s) => s.n).join(', ')} · ${chosenCards.length} flashcards`,
+        category,
+        examBoard: packBoard.trim() || 'Custom',
         visibility: packVisibility,
         ownerId: currentUserUid || undefined,
         isCustom: true,
@@ -453,13 +683,13 @@ export function StudyPacksView({
         subjectCountPreview: chosenSubjects.length,
         topicCountPreview: chosenTopics.length,
         cardCountPreview: includeFlashcards ? chosenCards.length : 0,
-        tags: ['Custom Pack', ...chosenSubjects.slice(0, 3).map((s) => s.n)],
+        tags: [packBoard.trim() || 'Custom', ...chosenSubjects.slice(0, 3).map((s) => s.n)],
         highlights: [
-          `Includes ${chosenSubjects.map((s) => s.n).join(', ')}`,
+          `${chosenSubjects.map((s) => s.n).join(', ')} · ${chosenTopics.length} spec topic${chosenTopics.length === 1 ? '' : 's'}`,
           includeFlashcards
-            ? `${chosenCards.length} flashcard${chosenCards.length === 1 ? '' : 's'}`
-            : 'Subjects & topics structure',
-          includeNotes ? 'Includes study notes content' : 'Notes excluded',
+            ? `${chosenCards.length} active-recall flashcard${chosenCards.length === 1 ? '' : 's'}`
+            : 'Subjects & specification topics',
+          includeNotes ? 'Includes study notes' : 'Notes excluded',
         ],
         revision: {
           subjects: packSubjects,
@@ -499,11 +729,12 @@ export function StudyPacksView({
       };
 
       await onSaveCustomPack(newPack);
-      setBuilderOpen(false);
-      setPackTitle('');
-      setPackSubtitle('');
+      if (applyImmediately) {
+        await onApplyPack(newPack, { replaceExisting: false });
+      }
+      resetBuilderFields();
       setBannerMsg({
-        text: `Saved Study Pack "${newPack.title}". Export or apply it anytime.`,
+        text: `Packaged "${newPack.title}" (${packVisibility}). Ready to share or switch anytime.`,
         ok: true,
       });
     } catch (err) {
@@ -524,15 +755,15 @@ export function StudyPacksView({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--e3)]">
               <Package className="h-4 w-4" aria-hidden="true" />
-              <span>Study Packs · Template &amp; Document Import</span>
+              <span>Study Packs · Standard Combos &amp; Community Decks</span>
             </div>
             <h1 className="font-display mt-1 text-2xl font-extrabold tracking-tight text-[var(--ink)]">
-              Study Packs
+              Browse &amp; Use Study Packs
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-[var(--mute)]">
-              Build custom Study Packs from a Word document (<code>.docx</code>), text/markdown
-              file, or template — choose whether to populate Subjects &amp; nested Topics,
-              Flashcards, Notes, or To-do tasks.
+              Pick a curated GCSE subject combo or a pack shared by friends — each pack loads
+              Subjects &amp; Specification subtopics, Study Notes, and Flashcards. Enable, combine,
+              switch, or disable any pack cleanly in one click.
             </p>
           </div>
 
@@ -544,14 +775,6 @@ export function StudyPacksView({
               className="hidden"
               onChange={(e) => void handleImportPackJson(e)}
             />
-            <button
-              type="button"
-              onClick={handleDownloadTemplate}
-              className="sd-btn px-3 py-2 text-xs whitespace-nowrap"
-            >
-              <Download className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Download Template</span>
-            </button>
             <button
               type="button"
               onClick={() => jsonImportRef.current?.click()}
@@ -570,10 +793,88 @@ export function StudyPacksView({
               className="sd-btn-pri px-3.5 py-2 text-xs whitespace-nowrap"
             >
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{builderOpen ? 'Close Builder' : 'Create Study Pack'}</span>
+              <span>{builderOpen ? 'Close Creator' : 'Create Study Pack'}</span>
             </button>
           </div>
         </div>
+
+        {/* Active Study Packs Bar */}
+        {activePacks.length > 0 && (
+          <section className="sd-card border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_6%,var(--card))] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-[var(--ok)]">
+                  <Check className="h-4 w-4" aria-hidden="true" />
+                  <span>
+                    Active in Workspace ({activePacks.length} pack
+                    {activePacks.length === 1 ? '' : 's'})
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--mute)]">
+                  Disable any pack to cleanly remove its subjects, spec subtopics, notes &amp;
+                  flashcards — or click &ldquo;Switch to Pack&rdquo; on another card to swap sets.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenSubjects}
+                  className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                >
+                  <BookMarked className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Subjects &amp; Spec</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenFlashcards}
+                  className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                >
+                  <Layers className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Flashcards</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenStudyNotes}
+                  className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                >
+                  <BookOpen className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Study Notes</span>
+                </button>
+                {activePacks.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => void onDisableAllPacks()}
+                    className="sd-btn px-2.5 py-1.5 text-xs text-[var(--bad)] whitespace-nowrap"
+                  >
+                    <Power className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Disable All</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {activePacks.map((ap) => (
+                <div
+                  key={ap.id}
+                  className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5 text-xs"
+                >
+                  <span className="font-semibold text-[var(--ink)]">{ap.title}</span>
+                  <button
+                    type="button"
+                    disabled={busyId === ap.id}
+                    onClick={() => void handleDisable(ap)}
+                    aria-label={`Disable ${ap.title}`}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded border border-[var(--line)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--bad)] hover:border-[var(--bad)]"
+                  >
+                    <X className="h-3 w-3" aria-hidden="true" />
+                    <span>Disable</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Status Banner */}
         {bannerMsg && (
@@ -617,90 +918,34 @@ export function StudyPacksView({
           </div>
         )}
 
-        {/* Study Pack Template Reference Card (always easy to inspect or copy) */}
-        <section className="sd-card p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-display flex items-center gap-2 text-base font-bold text-[var(--ink)]">
-                <FileText className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
-                <span>Study Pack Document Template</span>
-              </h2>
-              <p className="mt-0.5 text-xs text-[var(--mute)]">
-                Write your notes, topics, and flashcards in any <code>.txt</code>,{' '}
-                <code>.md</code>, or Word <code>.docx</code> file using these section markers — or
-                load the sample template directly into the builder.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={handleCopyTemplate}
-                className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
-              >
-                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>{copiedTemplate ? 'Copied!' : 'Copy Template'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setTemplateText(STUDY_PACK_TEMPLATE_TEXT);
-                  setUploadedFileName('studydeck-pack-template.txt');
-                  setUploadedWordHtml(undefined);
-                  setBuilderOpen(true);
-                  setSourceMode('template');
-                }}
-                className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
-              >
-                Use Sample in Builder
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowTemplateGuide((v) => !v)}
-                className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
-              >
-                {showTemplateGuide ? (
-                  <>
-                    <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Hide Template</span>
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>View Template</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
-          {showTemplateGuide && (
-            <pre className="font-mono-num mt-4 max-h-80 overflow-auto rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 text-xs leading-relaxed text-[var(--ink)]">
-              {STUDY_PACK_TEMPLATE_TEXT}
-            </pre>
-          )}
-        </section>
-
-        {/* Study Pack Builder */}
+        {/* Streamlined Study Pack Creator */}
         {builderOpen && (
           <section className="sd-card space-y-4 border-[var(--e3)] p-5">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-3">
               <div>
                 <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                  Create Study Pack
+                  Create a Study Pack
                 </h2>
                 <p className="mt-0.5 text-xs text-[var(--mute)]">
-                  Upload a formatted document or package existing subjects already inside your
-                  workspace.
+                  Name your pack, choose who can see it, and fill in topics, notes, or flashcards.
                 </p>
               </div>
               <div className="sd-seg">
                 <button
                   type="button"
-                  aria-pressed={sourceMode === 'template'}
-                  onClick={() => setSourceMode('template')}
+                  aria-pressed={sourceMode === 'quick'}
+                  onClick={() => setSourceMode('quick')}
                   className="sd-seg-btn"
                 >
-                  From File / Template
+                  Quick Form
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={sourceMode === 'file'}
+                  onClick={() => setSourceMode('file')}
+                  className="sd-seg-btn"
+                >
+                  Upload File / Paste
                 </button>
                 <button
                   type="button"
@@ -716,111 +961,234 @@ export function StudyPacksView({
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="block text-xs font-semibold text-[var(--mute)]">
-                Pack Title
+            {/* Minimal Core Row: Title + Level + Visibility */}
+            <div className="grid gap-3 md:grid-cols-12">
+              <label className="block text-xs font-semibold text-[var(--mute)] md:col-span-5">
+                Pack Name
                 <input
                   type="text"
                   value={packTitle}
                   onChange={(e) => setPackTitle(e.target.value)}
-                  placeholder={parsedDraft?.title || 'e.g. Biology Paper 1 Pack'}
+                  placeholder="e.g. GCSE Biology Genetics Revision"
                   className="sd-input mt-1 text-sm"
                 />
               </label>
-              <label className="block text-xs font-semibold text-[var(--mute)]">
-                Subtitle
-                <input
-                  type="text"
-                  value={packSubtitle}
-                  onChange={(e) => setPackSubtitle(e.target.value)}
-                  placeholder={parsedDraft?.subtitle || 'Short summary'}
-                  className="sd-input mt-1 text-sm"
-                />
-              </label>
-              <label className="block text-xs font-semibold text-[var(--mute)]">
-                Exam Board / Level
-                <input
-                  type="text"
-                  value={packBoard}
-                  onChange={(e) => setPackBoard(e.target.value)}
-                  placeholder="Edexcel / Cambridge / Custom"
-                  className="sd-input mt-1 text-sm"
-                />
-              </label>
-              <label className="block text-xs font-semibold text-[var(--mute)]">
-                Category
-                <select
-                  value={packCategory}
-                  onChange={(e) => setPackCategory(e.target.value as StudyPackCategory)}
-                  className="sd-input mt-1 text-sm"
-                >
-                  <option value="combo">Subject Combo</option>
-                  <option value="flashcards">Flashcard Set</option>
-                  <option value="notes">Notes &amp; Topics</option>
-                </select>
-              </label>
-            </div>
 
-            {/* Visibility: Public vs Private */}
-            <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-bold text-[var(--ink)]">
-                    Who can see this Study Pack?
-                  </div>
-                  <p className="mt-0.5 text-xs text-[var(--mute)]">
-                    {packVisibility === 'public'
-                      ? 'Public packs appear in the Study Packs library for every StudyDeck student.'
-                      : 'Private packs stay in your encrypted workspace and never appear to other users.'}
-                  </p>
+              <div className="md:col-span-3">
+                <div className="text-xs font-semibold text-[var(--mute)]">Level / Exam Board</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={packBoard}
+                    onChange={(e) => setPackBoard(e.target.value)}
+                    placeholder="GCSE / A-Level"
+                    className="sd-input text-sm"
+                  />
                 </div>
+              </div>
 
-                <div className="sd-seg shrink-0">
+              <div className="md:col-span-4">
+                <div className="text-xs font-semibold text-[var(--mute)]">Visibility</div>
+                <div className="sd-seg mt-1 w-full">
                   <button
                     type="button"
                     aria-pressed={packVisibility === 'private'}
                     onClick={() => setPackVisibility('private')}
-                    className="sd-seg-btn"
+                    className="sd-seg-btn flex-1 justify-center"
                   >
                     <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Private (Only Me)</span>
+                    <span>Private</span>
                   </button>
                   <button
                     type="button"
                     aria-pressed={packVisibility === 'public'}
                     onClick={() => setPackVisibility('public')}
-                    className="sd-seg-btn"
+                    className="sd-seg-btn flex-1 justify-center"
                   >
                     <Globe className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>Public (Everyone)</span>
                   </button>
                 </div>
               </div>
-
-              {packVisibility === 'public' && !isSignedInVerified && (
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--e2)] bg-[var(--card)] px-3 py-2 text-xs">
-                  <span className="text-[var(--ink)]">
-                    Sign in with Google to publish Public Study Packs so every user can see them.
-                  </span>
-                  {onOpenAuth && (
-                    <button
-                      type="button"
-                      onClick={onOpenAuth}
-                      className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
-                    >
-                      Sign In
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
 
-            {sourceMode === 'template' ? (
-              <>
+            {packVisibility === 'public' && !isSignedInVerified && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--e2)] bg-[var(--bg)] px-3 py-2 text-xs">
+                <span className="text-[var(--ink)]">
+                  Sign in with Google to publish Public Study Packs so friends and other students can
+                  use them.
+                </span>
+                {onOpenAuth && (
+                  <button
+                    type="button"
+                    onClick={onOpenAuth}
+                    className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
+                  >
+                    Sign In
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Mode 1: Quick Guided Form */}
+            {sourceMode === 'quick' && (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    Subject Name
+                    <input
+                      type="text"
+                      value={quickSubject}
+                      onChange={(e) => setQuickSubject(e.target.value)}
+                      placeholder="e.g. Biology, Maths, History"
+                      className="sd-input mt-1 text-sm"
+                    />
+                  </label>
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    Specification Subtopics (comma separated)
+                    <input
+                      type="text"
+                      value={quickSpecs}
+                      onChange={(e) => setQuickSpecs(e.target.value)}
+                      placeholder="e.g. Cells, Osmosis, Enzymes, Respiration"
+                      className="sd-input mt-1 text-sm"
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-[var(--mute)]">
+                      Flashcards (Question &amp; Answer)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setQuickCards((prev) => [
+                          ...prev,
+                          { id: `c_${Date.now()}_${prev.length}`, q: '', a: '' },
+                        ])
+                      }
+                      className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                    >
+                      <Plus className="h-3 w-3" aria-hidden="true" />
+                      <span>Add Card</span>
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {quickCards.map((row, idx) => (
+                      <div key={row.id} className="grid items-center gap-2 sm:grid-cols-12">
+                        <input
+                          type="text"
+                          value={row.q}
+                          onChange={(e) =>
+                            setQuickCards((prev) =>
+                              prev.map((c) => (c.id === row.id ? { ...c, q: e.target.value } : c))
+                            )
+                          }
+                          placeholder={`Question ${idx + 1}`}
+                          className="sd-input text-xs sm:col-span-5"
+                        />
+                        <input
+                          type="text"
+                          value={row.a}
+                          onChange={(e) =>
+                            setQuickCards((prev) =>
+                              prev.map((c) => (c.id === row.id ? { ...c, a: e.target.value } : c))
+                            )
+                          }
+                          placeholder={`Answer ${idx + 1}`}
+                          className="sd-input text-xs sm:col-span-6"
+                        />
+                        <button
+                          type="button"
+                          disabled={quickCards.length <= 1}
+                          onClick={() =>
+                            setQuickCards((prev) => prev.filter((c) => c.id !== row.id))
+                          }
+                          aria-label="Remove flashcard row"
+                          className="sd-btn justify-center px-2 py-1.5 text-xs text-[var(--bad)] sm:col-span-1"
+                        >
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="block text-xs font-semibold text-[var(--mute)]">
+                  Study Notes (optional — headings &amp; bullet points auto-format cleanly)
+                  <textarea
+                    rows={4}
+                    value={quickNotes}
+                    onChange={(e) => setQuickNotes(e.target.value)}
+                    placeholder={`## Key Points\n- Diffusion moves particles down a concentration gradient\n- Osmosis is the diffusion of water across a partially permeable membrane`}
+                    className="sd-input mt-1 text-xs leading-relaxed"
+                  />
+                </label>
+
+                <details className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs">
+                  <summary className="cursor-pointer font-semibold text-[var(--mute)]">
+                    Optional settings (subtitle &amp; custom level presets)
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="block font-semibold text-[var(--mute)]">
+                      Short Subtitle
+                      <input
+                        type="text"
+                        value={packSubtitle}
+                        onChange={(e) => setPackSubtitle(e.target.value)}
+                        placeholder="Auto-generated if left blank"
+                        className="sd-input mt-1 text-xs"
+                      />
+                    </label>
+                    <div>
+                      <div className="font-semibold text-[var(--mute)]">Quick Level Presets</div>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {['GCSE', 'AQA GCSE', 'Edexcel GCSE', 'A-Level', 'Custom'].map((lvl) => (
+                          <button
+                            key={lvl}
+                            type="button"
+                            onClick={() => setPackBoard(lvl)}
+                            className="sd-btn px-2 py-1 text-[11px]"
+                          >
+                            {lvl}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={savingCustom}
+                    onClick={() => void handleCreateQuickPack(false)}
+                    className="sd-btn px-4 py-2 text-xs whitespace-nowrap"
+                  >
+                    Save Pack Only
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingCustom}
+                    onClick={() => void handleCreateQuickPack(true)}
+                    className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+                  >
+                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{savingCustom ? 'Saving…' : 'Create & Enable Pack'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Mode 2: File Upload / Paste Text */}
+            {sourceMode === 'file' && (
+              <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs font-semibold text-[var(--mute)]">
-                    Upload a Word document (<code>.docx</code>), text (<code>.txt</code>), or
-                    markdown (<code>.md</code>) file — or paste below
+                  <div className="text-xs text-[var(--mute)]">
+                    Upload a Word doc (<code>.docx</code>), text (<code>.txt</code>), markdown, or
+                    CSV — or paste notes / flashcards (<code>Question | Answer</code>).
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <input
@@ -840,109 +1208,110 @@ export function StudyPacksView({
                         {uploadedFileName ? `Uploaded: ${uploadedFileName}` : 'Upload Document'}
                       </span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTemplateText(STUDY_PACK_TEMPLATE_TEXT);
+                        setUploadedFileName('sample-template.txt');
+                        setUploadedWordHtml(undefined);
+                      }}
+                      className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                    >
+                      Load Sample
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadTemplate}
+                      className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                    >
+                      <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Template .txt</span>
+                    </button>
                   </div>
                 </div>
 
                 <textarea
-                  rows={10}
+                  rows={8}
                   value={templateText}
                   onChange={(e) => {
                     setTemplateText(e.target.value);
                     setUploadedWordHtml(undefined);
                   }}
-                  placeholder={
-                    '[Subject: Biology]\nTopics: Cells, Enzymes\n\n[Flashcards | Biology > Cells | Core]\nDefine osmosis | Net movement of water across a partially permeable membrane\n\n[Notes | Biology > Cells]\n## Cell Membranes\n- Controls movement into and out of the cell'
-                  }
+                  placeholder={`[Subject: Biology]\nTopics: Cells, Osmosis, Enzymes\n\n[Flashcards | Biology > Cells]\nDefine osmosis | Net movement of water across a partially permeable membrane\n\n[Notes | Biology > Cells]\n## Cell Membranes\n- Controls movement into and out of the cell`}
                   className="sd-input font-mono-num text-xs leading-relaxed"
                 />
 
-                {/* Include Options Checkboxes */}
-                <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
-                  <div className="mb-2 text-xs font-bold text-[var(--ink)]">
-                    Choose what to include in this Study Pack:
+                {parsedDraft && (
+                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-2.5 text-xs text-[var(--mute)]">
+                    <strong className="text-[var(--ink)]">Detected:</strong>{' '}
+                    {parsedDraft.subjects.length} subject
+                    {parsedDraft.subjects.length === 1 ? '' : 's'} ·{' '}
+                    {parsedDraft.subjects.reduce((s, x) => s + x.topics.length, 0)} spec topics ·{' '}
+                    {parsedDraft.cards.length} flashcards · {parsedDraft.notesByTopic.length} note
+                    sections
                   </div>
-                  <div className="flex flex-wrap gap-4 text-xs text-[var(--ink)]">
-                    <label className="inline-flex cursor-pointer items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={includeSubjects}
-                        onChange={(e) => setIncludeSubjects(e.target.checked)}
-                      />
-                      <span>
-                        Subjects &amp; nested Topics{' '}
-                        <span className="font-mono-num text-[var(--mute)]">
-                          ({parsedDraft?.subjects.length || 0}s /{' '}
-                          {parsedDraft?.subjects.reduce((sum, s) => sum + s.topics.length, 0) || 0}
-                          t)
-                        </span>
-                      </span>
-                    </label>
-                    <label className="inline-flex cursor-pointer items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={includeFlashcards}
-                        onChange={(e) => setIncludeFlashcards(e.target.checked)}
-                      />
-                      <span>
-                        Flashcards{' '}
-                        <span className="font-mono-num text-[var(--mute)]">
-                          ({parsedDraft?.cards.length || 0})
-                        </span>
-                      </span>
-                    </label>
-                    <label className="inline-flex cursor-pointer items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={includeNotes}
-                        onChange={(e) => setIncludeNotes(e.target.checked)}
-                      />
-                      <span>
-                        Notes{' '}
-                        <span className="font-mono-num text-[var(--mute)]">
-                          ({parsedDraft?.notesByTopic.length || 0})
-                        </span>
-                      </span>
-                    </label>
-                    <label className="inline-flex cursor-pointer items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={includeTodos}
-                        onChange={(e) => setIncludeTodos(e.target.checked)}
-                      />
-                      <span>
-                        To-do Tasks{' '}
-                        <span className="font-mono-num text-[var(--mute)]">
-                          ({parsedDraft?.todos.length || 0})
-                        </span>
-                      </span>
-                    </label>
-                  </div>
+                )}
 
-                  {parsedDraft && (
-                    <div className="mt-3 space-y-2 border-t border-[var(--line)] pt-3 text-xs text-[var(--mute)]">
-                      {parsedDraft.subjects.length > 0 && (
-                        <div>
-                          <strong className="text-[var(--ink)]">Detected Subjects &amp; Topics:</strong>{' '}
-                          {parsedDraft.subjects
-                            .map((s) => `${s.name} (${s.topics.join(', ') || 'Core Topic'})`)
-                            .join(' · ')}
-                        </div>
-                      )}
-                      {parsedDraft.cards.length > 0 && (
-                        <div>
-                          <strong className="text-[var(--ink)]">First Flashcard:</strong> Q:{' '}
-                          {parsedDraft.cards[0].q} → A: {parsedDraft.cards[0].a}
-                        </div>
-                      )}
+                <details className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs">
+                  <summary className="cursor-pointer font-semibold text-[var(--mute)]">
+                    Advanced import options &amp; template syntax guide
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    <div className="flex flex-wrap gap-4 text-[var(--ink)]">
+                      <label className="inline-flex cursor-pointer items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={includeSubjects}
+                          onChange={(e) => setIncludeSubjects(e.target.checked)}
+                        />
+                        <span>Subjects &amp; Spec Topics</span>
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={includeFlashcards}
+                          onChange={(e) => setIncludeFlashcards(e.target.checked)}
+                        />
+                        <span>Flashcards</span>
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={includeNotes}
+                          onChange={(e) => setIncludeNotes(e.target.checked)}
+                        />
+                        <span>Notes</span>
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={includeTodos}
+                          onChange={(e) => setIncludeTodos(e.target.checked)}
+                        />
+                        <span>To-do Tasks</span>
+                      </label>
                     </div>
-                  )}
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplateGuide((v) => !v)}
+                      className="sd-btn px-2.5 py-1 text-xs"
+                    >
+                      <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{showTemplateGuide ? 'Hide Template Syntax' : 'View Template Syntax'}</span>
+                    </button>
+                    {showTemplateGuide && (
+                      <pre className="font-mono-num max-h-60 overflow-auto rounded-lg border border-[var(--line)] bg-[var(--card)] p-3 text-[11px]">
+                        {STUDY_PACK_TEMPLATE_TEXT}
+                      </pre>
+                    )}
+                  </div>
+                </details>
 
                 <div className="flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
                     disabled={savingCustom || !parsedDraft}
-                    onClick={() => void handleCreateFromTemplate(false)}
+                    onClick={() => void handleCreateFromFile(false)}
                     className="sd-btn px-4 py-2 text-xs whitespace-nowrap"
                   >
                     Save Pack Only
@@ -950,20 +1319,23 @@ export function StudyPacksView({
                   <button
                     type="button"
                     disabled={savingCustom || !parsedDraft}
-                    onClick={() => void handleCreateFromTemplate(true)}
+                    onClick={() => void handleCreateFromFile(true)}
                     className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                   >
                     <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{savingCustom ? 'Creating…' : 'Create & Load into Workspace'}</span>
+                    <span>{savingCustom ? 'Creating…' : 'Create & Enable Pack'}</span>
                   </button>
                 </div>
-              </>
-            ) : (
+              </div>
+            )}
+
+            {/* Mode 3: Package From My Workspace */}
+            {sourceMode === 'workspace' && (
               <>
                 {deckSnapshot.subjects.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-sm text-[var(--mute)]">
-                    No active subjects in your workspace yet. Use &ldquo;From File / Template&rdquo;
-                    above or add subjects in the Subjects tab first.
+                    No active subjects in your workspace yet. Enable a pack below or use Quick Form
+                    to build one right away.
                   </div>
                 ) : (
                   <>
@@ -1009,42 +1381,15 @@ export function StudyPacksView({
                       })}
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-3">
-                      <div className="flex flex-wrap gap-4 text-xs text-[var(--mute)]">
-                        <label className="inline-flex cursor-pointer items-center gap-1.5">
-                          <input
-                            type="checkbox"
-                            checked={includeSubjects}
-                            onChange={(e) => setIncludeSubjects(e.target.checked)}
-                          />
-                          <span>Subjects &amp; Topics</span>
-                        </label>
-                        <label className="inline-flex cursor-pointer items-center gap-1.5">
-                          <input
-                            type="checkbox"
-                            checked={includeFlashcards}
-                            onChange={(e) => setIncludeFlashcards(e.target.checked)}
-                          />
-                          <span>Flashcards</span>
-                        </label>
-                        <label className="inline-flex cursor-pointer items-center gap-1.5">
-                          <input
-                            type="checkbox"
-                            checked={includeNotes}
-                            onChange={(e) => setIncludeNotes(e.target.checked)}
-                          />
-                          <span>Formatted Notes</span>
-                        </label>
-                      </div>
-
+                    <div className="flex flex-wrap justify-end gap-2 pt-2">
                       <button
                         type="button"
                         disabled={savingCustom}
-                        onClick={() => void handleCreateFromWorkspace()}
+                        onClick={() => void handleCreateFromWorkspace(false)}
                         className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                       >
                         <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Save Workspace Pack</span>
+                        <span>{savingCustom ? 'Saving…' : 'Save & Share Workspace Pack'}</span>
                       </button>
                     </div>
                   </>
@@ -1054,17 +1399,16 @@ export function StudyPacksView({
           </section>
         )}
 
-        {/* Filter & Search Bar */}
+        {/* Discovery Filter Tabs & Search */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-1.5">
             {(
               [
-                ['all', `All Packs (${customPacks.length})`],
-                ['public', `Public (${publicCount})`],
-                ['private', `My Private (${privateCount})`],
-                ['combo', 'Subject Combos'],
-                ['flashcards', 'Flashcard Sets'],
-                ['notes', 'Notes & Topics'],
+                ['all', `All Packs (${counts.all})`],
+                ['standard', `GCSE & Standard (${counts.standard})`],
+                ['community', `Community (${counts.community})`],
+                ['mine', `My Packs (${counts.mine})`],
+                ['active', `Active (${counts.active})`],
               ] as [FilterTab, string][]
             ).map(([id, label]) => (
               <button
@@ -1091,61 +1435,48 @@ export function StudyPacksView({
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search your Study Packs…"
+              placeholder="Search subjects, GCSE, topics…"
               aria-label="Search study packs"
               className="sd-input pl-8 text-xs"
             />
           </div>
         </div>
 
-        {/* Empty State or Packs Grid */}
+        {/* Packs Grid */}
         {filteredPacks.length === 0 ? (
           <div className="sd-card p-8 text-center">
             <p className="font-display text-lg font-bold text-[var(--ink)]">
-              {customPacks.length === 0
-                ? 'No Study Packs yet'
-                : 'No Study Packs match that search'}
+              No Study Packs match that view
             </p>
             <p className="mx-auto mt-1 max-w-lg text-sm text-[var(--mute)]">
-              {customPacks.length === 0
-                ? 'Download or view the template above, upload a Word (.docx) or text file, and choose whether to create Subjects & Topics, Flashcards, or Notes.'
-                : 'Try clearing your filter or search query.'}
+              {filter === 'community'
+                ? 'No community-shared packs yet. Create a pack and choose Public to share yours with every student!'
+                : filter === 'active'
+                ? 'No Study Packs are currently active. Switch to All Packs or GCSE & Standard to enable one.'
+                : 'Try clearing your search or switching back to All Packs.'}
             </p>
             <div className="mt-4 flex flex-wrap justify-center gap-2">
-              {customPacks.length === 0 ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBuilderOpen(true);
-                      setSourceMode('template');
-                    }}
-                    className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
-                  >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Create Study Pack</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDownloadTemplate}
-                    className="sd-btn px-4 py-2 text-xs whitespace-nowrap"
-                  >
-                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Download Template</span>
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFilter('all');
-                    setSearch('');
-                  }}
-                  className="sd-btn px-4 py-2 text-xs"
-                >
-                  Show All Packs
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setFilter('all');
+                  setSearch('');
+                }}
+                className="sd-btn px-4 py-2 text-xs"
+              >
+                Show All Packs
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setBuilderOpen(true);
+                  setSourceMode('quick');
+                }}
+                className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Create Study Pack</span>
+              </button>
             </div>
           </div>
         ) : (
@@ -1153,13 +1484,19 @@ export function StudyPacksView({
             {filteredPacks.map((pack) => {
               const isApplied = appliedSet.has(pack.id);
               const isExpanded = expandedId === pack.id;
-              const isBusy = applyingId === pack.id;
+              const isBusy = busyId === pack.id;
               const isPublic = pack.visibility === 'public';
+              const isStd = Boolean(pack.isStandard);
               const isOwner = Boolean(
-                !pack.ownerId || (currentUserUid && pack.ownerId === currentUserUid)
+                !isStd && (!pack.ownerId || (currentUserUid && pack.ownerId === currentUserUid))
               );
-              const canManage = isAdmin || isOwner;
+              const canManage = !isStd && (isAdmin || isOwner);
               const authorLabel = pack.ownerName || pack.author;
+              const notesTopicCount = (pack.revision?.subjects || []).reduce(
+                (acc, s) => acc + s.topics.filter((t) => Boolean(t.notesHtml)).length,
+                0
+              );
+              const otherActiveCount = activePacks.filter((a) => a.id !== pack.id).length;
 
               return (
                 <article
@@ -1174,24 +1511,23 @@ export function StudyPacksView({
                         <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--e3)]">
                           <span>{pack.examBoard}</span>
                           <span className="text-[var(--mute)]">·</span>
-                          <span
-                            className={`inline-flex items-center gap-1 ${
-                              isPublic ? 'text-[var(--ok)]' : 'text-[var(--mute)]'
-                            }`}
-                          >
-                            {isPublic ? (
-                              <>
-                                <Globe className="h-3 w-3" aria-hidden="true" />
-                                <span>Public</span>
-                              </>
-                            ) : (
-                              <>
-                                <Lock className="h-3 w-3" aria-hidden="true" />
-                                <span>Private</span>
-                              </>
-                            )}
-                          </span>
-                          {authorLabel && (
+                          {isStd ? (
+                            <span className="inline-flex items-center gap-1 text-[var(--e3)]">
+                              <Sparkles className="h-3 w-3" aria-hidden="true" />
+                              <span>Standard Pack</span>
+                            </span>
+                          ) : isPublic ? (
+                            <span className="inline-flex items-center gap-1 text-[var(--ok)]">
+                              <Users className="h-3 w-3" aria-hidden="true" />
+                              <span>Community Public</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[var(--mute)]">
+                              <Lock className="h-3 w-3" aria-hidden="true" />
+                              <span>Private</span>
+                            </span>
+                          )}
+                          {!isStd && authorLabel && (
                             <>
                               <span className="text-[var(--mute)]">·</span>
                               <span className="normal-case text-[var(--mute)]">
@@ -1199,19 +1535,15 @@ export function StudyPacksView({
                               </span>
                             </>
                           )}
-                          <span className="text-[var(--mute)]">·</span>
-                          <span className="font-mono-num normal-case text-[10px] text-[var(--mute)]">
-                            {getPackFileName(pack.id)}
-                          </span>
                         </div>
                         <h2 className="font-display mt-0.5 text-lg font-bold leading-snug text-[var(--ink)]">
                           {pack.title}
                         </h2>
                       </div>
                       {isApplied && (
-                        <span className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-[var(--ok)]">
-                          <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>Loaded</span>
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_12%,transparent)] px-2 py-0.5 text-[11px] font-bold text-[var(--ok)]">
+                          <Check className="h-3 w-3" aria-hidden="true" />
+                          <span>Active</span>
                         </span>
                       )}
                     </div>
@@ -1225,17 +1557,25 @@ export function StudyPacksView({
                       </span>
                       <span className="text-[var(--mute)]">·</span>
                       <span>
-                        {pack.topicCountPreview} topic{pack.topicCountPreview === 1 ? '' : 's'}
+                        {pack.topicCountPreview} spec topic{pack.topicCountPreview === 1 ? '' : 's'}
                       </span>
                       <span className="text-[var(--mute)]">·</span>
                       <span>
                         {pack.cardCountPreview} flashcard
                         {pack.cardCountPreview === 1 ? '' : 's'}
                       </span>
+                      {notesTopicCount > 0 && (
+                        <>
+                          <span className="text-[var(--mute)]">·</span>
+                          <span>
+                            {notesTopicCount} note{notesTopicCount === 1 ? '' : 's'}
+                          </span>
+                        </>
+                      )}
                     </div>
 
                     <ul className="mt-3 space-y-1 text-xs text-[var(--mute)]">
-                      {pack.highlights.slice(0, 4).map((hl, idx) => (
+                      {pack.highlights.slice(0, 3).map((hl, idx) => (
                         <li key={idx} className="flex items-start gap-2">
                           <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-sm bg-[var(--e3)]" />
                           <span>{hl}</span>
@@ -1244,19 +1584,27 @@ export function StudyPacksView({
                     </ul>
 
                     {isExpanded && (
-                      <div className="mt-3 space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs">
-                        {pack.planner.subjects && pack.planner.subjects.length > 0 && (
+                      <div className="mt-3 space-y-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs">
+                        {pack.revision?.subjects && pack.revision.subjects.length > 0 && (
                           <div>
                             <div className="font-bold text-[var(--ink)]">
-                              Subjects &amp; Nested Topics
+                              Subjects &amp; Specification Subtopics
                             </div>
-                            {pack.planner.subjects.map((ps, sIdx) => (
-                              <div key={sIdx} className="mt-1">
-                                <span className="font-semibold text-[var(--e3)]">{ps.name}</span>
+                            {pack.revision.subjects.map((rs, sIdx) => (
+                              <div key={sIdx} className="mt-1.5">
+                                <span className="font-semibold text-[var(--e3)]">{rs.name}</span>
                                 <span className="text-[var(--mute)]">
                                   {' '}
-                                  — {ps.topics.join(', ')}
+                                  — {rs.topics.map((t) => t.label).join(' · ')}
                                 </span>
+                                {rs.topics.find((t) => t.notesHtml)?.notesHtml && (
+                                  <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--mute)]">
+                                    Notes preview:{' '}
+                                    {stripHtmlPreview(
+                                      rs.topics.find((t) => t.notesHtml)?.notesHtml || ''
+                                    )}
+                                  </p>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -1299,7 +1647,7 @@ export function StudyPacksView({
                         onClick={() => handleExportPack(pack)}
                         title="Export pack as .json"
                         aria-label={`Export ${pack.title}`}
-                        className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                        className="sd-btn px-2 py-1.5 text-xs whitespace-nowrap"
                       >
                         <Download className="h-3.5 w-3.5" aria-hidden="true" />
                       </button>
@@ -1332,18 +1680,18 @@ export function StudyPacksView({
                               setTogglingVisId(null);
                             }
                           }}
-                          title={isPublic ? 'Make Private' : 'Make Public for all users'}
+                          title={isPublic ? 'Make Private' : 'Share Publicly'}
                           className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
                         >
                           {isPublic ? (
                             <>
                               <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                              <span>Make Private</span>
+                              <span>Private</span>
                             </>
                           ) : (
                             <>
                               <Globe className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
-                              <span>Make Public</span>
+                              <span>Share</span>
                             </>
                           )}
                         </button>
@@ -1355,6 +1703,7 @@ export function StudyPacksView({
                             if (confirmDeleteId === pack.id) {
                               setConfirmDeleteId(null);
                               try {
+                                if (isApplied) await onDisablePack(pack.id);
                                 await onDeleteCustomPack(pack.id);
                               } catch (err) {
                                 setBannerMsg({
@@ -1377,20 +1726,65 @@ export function StudyPacksView({
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => void handleUsePack(pack)}
-                      className={`${
-                        isApplied ? 'sd-btn' : 'sd-btn-pri'
-                      } px-3.5 py-1.5 text-xs whitespace-nowrap`}
-                    >
-                      {isBusy
-                        ? 'Loading…'
-                        : isApplied
-                        ? 'Re-apply Missing Items'
-                        : 'Use Study Pack'}
-                    </button>
+                    {/* Enable / Disable / Switch Action Group */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {isApplied ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleEnablePack(pack, false)}
+                            title="Re-sync missing items from this pack"
+                            aria-label={`Re-sync ${pack.title}`}
+                            className="sd-btn px-2 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleDisable(pack)}
+                            className="sd-btn border-[var(--bad)] px-3 py-1.5 text-xs font-semibold text-[var(--bad)] whitespace-nowrap hover:bg-[color-mix(in_srgb,var(--bad)_10%,var(--card))]"
+                          >
+                            <Power className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>{isBusy ? 'Removing…' : 'Disable Pack'}</span>
+                          </button>
+                        </>
+                      ) : otherActiveCount > 0 ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleEnablePack(pack, false)}
+                            title="Keep active packs enabled and add this alongside"
+                            className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Combine</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleEnablePack(pack, true)}
+                            title="Disable active packs and switch to this pack"
+                            className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            <Repeat className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>{isBusy ? 'Switching…' : 'Switch to Pack'}</span>
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void handleEnablePack(pack, false)}
+                          className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>{isBusy ? 'Loading…' : 'Use Study Pack'}</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </article>
               );

@@ -189,7 +189,7 @@ function row(k,x){const h=row0(k,x);return h?h.replace(/<\/div>$/,`<button class
  if(k.p)return `<div class="task${d}"><div class="tt">${tmx(k)}<b>Exam questions: ${E(s.n)}</b><br><span class="mu">Timed past-paper questions, no notes. Mark them honestly.</span></div>${k.done?`<span class="mu">Done</span>`:`<input id="pm${x}" type="number" min="0" placeholder="mark"><input id="pt${x}" type="number" min="1" placeholder="out of"><button class="go" onclick="fp(${x})">Done</button>`}</div>`;
  const t=s.t[k.j];if(!t)return `<div class="task${d}"><div class="tt">${tmx(k)}<b>Revise: ${E(s.n)}</b><br><span class="mu">Your own session</span></div>${k.done?`<span class="mu">Done</span>`:`<button onclick="tm(${k.i},-1)">Start session</button><button class="go" onclick="dn1(${x})">Done</button>`}</div>`;
  return `<div class="task${d}"><div class="tt">${tmx(k)}<b>Recall: ${E(t.x)}</b><br><span class="mu">${E(s.n)}${k.done?", marked "+["","touched on","kinda alright","mastered","done"][k.done]:""}</span>${t.n?`<details><summary class="mu">Check key facts after you recall</summary><p class="mu" style="margin:4px 0">${E(t.n)}</p></details>`:""}</div>${k.done?"":`<button onclick="tm(${k.i},${k.j})">Start session</button><span class="mu">How is it now?</span><button style="border-color:var(--r)" onclick="fin(${x},1)">Touched on</button><button style="border-color:var(--a)" onclick="fin(${x},2)">Kinda alright</button><button style="border-color:var(--g)" onclick="fin(${x},3)">Mastered</button>`}</div>`}
-let REV_STATS=null,ACCOUNT_STATS=null,WTRAY_CAT='all';
+let REV_STATS=null,ACCOUNT_STATS=null,WTRAY_CAT='all',ACTIVE_PACK_COUNT=0,ACTIVE_PACK_TITLES=[];
 function navApp(target,extra){try{if(window.self!==window.top)window.parent.postMessage(Object.assign({type:'BRIDGE_NAV_APP',app:'planner',target},extra||{}),'*')}catch(e){}}
 const HOME_DEF=[{id:'today_progress',cols:12,h:null},{id:'today_tasks',cols:8,h:null},{id:'quick_session',cols:4,h:null},{id:'todo_focus',cols:6,h:null},{id:'flashcards_due',cols:6,h:null},{id:'next_exams',cols:6,h:null}];
 const STARTER_DEF=[{id:'daily_goal',cols:6,h:null},{id:'quick_session',cols:6,h:null},{id:'study_packs_hub',cols:6,h:null},{id:'todo_focus',cols:6,h:null},{id:'countdowns',cols:6,h:null},{id:'scratchpad',cols:6,h:null}];
@@ -302,13 +302,13 @@ function dlDel(id){S.deadlines=(S.deadlines||[]).filter(x=>x.id!==id);save();rr(
 function wScratchpad(){const val=S.scratch||'';return `<div class="card"><div class="row" style="justify-content:space-between;margin:0 0 8px"><h2 style="margin:0">Quick Scratchpad</h2><div class="row" style="margin:0"><span class="mu" id="sc_len">${val.length} chars saved</span>${val?`<button onclick="S.scratch='';save();rr()">Clear</button>`:''}</div></div><textarea rows="5" style="width:100%;resize:vertical" placeholder="Jot down formulas, key essay quotes, dates, or quick recall points…" oninput="scratchSave(this.value)">${E(val)}</textarea></div>`}
 function wDailyGoal(){const tgt=S.goalMin||60,done=tmin(),p=Math.min(100,Math.round(done/tgt*100)),st=streak();return `<div class="card"><div class="row" style="justify-content:space-between;margin:0 0 8px"><h2 style="margin:0">Daily Study Target</h2><select aria-label="Daily target minutes" onchange="goalSet(this.value)" style="padding:4px 8px;font-size:12.5px">${[30,45,60,90,120,180].map(m=>`<option value="${m}"${tgt==m?' selected':''}>Goal: ${m}m</option>`).join('')}</select></div><div class="row" style="justify-content:space-between;margin:0 0 6px"><span class="big" style="font-size:28px">${done} <span class="mu" style="font-size:15px">/ ${tgt} min</span></span><span class="mu" style="font-weight:700;color:${p>=100?'var(--g)':'var(--ac)'}">${p}%${st>0?' · '+st+'d streak':''}</span></div><div class="bar" style="margin:0 0 10px"><i style="width:${p}%;background:${p>=100?'var(--g)':'var(--ac)'}"></i></div><div class="row" style="margin:0;justify-content:space-between"><span class="mu">Quick-log focus time:</span><span class="row" style="margin:0"><button onclick="goalLog(15)">+15m</button><button onclick="goalLog(25)">+25m</button></span></div></div>`}
 function wCountdowns(){const items=[];S.subs.forEach((s,i)=>{if(!on(s)||!s.ex)return;s.ex.forEach(x=>{if(days(x.d)>=0)items.push({title:shn(i)+': '+x.n,d:x.d,custom:false})})});(S.deadlines||[]).forEach(x=>{if(days(x.d)>=0)items.push({id:x.id,title:x.t,d:x.d,custom:true})});items.sort((a,b)=>a.d<b.d?-1:1);return `<div class="card"><div class="row" style="justify-content:space-between;margin:0 0 8px"><h2 style="margin:0">Exam &amp; Goal Countdowns</h2><button onclick="S.tab='calendar';save();render()">Calendar</button></div>${items.length?items.slice(0,5).map(it=>{const [lbl,col]=exCd(it.d);return `<div class="task" style="padding:8px 0"><div class="tt"><b>${E(it.title)}</b><br><span class="mu">${fd(it.d)}</span></div><span class="tdc" style="color:${col};margin:0">${lbl}</span>${it.custom?`<button class="x" onclick="dlDel(${it.id})" aria-label="Remove countdown">✕</button>`:''}</div>`}).join(''):'<p class="mu" style="margin:0 0 8px">No deadlines set yet. Add a mock week, assignment, or test date below.</p>'}<div class="row" style="margin:8px 0 0"><input id="dl_t" placeholder="Event / paper name" style="flex:1 1 130px;min-width:0" onkeydown="if(event.key===\'Enter\')dlAdd()"><input id="dl_d" type="date" value="${addD(14)}"><button class="go" onclick="dlAdd()">Add</button></div></div>`}
-function wStudyPacksHub(){const sb=act().length,tp=act().reduce((a,i)=>a+S.subs[i].t.length,0),cards=(REV_STATS&&REV_STATS.totalCards)||0;return `<div class="card" style="border-color:var(--ac)"><div class="row" style="justify-content:space-between;margin:0 0 8px"><h2 style="margin:0">Study Packs &amp; Setup</h2><button class="go" onclick="navApp('packs')">Explore Packs</button></div><p class="mu" style="margin:0 0 10px">Start instantly with community Public Study Packs, or upload a template / <code>.docx</code> file to auto-create Subjects, Flashcards, and Notes.</p><div class="ws-grid" style="margin:0 0 10px"><div class="ws-stat"><span class="mu">Subjects</span><b>${sb}</b></div><div class="ws-stat"><span class="mu">Topics</span><b>${tp}</b></div><div class="ws-stat"><span class="mu">Flashcards</span><b>${cards}</b></div></div><div class="row" style="margin:0"><button onclick="S.tab='subjects';save();render()">+ Add Subject</button><button onclick="navApp('study')">Open Notes</button></div></div>`}
+function wStudyPacksHub(){const sb=act().length,tp=act().reduce((a,i)=>a+S.subs[i].t.length,0),cards=(REV_STATS&&REV_STATS.totalCards)||0;const activeLabel=ACTIVE_PACK_COUNT>0?`${ACTIVE_PACK_COUNT} active (${ACTIVE_PACK_TITLES.slice(0,2).join(', ')}${ACTIVE_PACK_TITLES.length>2?'…':''})`:'None active yet';return `<div class="card" style="border-color:var(--ac)"><div class="row" style="justify-content:space-between;margin:0 0 8px"><h2 style="margin:0">Study Packs Library</h2><button class="go" onclick="navApp('packs')">${ACTIVE_PACK_COUNT>0?'Manage / Switch Packs':'Browse Study Packs'}</button></div><p class="mu" style="margin:0 0 8px">Active now: <b>${E(activeLabel)}</b> · Enable GCSE subject combos or community packs anytime, and disable or swap packs in 1 click.</p><div class="ws-grid" style="margin:0 0 10px"><div class="ws-stat"><span class="mu">Subjects</span><b>${sb}</b></div><div class="ws-stat"><span class="mu">Spec Topics</span><b>${tp}</b></div><div class="ws-stat"><span class="mu">Flashcards</span><b>${cards}</b></div></div><div class="row" style="margin:0"><button onclick="S.tab='subjects';save();render()">Subjects &amp; Spec</button><button onclick="navApp('study')">Study Notes</button><button onclick="navApp('cards')">Flashcards</button></div></div>`}
 function wLiveQuizHub(){const s=REV_STATS,tot=(s&&s.totalCards)||0,due=(s&&s.dueNow)||0;return `<div class="card"><div class="row" style="justify-content:space-between;margin:0 0 8px"><h2 style="margin:0">Live Quiz Arena</h2><button class="go" onclick="navApp('quiz')">Play Live Quiz</button></div><p class="mu" style="margin:0 0 10px">Host or join fast-paced multiplayer flashcard rounds with 4-letter codes, speed streaks, and Gemini Flash-Lite semantic grading.</p><div class="row" style="margin:0;justify-content:space-between"><span class="mu">${tot?`<b>${tot}</b> cards ready (${due} due)`:'Import a CSV deck or add cards to play'}</span><button onclick="navApp('cards')">Flashcards</button></div></div>`}
 function today(){syncToday();
  const it=S.today.items,dn=it.filter(k=>k.done).length,dd=hasStart()?days(S.start):-1,st=streak();
  const empty=isWorkspaceEmpty();
- const sub=empty?`Clean workspace · Ready for your first Study Pack, Subject, or Study Session`:`${dn} of ${it.length} planned done · ${tmin()} min revised today${hasStart()&&dd>0?" · mocks in "+dd+" days":""}${st>0?" · "+st+" day streak":""}`;
- const startCard=empty?`<div class="card" style="margin-bottom:14px;border-color:var(--ac)"><div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px"><div><h2 style="margin:0 0 4px">Start Your StudyDeck Workspace</h2><p class="mu" style="margin:0">New accounts start completely clean with zero pre-filled sample data. Follow these three steps or use the starter widgets below right away.</p></div><div class="row" style="margin:0"><button class="go" onclick="navApp('packs')">Browse Study Packs</button><button onclick="S.tab='subjects';save();render()">+ Add Subject</button><button onclick="S.tab='todo';save();render()">+ Add To-do</button><button onclick="navApp('quiz')">Live Quiz</button></div></div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px"><div class="box" style="margin:0;cursor:pointer" onclick="navApp('packs')"><b>1. Grab a Study Pack</b><p class="mu" style="margin:4px 0 0">Browse Public community packs or build your own from a template, <code>.txt</code>, or Word <code>.docx</code> file.</p></div><div class="box" style="margin:0;cursor:pointer" onclick="S.tab='subjects';save();render()"><b>2. Add Subjects &amp; Tasks</b><p class="mu" style="margin:4px 0 0">Create your subjects, topic lists, deadlines, and to-do items — Home updates automatically as you build.</p></div><div class="box" style="margin:0;cursor:pointer" onclick="navApp('quiz')"><b>3. Focus Timer &amp; Live Quiz</b><p class="mu" style="margin:4px 0 0">Track today&apos;s minutes below, jot quick notes, or challenge friends in multiplayer flashcard quizzes.</p></div></div></div>`:'';
+ const sub=empty?`Clean workspace · Pick a Study Pack to load Subjects, Specification subtopics, Notes & Flashcards`:`${dn} of ${it.length} planned done · ${tmin()} min revised today${hasStart()&&dd>0?" · mocks in "+dd+" days":""}${st>0?" · "+st+" day streak":""}`;
+ const startCard=empty?`<div class="card" style="margin-bottom:14px;border-color:var(--ac)"><div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px"><div><h2 style="margin:0 0 4px">Start with a Study Pack</h2><p class="mu" style="margin:0">Pick a GCSE Subject Combo or a Community Pack shared by other students — turn packs on or off anytime without losing your setup.</p></div><div class="row" style="margin:0"><button class="go" onclick="navApp('packs')">Browse Study Packs</button><button onclick="S.tab='subjects';save();render()">+ Add Custom Subject</button><button onclick="navApp('quiz')">Live Quiz</button></div></div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px"><div class="box" style="margin:0;cursor:pointer" onclick="navApp('packs')"><b>1. Pick or Switch Study Packs</b><p class="mu" style="margin:4px 0 0">Choose standard GCSE subject bundles or community packs — loads specification topics, study notes &amp; flashcards automatically.</p></div><div class="box" style="margin:0;cursor:pointer" onclick="S.tab='subjects';save();render()"><b>2. Review Spec &amp; Notes</b><p class="mu" style="margin:4px 0 0">Track confidence per syllabus subtopic, read structured notes, or build your own pack in seconds.</p></div><div class="box" style="margin:0;cursor:pointer" onclick="navApp('cards')"><b>3. Practice Flashcards &amp; Quiz</b><p class="mu" style="margin:4px 0 0">Run spaced-repetition flashcards, enable/disable packs cleanly, or challenge friends in Live Quiz.</p></div></div></div>`:'';
  $("v-today").innerHTML=startCard+wRenderPage('today','Home',sub);tsF()}
 function tm(i,j){if(T)stopT();T={i,j,s:Date.now()};$("tbar").innerHTML=`<div class="card" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-color:var(--ac)"><b id="tc" style="font-size:22px"></b><span style="flex:1">${E(S.subs[i].t[j].x)}</span><button onclick="stopT()">Stop</button></div>`;tk=setInterval(tick,1000);tick()}
 function tick(){if(!T)return;const e=Math.floor((Date.now()-T.s)/1000);if(e>=1500){stopT(true);return}$("tc").textContent=fmt(1500-e)}
@@ -631,17 +631,17 @@ addEventListener("message",(ev)=>{
       if(idx>=0){S.subs[idx].on=false;save();if(S.tab==="subjects"||S.tab==="today"||S.tab==="progress")rr()}
     }
   }else if(d.type==="BRIDGE_APPLY_PACK"&&d.packPlanner){
-    const pp=d.packPlanner||{};
+    const pp=d.packPlanner||{},pid=d.packId?String(d.packId):'';
     if(!hasStart()&&pp.start&&/^\d{4}-\d{2}-\d{2}$/.test(pp.start))S.start=pp.start;
     (pp.subjects||[]).forEach(ps=>{
       if(!ps||!ps.name)return;
       const nm=String(ps.name).trim();
       let ex=S.subs.find(x=>x.n.toLowerCase()===nm.toLowerCase()||x.n.split(' (')[0].toLowerCase()===nm.split(' (')[0].toLowerCase());
-      if(!ex){ex={n:nm,w:ps.weight||2,date:ps.date||"",on:true,t:[]};S.subs.push(ex)}
+      if(!ex){ex={n:nm,w:ps.weight||2,date:ps.date||"",on:true,t:[],packId:pid||undefined};S.subs.push(ex)}
       else ex.on=true;
       (ps.topics||[]).forEach(tp=>{
         const txt=String(tp||'').trim();
-        if(txt&&!ex.t.some(y=>y.x.toLowerCase()===txt.toLowerCase()))ex.t.push({x:txt,l:0});
+        if(txt&&!ex.t.some(y=>y.x.toLowerCase()===txt.toLowerCase()))ex.t.push({x:txt,l:0,packId:pid||undefined});
       });
       if(Array.isArray(ps.exams)&&ps.exams.length){
         ex.ex=ex.ex||[];
@@ -658,10 +658,38 @@ addEventListener("message",(ev)=>{
         const ttl=String(pt.title).trim();
         if(D.items.some(k=>k.t.toLowerCase()===ttl.toLowerCase()))return;
         const si=pt.subjectName?S.subs.findIndex(x=>x.n.toLowerCase().includes(pt.subjectName.toLowerCase())):null;
-        D.items.push({id:++D.n,t:ttl,done:0,d:pt.due||'',pri:pt.pri||1,c:pt.cat||'oth',i:si>=0?si:null,tg:[],est:0,st:0,td:'',steps:[],note:pt.note||'',rep:'',cr:Date.now()});
+        D.items.push({id:++D.n,t:ttl,done:0,d:pt.due||'',pri:pt.pri||1,c:pt.cat||'oth',i:si>=0?si:null,tg:[],est:0,st:0,td:'',steps:[],note:pt.note||'',rep:'',cr:Date.now(),packId:pid||undefined});
       });
     }
     if(S.cal)S.cal.gen='';S.today=null;save();if(CS.ready)cPush();render();
+  }else if(d.type==="BRIDGE_DISABLE_PACK"&&d.packId){
+    const pid=String(d.packId);
+    const D=tdS();
+    D.items=D.items.filter(k=>k.packId!==pid);
+    for(let i=S.subs.length-1;i>=0;i--){
+      const s=S.subs[i];
+      s.t=(s.t||[]).filter(t=>t.packId!==pid);
+      if(s.packId===pid&&s.t.length===0){
+        S.subs.splice(i,1);
+        S.log=S.log.filter(l=>l.i!=i).map(l=>(l.i>i&&l.i--,l));
+        S.scores=S.scores.filter(sc=>sc.i!=i).map(sc=>(sc.i>i&&sc.i--,sc));
+        if(S.cal&&Array.isArray(S.cal.ev)){
+          S.cal.ev=S.cal.ev.filter(e=>e.i!=i).map(e=>(e.i>i&&e.i--,e));
+        }
+        D.items.forEach(k=>{if(k.i!=null){if(k.i===i)k.i=null;else if(k.i>i)k.i--}});
+        if(S.open===i)S.open=null;else if(S.open!=null&&S.open>i)S.open--;
+      }else if(s.packId===pid){
+        delete s.packId;
+      }
+    }
+    if(S.cal)S.cal.gen='';
+    S.today=null;
+    if(T&&T.i>=0&&!S.subs[T.i])T.i=-1;
+    save();if(CS.ready)cPush();render();
+  }else if(d.type==="BRIDGE_ACTIVE_PACKS"){
+    ACTIVE_PACK_COUNT=Number(d.count)||0;
+    ACTIVE_PACK_TITLES=Array.isArray(d.titles)?d.titles:[];
+    if(S.tab==="today"&&(!document.activeElement||!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))){rr()}
   }else if(d.type==="BRIDGE_RESET_EMPTY"){
     if(T)endS(false,true);
     const keepUi=S.ui,keepTh=S.theme;
