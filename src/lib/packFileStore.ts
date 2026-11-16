@@ -1,11 +1,3 @@
-import {
-  deleteObject,
-  getBytes,
-  listAll,
-  ref,
-  uploadString,
-} from 'firebase/storage';
-import { storage } from '../firebase';
 import { StudyPack } from '../types';
 
 export interface StudyPackFile {
@@ -41,7 +33,10 @@ export function serializeStudyPackFile(pack: StudyPack): string {
   return JSON.stringify(payload, null, 2);
 }
 
-export function parseStudyPackFile(rawText: string, fallbackVisibility?: 'public' | 'private'): StudyPack | null {
+export function parseStudyPackFile(
+  rawText: string,
+  fallbackVisibility?: 'public' | 'private'
+): StudyPack | null {
   try {
     const parsed = JSON.parse(rawText) as StudyPackFile | StudyPack;
     const candidate =
@@ -122,7 +117,7 @@ export function loadAllLocalPackFiles(): StudyPack[] {
 }
 
 // ============================================================================
-// Static /public/study-packs/*.json files (served by Vite & Vercel to all)
+// Static /public/study-packs/*.json files (served free by Vite & Vercel to all)
 // ============================================================================
 
 export async function loadStaticPublicPackFiles(): Promise<StudyPack[]> {
@@ -152,103 +147,4 @@ export async function loadStaticPublicPackFiles(): Promise<StudyPack[]> {
   } catch {
     return [];
   }
-}
-
-// ============================================================================
-// Firebase Storage per-pack JSON files
-// ============================================================================
-
-function getStoragePackPath(packId: string, visibility: 'public' | 'private', uid?: string): string {
-  const fileName = getPackFileName(packId);
-  if (visibility === 'public') {
-    return `study-packs/public/${fileName}`;
-  }
-  return `study-packs/private/${uid || 'anon'}/${fileName}`;
-}
-
-export async function uploadPackFileToStorage(
-  pack: StudyPack,
-  visibility: 'public' | 'private',
-  uid: string
-): Promise<{ ok: boolean; path: string; error?: string }> {
-  const path = getStoragePackPath(pack.id, visibility, uid);
-  const fileJson = serializeStudyPackFile({
-    ...pack,
-    id: sanitizePackId(pack.id),
-    visibility,
-    ownerId: pack.ownerId || uid,
-  });
-
-  try {
-    const storageRef = ref(storage, path);
-    await uploadString(storageRef, fileJson, 'raw', {
-      contentType: 'application/json',
-      customMetadata: {
-        id: sanitizePackId(pack.id),
-        title: (pack.title || 'Untitled Study Pack').slice(0, 120),
-        visibility,
-        ownerId: pack.ownerId || uid,
-        ownerName: (pack.ownerName || pack.author || 'StudyDeck User').slice(0, 80),
-      },
-    });
-    return { ok: true, path };
-  } catch (err) {
-    return {
-      ok: false,
-      path,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-export async function deletePackFileFromStorage(
-  packId: string,
-  visibility: 'public' | 'private',
-  uid?: string
-): Promise<void> {
-  const path = getStoragePackPath(packId, visibility, uid);
-  try {
-    await deleteObject(ref(storage, path));
-  } catch {
-    // Ignore missing object or unconfigured Storage bucket
-  }
-}
-
-async function listPackFolderFromStorage(
-  folderPath: string,
-  visibility: 'public' | 'private'
-): Promise<StudyPack[]> {
-  try {
-    const res = await listAll(ref(storage, folderPath));
-    const jsonItems = res.items.filter((item) => item.name.endsWith('.json'));
-    if (!jsonItems.length) return [];
-
-    const decoder = new TextDecoder();
-    const packs = await Promise.all(
-      jsonItems.map(async (itemRef) => {
-        try {
-          const bytes = await getBytes(itemRef, 1024 * 1024);
-          const raw = decoder.decode(bytes);
-          return parseStudyPackFile(raw, visibility);
-        } catch {
-          return null;
-        }
-      })
-    );
-    return packs
-      .filter((p): p is StudyPack => Boolean(p))
-      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  } catch {
-    // Gracefully return empty if Firebase Storage is not enabled or rules aren't set yet
-    return [];
-  }
-}
-
-export async function listPublicPackFilesFromStorage(): Promise<StudyPack[]> {
-  return listPackFolderFromStorage('study-packs/public', 'public');
-}
-
-export async function listPrivatePackFilesFromStorage(uid: string): Promise<StudyPack[]> {
-  if (!uid) return [];
-  return listPackFolderFromStorage(`study-packs/private/${uid}`, 'private');
 }

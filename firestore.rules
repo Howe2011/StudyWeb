@@ -390,7 +390,7 @@ service cloud.firestore {
         (isSignedIn() && existing().ownerId == request.auth.uid) ||
         isAdmin()
       );
-      allow list: if existing().visibility == 'public' || (isSignedIn() && existing().ownerId == request.auth.uid);
+      allow list: if existing().visibility == 'public' || (isSignedIn() && existing().ownerId == request.auth.uid) || isAdmin();
 
       allow create: if isValidId(packId)
         && isVerified()

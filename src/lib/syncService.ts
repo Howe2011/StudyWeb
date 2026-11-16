@@ -16,10 +16,9 @@ import {
 import { db, firebaseProjectId, handleFirestoreError, OperationType } from '../firebase';
 import {
   deleteLocalPackFile,
-  deletePackFileFromStorage,
+  getPackFileName,
   sanitizePackId,
   saveLocalPackFile,
-  uploadPackFileToStorage,
 } from './packFileStore';
 import {
   decryptText,
@@ -692,7 +691,11 @@ export async function saveStudyPackToCloud(
 ): Promise<void> {
   const safeId = sanitizePackId(pack.id);
   const path = `studyPacks/${safeId}`;
+  const fileName = getPackFileName(safeId);
   const payloadJson = JSON.stringify({
+    app: 'studydeck-pack',
+    v: 1,
+    fileName,
     tags: pack.tags || [],
     highlights: pack.highlights || [],
     revision: pack.revision || {},
@@ -725,17 +728,6 @@ export async function saveStudyPackToCloud(
 
   saveLocalPackFile(normalizedPack);
 
-  // 1. Store pack as an individual JSON file in Firebase Storage (study-packs/public/{id}.json)
-  const storageRes = await uploadPackFileToStorage(normalizedPack, visibility, uid);
-  if (visibility === 'public') {
-    void deletePackFileFromStorage(safeId, 'private', uid);
-  } else {
-    void deletePackFileFromStorage(safeId, 'public', uid);
-  }
-
-  // 2. Also mirror in Firestore /studyPacks without getDoc pre-check (create via setDoc, else updateDoc)
-  let firestoreOk = false;
-  let firestoreErr: unknown = null;
   const updateFields = {
     title: cleanTitle,
     subtitle: cleanSubtitle,
@@ -743,9 +735,9 @@ export async function saveStudyPackToCloud(
     examBoard: cleanBoard,
     visibility,
     ownerName: cleanOwner,
-    subjectCountPreview: Math.max(0, Number(pack.subjectCountPreview || 0)),
-    topicCountPreview: Math.max(0, Number(pack.topicCountPreview || 0)),
-    cardCountPreview: Math.max(0, Number(pack.cardCountPreview || 0)),
+    subjectCountPreview: Math.max(0, Number(pack.subjectCountPreview || 0) || 0),
+    topicCountPreview: Math.max(0, Number(pack.topicCountPreview || 0) || 0),
+    cardCountPreview: Math.max(0, Number(pack.cardCountPreview || 0) || 0),
     payloadJson,
     updatedAt: serverTimestamp(),
   };
@@ -757,44 +749,49 @@ export async function saveStudyPackToCloud(
       ...updateFields,
       createdAt: serverTimestamp(),
     });
-    firestoreOk = true;
   } catch (createErr) {
     try {
       await updateDoc(ref, updateFields);
-      firestoreOk = true;
     } catch (updateErr) {
-      firestoreErr = updateErr || createErr;
+      if (visibility === 'private') {
+        console.warn('Private pack saved locally; Firestore sync skipped:', updateErr || createErr);
+        return;
+      }
+      const detail =
+        createErr instanceof Error
+          ? createErr.message
+          : updateErr instanceof Error
+            ? updateErr.message
+            : String(createErr);
+      throw new Error(
+        `Could not publish "${fileName}" to Firestore in Firebase project "${firebaseProjectId}". Publish firestore.rules in Firebase Console → Firestore Database → Rules (free Spark plan) or add the exported .json file to public/study-packs/ on Vercel. (${detail})`,
+      );
     }
-  }
-
-  if (!storageRes.ok && !firestoreOk) {
-    const detail = firestoreErr instanceof Error ? firestoreErr.message : String(firestoreErr || storageRes.error || '');
-    throw new Error(
-      `Could not publish public pack file to Firebase project "${firebaseProjectId}". Deploy firestore.rules or storage.rules to your Firebase project (${detail}).`
-    );
   }
 }
 
 export async function savePrivatePackFile(
   pack: StudyPack,
-  uid?: string
+  uid?: string,
+  ownerName?: string
 ): Promise<void> {
   const safeId = sanitizePackId(pack.id);
-  const normalized: StudyPack = { ...pack, id: safeId, visibility: 'private' };
+  const normalized: StudyPack = {
+    ...pack,
+    id: safeId,
+    visibility: 'private',
+    ownerId: pack.ownerId || uid,
+    ownerName: pack.ownerName || ownerName,
+  };
   saveLocalPackFile(normalized);
   if (uid) {
-    await uploadPackFileToStorage(normalized, 'private', uid);
-    void deletePackFileFromStorage(safeId, 'public', uid);
+    await saveStudyPackToCloud(normalized, uid, ownerName || normalized.ownerName || 'StudyDeck User');
   }
 }
 
-export async function deleteStudyPackFromCloud(packId: string, ownerUid?: string): Promise<void> {
+export async function deleteStudyPackFromCloud(packId: string): Promise<void> {
   const safeId = sanitizePackId(packId);
   deleteLocalPackFile(safeId);
-  await deletePackFileFromStorage(safeId, 'public', ownerUid);
-  if (ownerUid) {
-    await deletePackFileFromStorage(safeId, 'private', ownerUid);
-  }
   const path = `studyPacks/${safeId}`;
   try {
     await deleteDoc(doc(db, 'studyPacks', safeId));
@@ -848,6 +845,32 @@ export function subscribePublicStudyPacks(
 ): () => void {
   const path = 'studyPacks';
   const q = query(collection(db, 'studyPacks'), where('visibility', '==', 'public'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => parseCloudPackRecord(d.data() as CloudStudyPackRecord))
+        .filter((x): x is StudyPack => Boolean(x))
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      onPacks(list);
+    },
+    (err) => {
+      try {
+        handleFirestoreError(err, OperationType.LIST, path);
+      } catch (wrapped) {
+        if (onError) onError(wrapped);
+      }
+    }
+  );
+}
+
+export function subscribeUserStudyPacks(
+  uid: string,
+  onPacks: (packs: StudyPack[]) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  const path = `studyPacks(ownerId=${uid})`;
+  const q = query(collection(db, 'studyPacks'), where('ownerId', '==', uid));
   return onSnapshot(
     q,
     (snap) => {
