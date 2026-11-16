@@ -22,7 +22,22 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT || 3000);
+function resolvePort(): number {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === '--port' || args[i] === '-p') && args[i + 1]) {
+      const n = Number(args[i + 1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    } else if (args[i].startsWith('--port=')) {
+      const n = Number(args[i].slice('--port='.length));
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  const envPort = Number(process.env.PORT || 3000);
+  return Number.isFinite(envPort) && envPort > 0 ? envPort : 3000;
+}
+
+const PORT = resolvePort();
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
@@ -190,8 +205,13 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: disableHmr ? false : { server: httpServer },
+        ...(disableHmr ? { watch: null } : {}),
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

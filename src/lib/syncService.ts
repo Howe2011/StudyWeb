@@ -683,7 +683,9 @@ export async function saveStudyPackToCloud(
   uid: string,
   ownerName: string
 ): Promise<void> {
-  const safeId = pack.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+  const safeId = (pack.id || `pack_${Date.now().toString(36)}`)
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 120);
   const path = `studyPacks/${safeId}`;
   const payloadJson = JSON.stringify({
     tags: pack.tags || [],
@@ -696,35 +698,42 @@ export async function saveStudyPackToCloud(
   }
   const ref = doc(db, 'studyPacks', safeId);
   const visibility: 'public' | 'private' = pack.visibility === 'public' ? 'public' : 'private';
+  const cleanTitle = ((pack.title || '').trim() || 'Untitled Study Pack').slice(0, 140);
+  const cleanSubtitle = (pack.subtitle || '').trim().slice(0, 240);
+  const cleanBoard = ((pack.examBoard || '').trim() || 'Custom Study Pack').slice(0, 80);
+  const cleanOwner = ((ownerName || pack.ownerName || '').trim() || 'StudyDeck User').slice(0, 100);
+  const cleanCategory: StudyPackCategory =
+    pack.category === 'flashcards' || pack.category === 'notes' ? pack.category : 'combo';
+
   try {
     const existing = await getDoc(ref);
     if (existing.exists()) {
       await updateDoc(ref, {
-        title: (pack.title || 'Untitled Study Pack').slice(0, 140),
-        subtitle: (pack.subtitle || '').slice(0, 240),
-        category: pack.category || 'combo',
-        examBoard: (pack.examBoard || 'Custom Study Pack').slice(0, 80),
+        title: cleanTitle,
+        subtitle: cleanSubtitle,
+        category: cleanCategory,
+        examBoard: cleanBoard,
         visibility,
-        ownerName: (ownerName || pack.ownerName || 'StudyDeck User').slice(0, 100),
-        subjectCountPreview: Number(pack.subjectCountPreview || 0),
-        topicCountPreview: Number(pack.topicCountPreview || 0),
-        cardCountPreview: Number(pack.cardCountPreview || 0),
+        ownerName: cleanOwner,
+        subjectCountPreview: Math.max(0, Number(pack.subjectCountPreview || 0)),
+        topicCountPreview: Math.max(0, Number(pack.topicCountPreview || 0)),
+        cardCountPreview: Math.max(0, Number(pack.cardCountPreview || 0)),
         payloadJson,
         updatedAt: serverTimestamp(),
       });
     } else {
       await setDoc(ref, {
         id: safeId,
-        title: (pack.title || 'Untitled Study Pack').slice(0, 140),
-        subtitle: (pack.subtitle || '').slice(0, 240),
-        category: pack.category || 'combo',
-        examBoard: (pack.examBoard || 'Custom Study Pack').slice(0, 80),
+        title: cleanTitle,
+        subtitle: cleanSubtitle,
+        category: cleanCategory,
+        examBoard: cleanBoard,
         visibility,
         ownerId: uid,
-        ownerName: (ownerName || pack.ownerName || 'StudyDeck User').slice(0, 100),
-        subjectCountPreview: Number(pack.subjectCountPreview || 0),
-        topicCountPreview: Number(pack.topicCountPreview || 0),
-        cardCountPreview: Number(pack.cardCountPreview || 0),
+        ownerName: cleanOwner,
+        subjectCountPreview: Math.max(0, Number(pack.subjectCountPreview || 0)),
+        topicCountPreview: Math.max(0, Number(pack.topicCountPreview || 0)),
+        cardCountPreview: Math.max(0, Number(pack.cardCountPreview || 0)),
         payloadJson,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),

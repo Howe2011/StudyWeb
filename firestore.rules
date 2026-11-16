@@ -385,6 +385,7 @@ service cloud.firestore {
 
     match /studyPacks/{packId} {
       allow get: if isValidId(packId) && (
+        resource == null ||
         existing().visibility == 'public' ||
         (isSignedIn() && existing().ownerId == request.auth.uid) ||
         isAdmin()
@@ -412,7 +413,9 @@ service cloud.firestore {
     }
 
     match /quizDecks/{deckId} {
-      allow get: if isValidId(deckId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow get: if isValidId(deckId) && isSignedIn() && (
+        resource == null || existing().ownerId == request.auth.uid
+      );
       allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
 
       allow create: if isValidId(deckId)
