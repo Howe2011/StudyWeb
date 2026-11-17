@@ -249,7 +249,7 @@ export async function incrementSharedCopyCount(id: string): Promise<void> {
 export function copySharedItemIntoWorkspace(
   ws: WorkspaceData,
   item: SharedStudyItem
-): { workspace: WorkspaceData; summary: string } {
+): { workspace: WorkspaceData; summary: string; subjectId?: string; topicId?: string } {
   const next: WorkspaceData = {
     ...ws,
     subjects: [...ws.subjects],
@@ -312,6 +312,8 @@ export function copySharedItemIntoWorkspace(
     return {
       workspace: next,
       summary: `Copied notes "${uniqueName}" into ${subj.name}`,
+      subjectId: subj.id,
+      topicId: newTopic.id,
     };
   }
 
@@ -352,6 +354,8 @@ export function copySharedItemIntoWorkspace(
     return {
       workspace: next,
       summary: `Added ${added} flashcard${added === 1 ? '' : 's'} into ${subj.name}`,
+      subjectId: subj.id,
+      topicId: topic.id,
     };
   }
 
@@ -365,12 +369,14 @@ export function copySharedItemIntoWorkspace(
     );
     const topicMap = new Map<string, StudyTopic>();
     let topicsAdded = 0;
+    let firstTopicId: string | undefined;
     for (const tp of sp.topics) {
       const existing = next.topics.find(
         (x) => x.subjectId === subj.id && x.name.toLowerCase() === tp.name.toLowerCase()
       );
       if (existing) {
         topicMap.set(tp.name.toLowerCase(), existing);
+        if (!firstTopicId) firstTopicId = existing.id;
       } else {
         const created: StudyTopic = {
           id: makeId('top'),
@@ -380,13 +386,22 @@ export function copySharedItemIntoWorkspace(
           notes: {
             ...createEmptyStructuredNote(),
             ...tp.notes,
+            sections: (tp.notes?.sections || []).map((sec) => ({
+              ...sec,
+              id: makeNoteId('sec'),
+            })),
+            keyTerms: (tp.notes?.keyTerms || []).map((kt) => ({
+              ...kt,
+              id: makeNoteId('term'),
+            })),
             updatedAt: new Date().toISOString(),
           },
-          timelineEvents: tp.timelineEvents,
+          timelineEvents: tp.timelineEvents?.map((ev) => ({ ...ev, id: makeId('tl') })),
           createdAt: new Date().toISOString(),
         };
         next.topics.push(created);
         topicMap.set(tp.name.toLowerCase(), created);
+        if (!firstTopicId) firstTopicId = created.id;
         topicsAdded++;
       }
     }
@@ -418,8 +433,112 @@ export function copySharedItemIntoWorkspace(
     return {
       workspace: next,
       summary: `Copied ${subj.name} (${topicsAdded} topics, ${cardsAdded} flashcards)`,
+      subjectId: subj.id,
+      topicId: firstTopicId,
     };
   }
 
   return { workspace: next, summary: 'Nothing new to copy.' };
+}
+
+/**
+ * Copies a single topic's notes (and any matching cards) from a shared Full Subject into workspace.
+ */
+export function copySharedSubjectTopicIntoWorkspace(
+  ws: WorkspaceData,
+  item: SharedStudyItem,
+  topicIndex: number
+): { workspace: WorkspaceData; summary: string; subjectId?: string; topicId?: string } {
+  if (item.type !== 'subject' || !item.subjectPayload) {
+    return copySharedItemIntoWorkspace(ws, item);
+  }
+  const tp = item.subjectPayload.topics[topicIndex];
+  if (!tp) {
+    return copySharedItemIntoWorkspace(ws, item);
+  }
+  const next: WorkspaceData = {
+    ...ws,
+    subjects: [...ws.subjects],
+    topics: [...ws.topics],
+    flashcards: [...ws.flashcards],
+    updatedAt: new Date().toISOString(),
+  };
+
+  const sp = item.subjectPayload;
+  let subj = next.subjects.find(
+    (s) => s.name.toLowerCase() === (sp.subject.name || item.subjectName).trim().toLowerCase()
+  );
+  if (!subj) {
+    subj = {
+      id: makeId('subj'),
+      name: (sp.subject.name || item.subjectName || 'Shared Subject').trim(),
+      examBoard: sp.subject.examBoard || item.examBoard || 'GCSE / Revision',
+      color: sp.subject.color || '#2F5F8A',
+      examDate: '',
+      weight: 2,
+      hasTimeline: Boolean(sp.subject.hasTimeline),
+      createdAt: new Date().toISOString(),
+    };
+    next.subjects.push(subj);
+  }
+
+  const uniqueName = next.topics.some(
+    (t) => t.subjectId === subj!.id && t.name.toLowerCase() === tp.name.toLowerCase()
+  )
+    ? `${tp.name} (Shared)`
+    : tp.name;
+
+  const createdTopic: StudyTopic = {
+    id: makeId('top'),
+    subjectId: subj.id,
+    name: uniqueName,
+    specCode: tp.specCode,
+    notes: {
+      ...createEmptyStructuredNote(),
+      ...tp.notes,
+      sections: (tp.notes?.sections || []).map((sec) => ({
+        ...sec,
+        id: makeNoteId('sec'),
+      })),
+      keyTerms: (tp.notes?.keyTerms || []).map((kt) => ({
+        ...kt,
+        id: makeNoteId('term'),
+      })),
+      updatedAt: new Date().toISOString(),
+    },
+    timelineEvents: tp.timelineEvents?.map((ev) => ({ ...ev, id: makeId('tl') })),
+    createdAt: new Date().toISOString(),
+  };
+  next.topics.push(createdTopic);
+
+  const matchingCards = sp.cards.filter(
+    (c) => (c.topicName || '').toLowerCase() === tp.name.toLowerCase()
+  );
+  const existingQ = new Set(next.flashcards.map((c) => `${c.subjectId}::${c.q.toLowerCase()}`));
+  let cardsAdded = 0;
+  for (const c of matchingCards) {
+    const key = `${subj.id}::${c.q.trim().toLowerCase()}`;
+    if (!c.q.trim() || !c.a.trim() || existingQ.has(key)) continue;
+    existingQ.add(key);
+    next.flashcards.push({
+      id: makeId('fc'),
+      subjectId: subj.id,
+      topicId: createdTopic.id,
+      sectionName: c.sectionName || createdTopic.name,
+      q: c.q.trim(),
+      a: c.a.trim(),
+      box: 1,
+      dueAt: Date.now(),
+      flagged: false,
+      createdAt: new Date().toISOString(),
+    });
+    cardsAdded++;
+  }
+
+  return {
+    workspace: next,
+    summary: `Copied topic "${uniqueName}"${cardsAdded ? ` + ${cardsAdded} cards` : ''} into ${subj.name}`,
+    subjectId: subj.id,
+    topicId: createdTopic.id,
+  };
 }

@@ -3,7 +3,7 @@ import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/aut
 import { auth, googleProvider } from './firebase';
 import { AuthVaultModal } from './components/AuthVaultModal';
 import { CalendarView } from './components/CalendarView';
-import { CommunityView } from './components/CommunityView';
+import { CommunityTypeFilter, CommunityView } from './components/CommunityView';
 import { CustomizeModal } from './components/CustomizeModal';
 import { FlashcardsView } from './components/FlashcardsView';
 import { HomeDashboardView } from './components/HomeDashboardView';
@@ -136,6 +136,8 @@ export default function App() {
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>(
     () => workspace.subjects[0]?.id || ''
   );
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  const [communityTypeFilter, setCommunityTypeFilter] = useState<CommunityTypeFilter | null>(null);
   const [openQuickAddSignal, setOpenQuickAddSignal] = useState(false);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -787,9 +789,20 @@ export default function App() {
   const handleNavigate = useCallback(
     (
       tab: WorkspaceTab,
-      opts?: { subjectId?: string; plannerTab?: PlannerSubTab; openQuickAdd?: boolean }
+      opts?: {
+        subjectId?: string;
+        topicId?: string;
+        plannerTab?: PlannerSubTab;
+        openQuickAdd?: boolean;
+        communityTypeFilter?: CommunityTypeFilter;
+      }
     ) => {
       if (opts?.subjectId) setSelectedSubjectId(opts.subjectId);
+      if (opts?.topicId) setSelectedTopicId(opts.topicId);
+      else if (tab === 'notes' && !opts?.topicId) setSelectedTopicId(null);
+
+      if (opts?.communityTypeFilter) setCommunityTypeFilter(opts.communityTypeFilter);
+
       if (opts?.plannerTab) {
         if (opts.plannerTab === 'calendar') {
           setActiveTab('calendar');
@@ -870,7 +883,9 @@ export default function App() {
               workspace={workspace}
               initialQuickAddOpen={openQuickAddSignal}
               onUpdateWorkspace={updateWorkspace}
-              onOpenSubjectNotes={(subjectId) => handleNavigate('notes', { subjectId })}
+              onOpenSubjectNotes={(subjectId, topicId) =>
+                handleNavigate('notes', { subjectId, topicId })
+              }
               onOpenSubjectCards={(subjectId) => handleNavigate('flashcards', { subjectId })}
               onShareSubject={handleShareSubject}
               onNavigate={(tab) => handleNavigate(tab)}
@@ -881,10 +896,14 @@ export default function App() {
             <NotesStudioView
               workspace={workspace}
               selectedSubjectId={selectedSubjectId}
+              initialTopicId={selectedTopicId}
               onSelectSubjectId={setSelectedSubjectId}
               onUpdateWorkspace={updateWorkspace}
               onOpenImport={() => setImportModalOpen(true)}
               onShareTopic={handleShareTopic}
+              onBrowseCommunityNotes={() =>
+                handleNavigate('community', { communityTypeFilter: 'notes' })
+              }
               onNavigate={(tab) => handleNavigate(tab)}
             />
           )}
@@ -935,9 +954,17 @@ export default function App() {
               workspace={workspace}
               firebaseUser={firebaseUser}
               initialShareCode={initialShareCode}
+              initialTypeFilter={communityTypeFilter}
               onUpdateWorkspace={updateWorkspace}
               onOpenAuth={() => setAuthModalOpen(true)}
               onRequestClearInitialShareCode={() => setInitialShareCode(null)}
+              onRequestClearInitialTypeFilter={() => setCommunityTypeFilter(null)}
+              onOpenCopiedNotes={(subjectId, topicId) =>
+                handleNavigate('notes', { subjectId, topicId })
+              }
+              onOpenCopiedFlashcards={(subjectId) =>
+                handleNavigate('flashcards', { subjectId })
+              }
             />
           )}
 

@@ -149,6 +149,7 @@ export interface StudyTopic {
   name: string;
   specCode?: string;
   completed?: boolean;
+  confidence?: 0 | 1 | 2 | 3; // 0=Not started, 1=Weak/Red, 2=Alright/Amber, 3=Mastered/Green
   notes: StructuredNoteData;
   timelineEvents?: TimelineEventItem[];
   createdAt: string;
@@ -232,6 +233,24 @@ export interface HomeWidgetPrefs {
   mastery: boolean;
 }
 
+export type HomeWidgetId =
+  | 'dueCards'
+  | 'timer'
+  | 'schedule'
+  | 'todos'
+  | 'mastery'
+  | 'dailyGoal'
+  | 'examCountdowns'
+  | 'scratchpad'
+  | 'flashcardBreakdown'
+  | 'liveQuiz';
+
+export interface HomeWidgetLayoutItem {
+  id: HomeWidgetId;
+  cols: number; // 3..12 on 12-column desktop grid
+  h?: number | null; // Optional custom height in px
+}
+
 export interface WorkspaceData {
   version: 2;
   subjects: StudySubject[];
@@ -243,7 +262,10 @@ export interface WorkspaceData {
   studyMinutesLogged: number;
   studyStreakDays: number;
   lastStudyDate: string;
+  dailyGoalMinutes?: number;
+  scratchpad?: string;
   homeWidgets: HomeWidgetPrefs;
+  homeLayout?: HomeWidgetLayoutItem[];
   updatedAt: string;
 }
 

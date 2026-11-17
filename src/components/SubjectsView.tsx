@@ -3,8 +3,11 @@ import {
   BookOpen,
   Calendar,
   Check,
+  ChevronDown,
+  ChevronUp,
   Edit3,
   Layers,
+  ListChecks,
   Plus,
   Search,
   Share2,
@@ -31,10 +34,27 @@ interface SubjectsViewProps {
   workspace: WorkspaceData;
   initialQuickAddOpen?: boolean;
   onUpdateWorkspace: (updater: (prev: WorkspaceData) => WorkspaceData) => void;
-  onOpenSubjectNotes: (subjectId: string) => void;
+  onOpenSubjectNotes: (subjectId: string, topicId?: string) => void;
   onOpenSubjectCards: (subjectId: string) => void;
   onShareSubject: (subjectId: string) => void;
   onNavigate: (tab: WorkspaceTab) => void;
+}
+
+const CONFIDENCE_META: Record<
+  0 | 1 | 2 | 3,
+  { label: string; short: string; color: string }
+> = {
+  0: { label: 'Not started', short: 'Unstarted', color: 'var(--line)' },
+  1: { label: 'Touched on (Weak)', short: 'Weak', color: 'var(--bad)' },
+  2: { label: 'Kinda alright', short: 'Alright', color: 'var(--e2)' },
+  3: { label: 'Mastered', short: 'Mastered', color: 'var(--ok)' },
+};
+
+function getTopicConfidence(t: StudyTopic): 0 | 1 | 2 | 3 {
+  if (t.confidence === 0 || t.confidence === 1 || t.confidence === 2 || t.confidence === 3) {
+    return t.confidence;
+  }
+  return t.completed ? 3 : 0;
 }
 
 export function SubjectsView({
@@ -69,6 +89,17 @@ export function SubjectsView({
   const [editingSubjId, setEditingSubjId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<StudySubject>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // Topics & Subtopics drawer state
+  const [expandedTopicsSubjId, setExpandedTopicsSubjId] = useState<string | null>(null);
+  const [topicFilterConf, setTopicFilterConf] = useState<'all' | 0 | 1 | 2 | 3>('all');
+  const [topicSearch, setTopicSearch] = useState('');
+  const [newSubtopicName, setNewSubtopicName] = useState('');
+  const [newSubtopicSpec, setNewSubtopicSpec] = useState('');
+  const [bulkTopicsOpen, setBulkTopicsOpen] = useState(false);
+  const [bulkTopicsText, setBulkTopicsText] = useState('');
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [editingTopicName, setEditingTopicName] = useState('');
 
   const existingSubjectNames = useMemo(
     () => new Set(workspace.subjects.map((s) => s.name.trim().toLowerCase())),
@@ -318,6 +349,108 @@ export function SubjectsView({
       updatedAt: new Date().toISOString(),
     }));
     setConfirmDeleteId(null);
+    if (expandedTopicsSubjId === subjId) setExpandedTopicsSubjId(null);
+  };
+
+  const handleSetTopicConfidence = (topicId: string, confidence: 0 | 1 | 2 | 3) => {
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      topics: prev.topics.map((t) =>
+        t.id === topicId
+          ? {
+              ...t,
+              confidence,
+              completed: confidence === 3,
+            }
+          : t
+      ),
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const handleAddSubtopic = (e: FormEvent, subjId: string) => {
+    e.preventDefault();
+    const clean = newSubtopicName.trim();
+    if (!clean) return;
+    const created: StudyTopic = {
+      id: makeId('top'),
+      subjectId: subjId,
+      name: clean,
+      specCode: newSubtopicSpec.trim() || undefined,
+      completed: false,
+      confidence: 0,
+      notes: createEmptyStructuredNote(),
+      createdAt: new Date().toISOString(),
+    };
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      topics: [...prev.topics, created],
+      updatedAt: new Date().toISOString(),
+    }));
+    setNewSubtopicName('');
+    setNewSubtopicSpec('');
+  };
+
+  const handleBulkAddSubtopics = (e: FormEvent, subjId: string) => {
+    e.preventDefault();
+    const lines = bulkTopicsText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (!lines.length) return;
+    onUpdateWorkspace((prev) => {
+      const existingNames = new Set(
+        prev.topics.filter((t) => t.subjectId === subjId).map((t) => t.name.toLowerCase())
+      );
+      const added: StudyTopic[] = [];
+      for (const line of lines) {
+        const [rawName, ...rest] = line.split('|');
+        const cleanName = (rawName || '').trim();
+        if (!cleanName || existingNames.has(cleanName.toLowerCase())) continue;
+        existingNames.add(cleanName.toLowerCase());
+        const summary = rest.join('|').trim();
+        added.push({
+          id: makeId('top'),
+          subjectId: subjId,
+          name: cleanName,
+          completed: false,
+          confidence: 0,
+          notes: createEmptyStructuredNote(summary),
+          createdAt: new Date().toISOString(),
+        });
+      }
+      if (!added.length) return prev;
+      return {
+        ...prev,
+        topics: [...prev.topics, ...added],
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setBulkTopicsText('');
+    setBulkTopicsOpen(false);
+  };
+
+  const handleRenameSubtopic = (topicId: string) => {
+    const clean = editingTopicName.trim();
+    if (!clean) {
+      setEditingTopicId(null);
+      return;
+    }
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      topics: prev.topics.map((t) => (t.id === topicId ? { ...t, name: clean } : t)),
+      updatedAt: new Date().toISOString(),
+    }));
+    setEditingTopicId(null);
+  };
+
+  const handleDeleteSubtopic = (topicId: string) => {
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      topics: prev.topics.filter((t) => t.id !== topicId),
+      flashcards: prev.flashcards.filter((c) => c.topicId !== topicId),
+      updatedAt: new Date().toISOString(),
+    }));
   };
 
   return (
@@ -709,8 +842,34 @@ export function SubjectsView({
                   );
                 }
 
+                const topicsExpanded = expandedTopicsSubjId === subj.id;
+                const confCounts = [0, 0, 0, 0];
+                topics.forEach((t) => {
+                  confCounts[getTopicConfidence(t)] += 1;
+                });
+                const topicTotal = Math.max(1, topics.length);
+                const visibleTopics = topicsExpanded
+                  ? topics.filter((t) => {
+                      const c = getTopicConfidence(t);
+                      if (topicFilterConf !== 'all' && c !== topicFilterConf) return false;
+                      if (topicSearch.trim()) {
+                        const q = topicSearch.trim().toLowerCase();
+                        return (
+                          t.name.toLowerCase().includes(q) ||
+                          (t.specCode || '').toLowerCase().includes(q)
+                        );
+                      }
+                      return true;
+                    })
+                  : [];
+
                 return (
-                  <div key={subj.id} className="sd-card flex flex-col justify-between p-5">
+                  <div
+                    key={subj.id}
+                    className={`sd-card flex flex-col justify-between p-5 ${
+                      topicsExpanded ? 'md:col-span-2' : ''
+                    }`}
+                  >
                     <div>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
@@ -787,9 +946,9 @@ export function SubjectsView({
                         </div>
                       </div>
 
-                      <div className="font-mono-num mt-3 flex items-center gap-3 text-xs text-[var(--mute)]">
+                      <div className="font-mono-num mt-3 flex flex-wrap items-center gap-3 text-xs text-[var(--mute)]">
                         <span>
-                          {completedCount}/{topics.length} topics studied
+                          {completedCount}/{topics.length} mastered
                         </span>
                         <span>·</span>
                         <span>{cards.length} flashcards</span>
@@ -802,6 +961,33 @@ export function SubjectsView({
                             : 'Standard'}
                         </span>
                       </div>
+
+                      {/* Stacked 3-level confidence progress bar (Mastered / Alright / Weak / Unstarted) */}
+                      {topics.length > 0 && (
+                        <div className="mt-2.5 flex h-1.5 w-full overflow-hidden rounded-full bg-[var(--line)]">
+                          <div
+                            style={{
+                              width: `${(confCounts[3] / topicTotal) * 100}%`,
+                              backgroundColor: 'var(--ok)',
+                            }}
+                            title={`${confCounts[3]} Mastered`}
+                          />
+                          <div
+                            style={{
+                              width: `${(confCounts[2] / topicTotal) * 100}%`,
+                              backgroundColor: 'var(--e2)',
+                            }}
+                            title={`${confCounts[2]} Kinda alright`}
+                          />
+                          <div
+                            style={{
+                              width: `${(confCounts[1] / topicTotal) * 100}%`,
+                              backgroundColor: 'var(--bad)',
+                            }}
+                            title={`${confCounts[1]} Touched on (Weak)`}
+                          />
+                        </div>
+                      )}
                     </div>
 
                     <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--line)] pt-3">
@@ -821,7 +1007,325 @@ export function SubjectsView({
                         <Layers className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Flashcards ({cards.length})</span>
                       </button>
+                      <button
+                        type="button"
+                        aria-expanded={topicsExpanded}
+                        onClick={() => {
+                          if (topicsExpanded) {
+                            setExpandedTopicsSubjId(null);
+                          } else {
+                            setExpandedTopicsSubjId(subj.id);
+                            setTopicFilterConf('all');
+                            setTopicSearch('');
+                            setBulkTopicsOpen(false);
+                          }
+                        }}
+                        className={`sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap ${
+                          topicsExpanded ? 'border-[var(--e3)] text-[var(--e3)]' : ''
+                        }`}
+                      >
+                        <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Topics ({topics.length})</span>
+                        {topicsExpanded ? (
+                          <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                      </button>
                     </div>
+
+                    {/* Expanded Subtopics & Confidence Panel */}
+                    {topicsExpanded && (
+                      <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-3 text-xs">
+                            <span className="font-bold text-[var(--ink)]">
+                              Subtopics &amp; Confidence
+                            </span>
+                            <span className="font-mono-num text-[var(--ok)]">
+                              {confCounts[3]} Mastered
+                            </span>
+                            <span className="font-mono-num text-[var(--e2)]">
+                              {confCounts[2]} Alright
+                            </span>
+                            <span className="font-mono-num text-[var(--bad)]">
+                              {confCounts[1]} Weak
+                            </span>
+                            <span className="font-mono-num text-[var(--mute)]">
+                              {confCounts[0]} Unstarted
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => setBulkTopicsOpen((v) => !v)}
+                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                          >
+                            {bulkTopicsOpen ? 'Hide Bulk Paste' : '+ Bulk Paste Subtopics'}
+                          </button>
+                        </div>
+
+                        {/* Filter + Search */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap gap-1">
+                            {(
+                              [
+                                ['all', `All (${topics.length})`],
+                                [0, `Unstarted (${confCounts[0]})`],
+                                [1, `Weak (${confCounts[1]})`],
+                                [2, `Alright (${confCounts[2]})`],
+                                [3, `Mastered (${confCounts[3]})`],
+                              ] as const
+                            ).map(([val, label]) => (
+                              <button
+                                key={String(val)}
+                                type="button"
+                                onClick={() => setTopicFilterConf(val)}
+                                className={`cursor-pointer rounded-lg border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${
+                                  topicFilterConf === val
+                                    ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)]'
+                                    : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)]'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {topics.length > 4 && (
+                            <div className="relative w-full sm:w-52">
+                              <Search
+                                className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--mute)]"
+                                aria-hidden="true"
+                              />
+                              <input
+                                type="text"
+                                value={topicSearch}
+                                onChange={(e) => setTopicSearch(e.target.value)}
+                                placeholder="Filter subtopics…"
+                                className="sd-input py-1 pl-7 text-xs"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Add Single Subtopic */}
+                        <form
+                          onSubmit={(e) => handleAddSubtopic(e, subj.id)}
+                          className="flex flex-wrap gap-2"
+                        >
+                          <input
+                            type="text"
+                            value={newSubtopicSpec}
+                            onChange={(e) => setNewSubtopicSpec(e.target.value)}
+                            placeholder="Spec (e.g. 1.2)"
+                            className="sd-input w-28 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={newSubtopicName}
+                            onChange={(e) => setNewSubtopicName(e.target.value)}
+                            placeholder={`Add new subtopic to ${subj.name}…`}
+                            className="sd-input min-w-0 flex-1 py-1.5 text-xs"
+                          />
+                          <button
+                            type="submit"
+                            className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Add Subtopic</span>
+                          </button>
+                        </form>
+
+                        {/* Bulk Paste Subtopics */}
+                        {bulkTopicsOpen && (
+                          <form
+                            onSubmit={(e) => handleBulkAddSubtopics(e, subj.id)}
+                            className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3"
+                          >
+                            <label className="block text-[11px] font-semibold text-[var(--mute)]">
+                              Paste subtopics (one per line · optionally separate summary with |)
+                              <textarea
+                                rows={4}
+                                value={bulkTopicsText}
+                                onChange={(e) => setBulkTopicsText(e.target.value)}
+                                placeholder={
+                                  'Cell Structure | Eukaryotes vs prokaryotes\nTransport in Cells | Diffusion, osmosis and active transport'
+                                }
+                                className="sd-input mt-1 text-xs"
+                              />
+                            </label>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBulkTopicsOpen(false)}
+                                className="sd-btn px-2.5 py-1 text-xs"
+                              >
+                                Cancel
+                              </button>
+                              <button type="submit" className="sd-btn-pri px-3 py-1 text-xs">
+                                Add All Subtopics
+                              </button>
+                            </div>
+                          </form>
+                        )}
+
+                        {/* Subtopics List */}
+                        {visibleTopics.length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-center text-xs text-[var(--mute)]">
+                            {topics.length === 0
+                              ? 'No subtopics yet. Add one above.'
+                              : 'No subtopics match your current filter.'}
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-[var(--line)] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)]">
+                            {visibleTopics.map((tp) => {
+                              const conf = getTopicConfidence(tp);
+                              const topicCardsCount = cards.filter((c) => c.topicId === tp.id).length;
+                              const isEditingThisTopic = editingTopicId === tp.id;
+
+                              return (
+                                <div
+                                  key={tp.id}
+                                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-xs"
+                                >
+                                  <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                                    {/* Clickable status dot cycles 0 -> 1 -> 2 -> 3 */}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleSetTopicConfidence(
+                                          tp.id,
+                                          ((conf + 1) % 4) as 0 | 1 | 2 | 3
+                                        )
+                                      }
+                                      title={`Status: ${CONFIDENCE_META[conf].label} (click to cycle)`}
+                                      aria-label={`Cycle confidence for ${tp.name}`}
+                                      className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded-full border border-[var(--line)] transition-transform hover:scale-110"
+                                      style={{ backgroundColor: CONFIDENCE_META[conf].color }}
+                                    />
+
+                                    {tp.specCode && (
+                                      <span className="font-mono-num shrink-0 rounded bg-[var(--card)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--mute)]">
+                                        {tp.specCode}
+                                      </span>
+                                    )}
+
+                                    {isEditingThisTopic ? (
+                                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                                        <input
+                                          type="text"
+                                          autoFocus
+                                          value={editingTopicName}
+                                          onChange={(e) => setEditingTopicName(e.target.value)}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault();
+                                              handleRenameSubtopic(tp.id);
+                                            } else if (e.key === 'Escape') {
+                                              setEditingTopicId(null);
+                                            }
+                                          }}
+                                          className="sd-input py-1 text-xs"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRenameSubtopic(tp.id)}
+                                          className="sd-btn-pri px-2 py-1 text-[11px]"
+                                        >
+                                          Save
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <span
+                                        onDoubleClick={() => {
+                                          setEditingTopicId(tp.id);
+                                          setEditingTopicName(tp.name);
+                                        }}
+                                        className="truncate font-semibold text-[var(--ink)]"
+                                        title={tp.name}
+                                      >
+                                        {tp.name}
+                                      </span>
+                                    )}
+
+                                    {topicCardsCount > 0 && (
+                                      <span className="font-mono-num shrink-0 text-[10px] text-[var(--mute)]">
+                                        {topicCardsCount} cards
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {/* Direct Red / Amber / Green confidence buttons */}
+                                    <div
+                                      className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--card)] px-1.5 py-0.5"
+                                      role="group"
+                                      aria-label={`Confidence rating for ${tp.name}`}
+                                    >
+                                      {([1, 2, 3] as const).map((lvl) => (
+                                        <button
+                                          key={lvl}
+                                          type="button"
+                                          onClick={() =>
+                                            handleSetTopicConfidence(
+                                              tp.id,
+                                              conf === lvl ? 0 : lvl
+                                            )
+                                          }
+                                          title={CONFIDENCE_META[lvl].label}
+                                          className={`cursor-pointer rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
+                                            conf === lvl
+                                              ? 'text-white'
+                                              : 'text-[var(--mute)] hover:text-[var(--ink)]'
+                                          }`}
+                                          style={
+                                            conf === lvl
+                                              ? { backgroundColor: CONFIDENCE_META[lvl].color }
+                                              : undefined
+                                          }
+                                        >
+                                          {CONFIDENCE_META[lvl].short}
+                                        </button>
+                                      ))}
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
+                                      className="sd-btn px-2 py-1 text-[11px] text-[var(--e3)] whitespace-nowrap"
+                                    >
+                                      Notes →
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingTopicId(tp.id);
+                                        setEditingTopicName(tp.name);
+                                      }}
+                                      aria-label={`Rename ${tp.name}`}
+                                      className="sd-btn h-6 w-6 p-0 text-[var(--mute)]"
+                                    >
+                                      <Edit3 className="h-3 w-3" aria-hidden="true" />
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteSubtopic(tp.id)}
+                                      aria-label={`Delete ${tp.name}`}
+                                      className="sd-btn h-6 w-6 p-0 text-[var(--bad)]"
+                                    >
+                                      <Trash2 className="h-3 w-3" aria-hidden="true" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

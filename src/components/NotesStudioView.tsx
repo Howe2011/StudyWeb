@@ -7,6 +7,7 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  Globe,
   Layers,
   Plus,
   Share2,
@@ -33,10 +34,12 @@ import {
 interface NotesStudioViewProps {
   workspace: WorkspaceData;
   selectedSubjectId: string;
+  initialTopicId?: string | null;
   onSelectSubjectId: (id: string) => void;
   onUpdateWorkspace: (updater: (prev: WorkspaceData) => WorkspaceData) => void;
   onOpenImport: () => void;
   onShareTopic: (subjectId: string, topicId: string) => void;
+  onBrowseCommunityNotes?: () => void;
   onNavigate: (tab: WorkspaceTab) => void;
 }
 
@@ -57,10 +60,12 @@ function renderInlineBold(text: string) {
 export function NotesStudioView({
   workspace,
   selectedSubjectId,
+  initialTopicId,
   onSelectSubjectId,
   onUpdateWorkspace,
   onOpenImport,
   onShareTopic,
+  onBrowseCommunityNotes,
   onNavigate,
 }: NotesStudioViewProps) {
   const activeSubject = useMemo(
@@ -79,7 +84,7 @@ export function NotesStudioView({
     [workspace.topics, activeSubject]
   );
 
-  const [selectedTopicId, setSelectedTopicId] = useState<string>('');
+  const [selectedTopicId, setSelectedTopicId] = useState<string>(initialTopicId || '');
   const [viewMode, setViewMode] = useState<'read' | 'edit' | 'timeline'>('read');
   const [newTopicName, setNewTopicName] = useState('');
   const [addingTopic, setAddingTopic] = useState(false);
@@ -92,6 +97,13 @@ export function NotesStudioView({
   const [tlDate, setTlDate] = useState('');
   const [tlTitle, setTlTitle] = useState('');
   const [tlDetail, setTlDetail] = useState('');
+
+  useEffect(() => {
+    if (initialTopicId && subjectTopics.some((t) => t.id === initialTopicId)) {
+      setSelectedTopicId(initialTopicId);
+      setViewMode('read');
+    }
+  }, [initialTopicId, subjectTopics]);
 
   useEffect(() => {
     if (activeSubject && activeSubject.id !== selectedSubjectId) {
@@ -253,6 +265,16 @@ export function NotesStudioView({
                 <Upload className="h-4 w-4" aria-hidden="true" />
                 <span>Import Notes / .docx</span>
               </button>
+              {onBrowseCommunityNotes && (
+                <button
+                  type="button"
+                  onClick={onBrowseCommunityNotes}
+                  className="sd-btn px-4 py-2 text-sm"
+                >
+                  <Globe className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Browse Others&apos; Notes</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -367,6 +389,17 @@ export function NotesStudioView({
               </div>
             )}
           </div>
+
+          {onBrowseCommunityNotes && (
+            <button
+              type="button"
+              onClick={onBrowseCommunityNotes}
+              className="sd-btn mt-2 w-full py-2 text-xs whitespace-nowrap"
+            >
+              <Globe className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+              <span>Browse Others&apos; Notes</span>
+            </button>
+          )}
         </div>
       </aside>
 

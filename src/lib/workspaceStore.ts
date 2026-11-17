@@ -11,6 +11,8 @@ import {
   DeckSnapshot,
   DeckSubject,
   DeckTopic,
+  HomeWidgetId,
+  HomeWidgetLayoutItem,
   HomeWidgetPrefs,
   PlannerSchedulePrefs,
   StudyFlashcard,
@@ -30,6 +32,73 @@ export const DEFAULT_HOME_WIDGETS: HomeWidgetPrefs = {
   todos: true,
   mastery: true,
 };
+
+export const DEFAULT_HOME_LAYOUT: HomeWidgetLayoutItem[] = [
+  { id: 'dueCards', cols: 7, h: null },
+  { id: 'timer', cols: 5, h: null },
+  { id: 'schedule', cols: 6, h: null },
+  { id: 'todos', cols: 6, h: null },
+  { id: 'mastery', cols: 12, h: null },
+];
+
+const VALID_HOME_WIDGET_IDS = new Set<HomeWidgetId>([
+  'dueCards',
+  'timer',
+  'schedule',
+  'todos',
+  'mastery',
+  'dailyGoal',
+  'examCountdowns',
+  'scratchpad',
+  'flashcardBreakdown',
+  'liveQuiz',
+]);
+
+export function homeWidgetsFromLayout(layout: HomeWidgetLayoutItem[]): HomeWidgetPrefs {
+  const ids = new Set(layout.map((w) => w.id));
+  return {
+    dueCards: ids.has('dueCards'),
+    schedule: ids.has('schedule'),
+    timer: ids.has('timer'),
+    todos: ids.has('todos'),
+    mastery: ids.has('mastery'),
+  };
+}
+
+function normalizeHomeLayout(
+  rawLayout: unknown,
+  legacyPrefs: HomeWidgetPrefs
+): HomeWidgetLayoutItem[] {
+  if (Array.isArray(rawLayout)) {
+    const seen = new Set<HomeWidgetId>();
+    const out: HomeWidgetLayoutItem[] = [];
+    for (const item of rawLayout) {
+      if (!item || typeof item !== 'object') continue;
+      const obj = item as { id?: unknown; cols?: unknown; h?: unknown };
+      const id = String(obj.id || '') as HomeWidgetId;
+      if (!VALID_HOME_WIDGET_IDS.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      const rawCols = Number(obj.cols);
+      const cols = Number.isFinite(rawCols)
+        ? Math.max(3, Math.min(12, Math.round(rawCols)))
+        : 6;
+      const rawH = obj.h === null || obj.h === undefined ? null : Number(obj.h);
+      const h =
+        rawH !== null && Number.isFinite(rawH) && rawH > 0
+          ? Math.max(180, Math.min(760, Math.round(rawH)))
+          : null;
+      out.push({ id, cols, h });
+    }
+    return out;
+  }
+
+  return DEFAULT_HOME_LAYOUT.filter((w) => {
+    if (w.id in legacyPrefs) {
+      return legacyPrefs[w.id as keyof HomeWidgetPrefs] !== false;
+    }
+    return true;
+  }).map((w) => ({ ...w }));
+}
 
 export const DEFAULT_PLANNER_PREFS: PlannerSchedulePrefs = {
   weekdayStart: '16:30',
@@ -52,7 +121,10 @@ export function createEmptyWorkspace(): WorkspaceData {
     studyMinutesLogged: 0,
     studyStreakDays: 0,
     lastStudyDate: '',
+    dailyGoalMinutes: 60,
+    scratchpad: '',
     homeWidgets: { ...DEFAULT_HOME_WIDGETS },
+    homeLayout: DEFAULT_HOME_LAYOUT.map((w) => ({ ...w })),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -74,6 +146,11 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
     rawPrefs && Array.isArray(rawPrefs.availHours) && rawPrefs.availHours.length === 7
       ? rawPrefs.availHours.map((n) => Math.max(0, Math.min(12, Number(n) || 0)))
       : [...DEFAULT_PLANNER_PREFS.availHours];
+  const mergedLegacyWidgets: HomeWidgetPrefs = {
+    ...DEFAULT_HOME_WIDGETS,
+    ...(r.homeWidgets && typeof r.homeWidgets === 'object' ? r.homeWidgets : {}),
+  };
+  const homeLayout = normalizeHomeLayout(r.homeLayout, mergedLegacyWidgets);
   return {
     version: 2,
     subjects: Array.isArray(r.subjects) ? r.subjects : [],
@@ -95,10 +172,12 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
     studyMinutesLogged: Number(r.studyMinutesLogged) || 0,
     studyStreakDays: Number(r.studyStreakDays) || 0,
     lastStudyDate: typeof r.lastStudyDate === 'string' ? r.lastStudyDate : '',
-    homeWidgets: {
-      ...DEFAULT_HOME_WIDGETS,
-      ...(r.homeWidgets && typeof r.homeWidgets === 'object' ? r.homeWidgets : {}),
-    },
+    dailyGoalMinutes: Math.max(15, Math.min(480, Number(r.dailyGoalMinutes) || 60)),
+    scratchpad: typeof r.scratchpad === 'string' ? r.scratchpad : '',
+    homeWidgets: Array.isArray(r.homeLayout)
+      ? homeWidgetsFromLayout(homeLayout)
+      : mergedLegacyWidgets,
+    homeLayout,
     updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : new Date().toISOString(),
   };
 }
