@@ -1,20 +1,28 @@
 import type { IncomingMessage, Server } from 'http';
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import type { GoogleGenAI } from '@google/genai';
 import { WebSocket, WebSocketServer } from 'ws';
-import { getDeckById, StoredQuizCard } from './quizDb.ts';
+import { fastLocalQuizCheck, smartSemanticFallbackCheck } from '../src/lib/quizGrader.ts';
+import { getDeckById, type StoredQuizCard } from './quizDb.ts';
 
 const GRADING_MODEL_CANDIDATES = [
-  'gemini-2.5-flash-lite',
-  'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-4-hydrogen',
-];
+] as const;
 let cachedWorkingModel: string | null = null;
+let genAiModulePromise: Promise<typeof import('@google/genai')> | null = null;
 
-function getAiClient(): GoogleGenAI | null {
+function loadGenAiModule(): Promise<typeof import('@google/genai')> {
+  if (!genAiModulePromise) {
+    genAiModulePromise = import('@google/genai');
+  }
+  return genAiModulePromise;
+}
+
+async function getAiClient(): Promise<GoogleGenAI | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || !apiKey.trim()) return null;
-  return new GoogleGenAI({
+  const { GoogleGenAI: GenAIClass } = await loadGenAiModule();
+  return new GenAIClass({
     apiKey: apiKey.trim(),
     httpOptions: {
       headers: {
@@ -35,29 +43,29 @@ async function generateGradingContent(
 ) {
   const candidates = cachedWorkingModel
     ? [cachedWorkingModel, ...GRADING_MODEL_CANDIDATES.filter((m) => m !== cachedWorkingModel)]
-    : GRADING_MODEL_CANDIDATES;
+    : [...GRADING_MODEL_CANDIDATES];
 
+  const { ThinkingLevel } = await loadGenAiModule();
   let lastErr: unknown = null;
   for (const model of candidates) {
-    const isFlashLite = model.includes('flash-lite');
-    const thinkingConfig = isFlashLite
-      ? { thinkingBudget: 0 }
-      : { thinkingLevel: ThinkingLevel.MINIMAL };
-
+    const thinkingLevel = model === 'gemini-4-hydrogen' ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL;
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: params.contents,
-        config: {
-          systemInstruction: params.systemInstruction,
-          thinkingConfig,
-          ...(isFlashLite && params.maxOutputTokens
-            ? { maxOutputTokens: params.maxOutputTokens }
-            : {}),
-          responseMimeType: 'application/json',
-          responseSchema: params.responseSchema,
-        },
-      });
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: {
+            systemInstruction: params.systemInstruction,
+            thinkingConfig: { thinkingLevel },
+            ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
+            responseMimeType: 'application/json',
+            responseSchema: params.responseSchema,
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout from ${model}`)), 5000)
+        ),
+      ]);
       if (!response.text || !response.text.trim()) {
         throw new Error(`Empty response from ${model}`);
       }
@@ -65,83 +73,9 @@ async function generateGradingContent(
       return { response, model };
     } catch (err) {
       lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        /404|503|UNAVAILABLE|RESOURCE_EXHAUSTED|high demand|not found|no longer available|not supported|thinkingBudget|thinkingLevel|INVALID_ARGUMENT|Empty response/i.test(
-          msg
-        )
-      ) {
-        if (/thinkingBudget|thinkingLevel|INVALID_ARGUMENT/i.test(msg)) {
-          try {
-            const responseNoBudget = await ai.models.generateContent({
-              model,
-              contents: params.contents,
-              config: {
-                systemInstruction: params.systemInstruction,
-                responseMimeType: 'application/json',
-                responseSchema: params.responseSchema,
-              },
-            });
-            if (responseNoBudget.text && responseNoBudget.text.trim()) {
-              cachedWorkingModel = model;
-              return { response: responseNoBudget, model };
-            }
-          } catch (innerErr) {
-            lastErr = innerErr;
-          }
-        }
-        continue;
-      }
-      throw err;
     }
   }
   throw lastErr;
-}
-
-/**
- * Normalizes an answer for 0ms fast local pre-checking:
- * - lowercase
- * - strip punctuation
- * - collapse extra spaces
- * - remove leading English articles (the, a, an)
- */
-export function normalizeForFastCheck(raw: string): string {
-  let cleaned = String(raw || '')
-    .toLowerCase()
-    .replace(/['’]/g, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // Strip repeated leading articles (e.g. "the a ...")
-  let prev = '';
-  while (cleaned !== prev) {
-    prev = cleaned;
-    cleaned = cleaned.replace(/^(?:the|a|an)\s+/i, '').trim();
-  }
-  return cleaned;
-}
-
-export function fastLocalCheck(studentAnswer: string, officialAnswer: string): boolean {
-  const studentNorm = normalizeForFastCheck(studentAnswer);
-  if (!studentNorm) return false;
-
-  const officialNorm = normalizeForFastCheck(officialAnswer);
-  if (!officialNorm) return false;
-
-  if (studentNorm === officialNorm) return true;
-
-  // Support slash/semicolon alternative phrasings in official answers (e.g. "USA / United States")
-  const parts = officialAnswer
-    .split(/\s*[;/]\s*/)
-    .map((p) => normalizeForFastCheck(p))
-    .filter((p) => p.length >= 2);
-
-  if (parts.length > 1 && parts.some((p) => p === studentNorm)) {
-    return true;
-  }
-
-  return false;
 }
 
 export interface GradeOutcome {
@@ -153,7 +87,7 @@ export interface GradeOutcome {
 }
 
 const GRADING_SYSTEM_INSTRUCTION =
-  'You are grading a fast-paced classroom flashcard quiz. Grade generously by core factual meaning against the Official Answer. Rules: (1) Abbreviations, month+year dates omitting the exact day (e.g. "Nov 1918" for "9 November 1918"), synonyms, short phrasings, and minor spelling typos ARE CORRECT. (2) Only mark false if the answer is factually wrong, refers to a different event/date/entity, or misses the core fact. Output ONLY strict JSON {"correct": true} or {"correct": false}.';
+  'You are grading a fast-paced classroom flashcard quiz. Grade generously by core factual meaning against the Official Answer. Rules: (1) Abbreviations, month+year dates omitting the exact day (e.g. "Nov 1918" for "9 November 1918"), synonyms, short phrasings, unit variations, and minor spelling typos ARE CORRECT. (2) Only mark false if the answer is factually wrong, refers to a different event/date/entity, or misses the core fact. Output ONLY strict JSON {"correct": true} or {"correct": false}.';
 
 export async function gradeSingleAnswer(
   question: string,
@@ -166,14 +100,14 @@ export async function gradeSingleAnswer(
     return { correct: false, source: 'local', latencyMs: 0 };
   }
 
-  if (fastLocalCheck(trimmed, officialAnswer)) {
+  if (fastLocalQuizCheck(trimmed, officialAnswer)) {
     return { correct: true, source: 'local', latencyMs: 0 };
   }
 
-  const ai = getAiClient();
+  const ai = await getAiClient();
   if (!ai) {
     return {
-      correct: false,
+      correct: smartSemanticFallbackCheck(trimmed, officialAnswer),
       source: 'fallback',
       latencyMs: Date.now() - started,
       error: 'GEMINI_API_KEY not configured',
@@ -181,10 +115,11 @@ export async function gradeSingleAnswer(
   }
 
   try {
+    const { Type } = await loadGenAiModule();
     const { response, model } = await generateGradingContent(ai, {
       contents: `Question: ${question}\nOfficial Answer: ${officialAnswer}\nStudent Answer: ${trimmed}`,
       systemInstruction: GRADING_SYSTEM_INSTRUCTION,
-      maxOutputTokens: 15,
+      maxOutputTokens: 24,
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -211,9 +146,9 @@ export async function gradeSingleAnswer(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('Gemini quiz grading error:', msg);
+    console.error('Gemini quiz grading fallback used:', msg);
     return {
-      correct: false,
+      correct: smartSemanticFallbackCheck(trimmed, officialAnswer),
       source: 'fallback',
       latencyMs: Date.now() - started,
       error: msg.slice(0, 220),
@@ -241,7 +176,7 @@ export async function gradeBatchAnswers(items: BatchGradeItem[]): Promise<BatchG
   for (const item of items) {
     if (!String(item.studentAnswer || '').trim()) {
       results.set(item.id, { id: item.id, correct: false, source: 'local' });
-    } else if (fastLocalCheck(item.studentAnswer, item.officialAnswer)) {
+    } else if (fastLocalQuizCheck(item.studentAnswer, item.officialAnswer)) {
       results.set(item.id, { id: item.id, correct: true, source: 'local' });
     } else {
       needsAi.push(item);
@@ -249,13 +184,18 @@ export async function gradeBatchAnswers(items: BatchGradeItem[]): Promise<BatchG
   }
 
   if (needsAi.length > 0) {
-    const ai = getAiClient();
+    const ai = await getAiClient();
     if (!ai) {
       for (const item of needsAi) {
-        results.set(item.id, { id: item.id, correct: false, source: 'fallback' });
+        results.set(item.id, {
+          id: item.id,
+          correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
+          source: 'fallback',
+        });
       }
     } else {
       try {
+        const { Type } = await loadGenAiModule();
         const promptLines = needsAi
           .map(
             (it, idx) =>
@@ -300,9 +240,13 @@ export async function gradeBatchAnswers(items: BatchGradeItem[]): Promise<BatchG
           });
         }
       } catch (err) {
-        console.error('Gemini batch grading error:', err);
+        console.error('Gemini batch grading fallback used:', err);
         for (const item of needsAi) {
-          results.set(item.id, { id: item.id, correct: false, source: 'fallback' });
+          results.set(item.id, {
+            id: item.id,
+            correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
+            source: 'fallback',
+          });
         }
       }
     }
@@ -312,13 +256,14 @@ export async function gradeBatchAnswers(items: BatchGradeItem[]): Promise<BatchG
 }
 
 // ============================================================================
-// Server-Authoritative Multiplayer Room State Machine
+// Server-Authoritative Multiplayer Room State Machine (With Monotonic roundId)
 // ============================================================================
 
 type RoomStatus = 'lobby' | 'question' | 'reveal' | 'finished';
 
 interface PlayerAnswerRecord {
   questionIndex: number;
+  roundId: string;
   answer: string;
   submittedAt: number;
   elapsedMs: number;
@@ -339,7 +284,7 @@ interface RoomPlayer {
   correctCount: number;
   connected: boolean;
   socket: WebSocket | null;
-  answers: Map<number, PlayerAnswerRecord>;
+  answers: Map<string, PlayerAnswerRecord>;
 }
 
 interface QuizRoom {
@@ -351,6 +296,7 @@ interface QuizRoom {
   status: RoomStatus;
   questions: StoredQuizCard[];
   currentIndex: number;
+  roundId: string;
   questionStartedAt: number | null;
   questionEndsAt: number | null;
   players: Map<string, RoomPlayer>;
@@ -361,6 +307,10 @@ interface QuizRoom {
 
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const rooms = new Map<string, QuizRoom>();
+
+function makeRoundId(index: number): string {
+  return `r_${index}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
 
 function generateRoomCode(): string {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -394,7 +344,6 @@ function calculatePoints(elapsedMs: number, timerSeconds: number, newStreak: num
   const totalMs = Math.max(1000, timerSeconds * 1000);
   const clampedElapsed = Math.max(0, Math.min(totalMs, elapsedMs));
   const remainingRatio = (totalMs - clampedElapsed) / totalMs;
-  // Kahoot-style: up to 1,000 base points (500..1000 based on speed) + streak bonus
   const basePoints = 500 + Math.round(500 * remainingRatio);
   const streakBonus = newStreak >= 2 ? Math.min(300, (newStreak - 1) * 100) : 0;
   return {
@@ -417,7 +366,7 @@ function serializeRoomForPlayer(room: QuizRoom, viewerId: string) {
   const currentCard = room.questions[room.currentIndex] || null;
   const playersList = Array.from(room.players.values())
     .map((p) => {
-      const rec = p.answers.get(room.currentIndex);
+      const rec = p.answers.get(room.roundId);
       return {
         id: p.id,
         nickname: p.nickname,
@@ -429,7 +378,6 @@ function serializeRoomForPlayer(room: QuizRoom, viewerId: string) {
         connected: p.connected,
         hasSubmitted: Boolean(rec),
         gradingStatus: rec?.gradingStatus || null,
-        // Reveal individual answer details only in reveal/finished, or own submission status
         lastSubmission:
           room.status === 'reveal' || room.status === 'finished'
             ? rec
@@ -465,6 +413,7 @@ function serializeRoomForPlayer(room: QuizRoom, viewerId: string) {
     status: room.status,
     totalQuestions: room.questions.length,
     currentIndex: room.currentIndex,
+    roundId: room.roundId,
     questionStartedAt: room.questionStartedAt,
     questionEndsAt: room.questionEndsAt,
     serverNow: Date.now(),
@@ -514,50 +463,50 @@ function scheduleCleanupIfEmpty(room: QuizRoom): void {
     room.cleanupTimer = setTimeout(() => {
       clearRoomTimers(room);
       rooms.delete(room.code);
-    }, 1000 * 60 * 10); // 10 minutes idle room TTL
+    }, 1000 * 60 * 10);
   }
 }
 
 function finalizeScoresForRound(room: QuizRoom): void {
-  const qIdx = room.currentIndex;
   for (const p of room.players.values()) {
-    const rec = p.answers.get(qIdx);
+    const rec = p.answers.get(room.roundId);
     if (!rec) {
       p.streak = 0;
     }
   }
 }
 
-async function revealRound(room: QuizRoom): Promise<void> {
+async function revealRound(room: QuizRoom, expectedRoundId?: string): Promise<void> {
   if (room.status !== 'question') return;
+  if (expectedRoundId && room.roundId !== expectedRoundId) return;
+  const lockedRoundId = room.roundId;
   clearRoomTimers(room);
 
-  // Wait briefly if any background Gemini call is still completing so results are 100% ready
   const inFlight = Array.from(room.pendingGrades.values());
   if (inFlight.length > 0) {
     await Promise.race([
       Promise.allSettled(inFlight),
-      new Promise((resolve) => setTimeout(resolve, 2500)),
+      new Promise((resolve) => setTimeout(resolve, 6000)),
     ]);
   }
 
-  if (room.status !== 'question') return;
+  if (room.status !== 'question' || room.roundId !== lockedRoundId) return;
   finalizeScoresForRound(room);
   room.status = 'reveal';
   room.questionEndsAt = Date.now();
   broadcastRoomState(room);
 }
 
-function checkAllPlayersDoneAndMaybeReveal(room: QuizRoom): void {
-  if (room.status !== 'question') return;
+function checkAllPlayersDoneAndMaybeReveal(room: QuizRoom, roundId: string): void {
+  if (room.status !== 'question' || room.roundId !== roundId) return;
   const connectedPlayers = Array.from(room.players.values()).filter((p) => p.connected);
   if (connectedPlayers.length === 0) return;
   const allDone = connectedPlayers.every((p) => {
-    const rec = p.answers.get(room.currentIndex);
+    const rec = p.answers.get(roundId);
     return rec && rec.gradingStatus === 'done';
   });
   if (allDone) {
-    void revealRound(room);
+    void revealRound(room, roundId);
   }
 }
 
@@ -573,14 +522,16 @@ function startQuestion(room: QuizRoom, index: number): void {
     return;
   }
 
+  const nextRoundId = makeRoundId(index);
   room.currentIndex = index;
+  room.roundId = nextRoundId;
   room.status = 'question';
   const now = Date.now();
   room.questionStartedAt = now;
   room.questionEndsAt = now + room.timerSeconds * 1000;
 
   room.roundTimer = setTimeout(() => {
-    void revealRound(room);
+    void revealRound(room, nextRoundId);
   }, room.timerSeconds * 1000);
 
   broadcastRoomState(room);
@@ -618,10 +569,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
   httpServer.on('upgrade', (request: IncomingMessage, socket, head) => {
     const rawUrl = request.url || '';
     const pathname = rawUrl.split('?')[0];
-    if (pathname !== '/ws/quiz') {
-      // Do not disturb non-quiz upgrade requests
-      return;
-    }
+    if (pathname !== '/ws/quiz') return;
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
     });
@@ -639,7 +587,6 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
         if (player && player.socket === ws) {
           player.connected = false;
           player.socket = null;
-          // Promote another connected player if host disconnected permanently on explicit leave
           broadcastRoomState(room);
           scheduleCleanupIfEmpty(room);
         }
@@ -756,6 +703,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           status: 'lobby',
           questions: shuffleCards(cards),
           currentIndex: 0,
+          roundId: makeRoundId(-1),
           questionStartedAt: null,
           questionEndsAt: null,
           players: new Map([[hostId, hostPlayer]]),
@@ -779,9 +727,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
       }
 
       if (type === 'quiz:join') {
-        const code = String(msg.code || '')
-          .trim()
-          .toUpperCase();
+        const code = String(msg.code || '').trim().toUpperCase();
         const nickname = String(msg.nickname || '').trim().slice(0, 24);
         const prevPlayerId = typeof msg.playerId === 'string' ? msg.playerId : '';
 
@@ -794,7 +740,6 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           return;
         }
 
-        // Reconnect existing player by ID
         if (prevPlayerId && room.players.has(prevPlayerId)) {
           detachFromCurrentRoom();
           const existing = room.players.get(prevPlayerId)!;
@@ -821,7 +766,6 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           return;
         }
 
-        // Reclaim disconnected player with same nickname if present
         const disconnectedSameName = Array.from(room.players.values()).find(
           (p) => !p.connected && p.nickname.toLowerCase() === nickname.toLowerCase()
         );
@@ -922,14 +866,16 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
 
       if (type === 'quiz:reveal') {
         if (!player.isHost) return;
-        await revealRound(room);
+        await revealRound(room, room.roundId);
         return;
       }
 
       if (type === 'quiz:next') {
         if (!player.isHost) return;
+        const expectedRoundId = typeof msg.roundId === 'string' ? msg.roundId : room.roundId;
+        if (expectedRoundId !== room.roundId) return;
         if (room.status === 'question') {
-          await revealRound(room);
+          await revealRound(room, expectedRoundId);
           return;
         }
         if (room.status === 'reveal') {
@@ -944,6 +890,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
         room.pendingGrades.clear();
         room.status = 'lobby';
         room.currentIndex = 0;
+        room.roundId = makeRoundId(-1);
         room.questionStartedAt = null;
         room.questionEndsAt = null;
         room.questions = shuffleCards(room.questions);
@@ -961,7 +908,8 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
       if (type === 'quiz:submit') {
         if (room.status !== 'question') return;
         const qIdx = room.currentIndex;
-        if (player.answers.has(qIdx)) return; // Already answered this question
+        const lockedRoundId = room.roundId;
+        if (player.answers.has(lockedRoundId)) return;
 
         const card = room.questions[qIdx];
         if (!card) return;
@@ -970,10 +918,10 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
         const elapsedMs = Math.max(0, submittedAt - (room.questionStartedAt || submittedAt));
         const answerText = String(msg.answer || '').trim();
 
-        // 0ms Fast Local Pre-Check first
         if (!answerText) {
           const rec: PlayerAnswerRecord = {
             questionIndex: qIdx,
+            roundId: lockedRoundId,
             answer: '',
             submittedAt,
             elapsedMs,
@@ -983,16 +931,17 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
             pointsAwarded: 0,
             streakBonus: 0,
           };
-          player.answers.set(qIdx, rec);
+          player.answers.set(lockedRoundId, rec);
           player.streak = 0;
           broadcastRoomState(room);
-          checkAllPlayersDoneAndMaybeReveal(room);
+          checkAllPlayersDoneAndMaybeReveal(room, lockedRoundId);
           return;
         }
 
-        if (fastLocalCheck(answerText, card.answer)) {
+        if (fastLocalQuizCheck(answerText, card.answer)) {
           const rec: PlayerAnswerRecord = {
             questionIndex: qIdx,
+            roundId: lockedRoundId,
             answer: answerText,
             submittedAt,
             elapsedMs,
@@ -1007,15 +956,15 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
             source: 'local',
             latencyMs: 0,
           });
-          player.answers.set(qIdx, rec);
+          player.answers.set(lockedRoundId, rec);
           broadcastRoomState(room);
-          checkAllPlayersDoneAndMaybeReveal(room);
+          checkAllPlayersDoneAndMaybeReveal(room, lockedRoundId);
           return;
         }
 
-        // Not a 0ms local match -> mark pending and immediately grade in background with Gemini 2.5 Flash-Lite
         const rec: PlayerAnswerRecord = {
           questionIndex: qIdx,
+          roundId: lockedRoundId,
           answer: answerText,
           submittedAt,
           elapsedMs,
@@ -1025,21 +974,23 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           pointsAwarded: 0,
           streakBonus: 0,
         };
-        player.answers.set(qIdx, rec);
+        player.answers.set(lockedRoundId, rec);
         broadcastRoomState(room);
 
-        const gradeKey = `${qIdx}:${player.id}`;
+        const gradeKey = `${lockedRoundId}:${player.id}`;
         const gradePromise = (async () => {
           const outcome = await gradeSingleAnswer(card.question, card.answer, answerText);
-          // Only apply if still on same round
-          if (room.currentIndex === qIdx && (room.status === 'question' || room.status === 'reveal')) {
+          if (
+            room.roundId === lockedRoundId &&
+            (room.status === 'question' || room.status === 'reveal')
+          ) {
             applyGradedOutcome(room, player, rec, outcome);
           }
         })().finally(() => {
           room.pendingGrades.delete(gradeKey);
-          if (room.currentIndex === qIdx && room.status === 'question') {
+          if (room.roundId === lockedRoundId && room.status === 'question') {
             broadcastRoomState(room);
-            checkAllPlayersDoneAndMaybeReveal(room);
+            checkAllPlayersDoneAndMaybeReveal(room, lockedRoundId);
           }
         });
 

@@ -3,7 +3,21 @@ import { Timestamp } from 'firebase/firestore';
 export type UserRole = 'student' | 'educator' | 'admin';
 export type EncryptionMode = 'passphrase' | 'device-wrapped';
 export type AppModule = 'revision' | 'planner';
-export type WorkspaceTab = 'revision' | 'planner' | 'packs' | 'quiz' | 'vault' | 'admin';
+
+export type WorkspaceTab =
+  | 'home'
+  | 'subjects'
+  | 'notes'
+  | 'flashcards'
+  | 'calendar'
+  | 'planner'
+  | 'quiz'
+  | 'community'
+  | 'progress'
+  | 'vault'
+  | 'admin';
+
+export type PlannerSubTab = 'calendar' | 'todo' | 'timer';
 
 export interface UserAccountDoc {
   uid: string;
@@ -95,6 +109,207 @@ export interface PlannerUiSettings {
   pc?: number;
 }
 
+// ============================================================================
+// Unified Native Workspace Data Model (v2)
+// ============================================================================
+
+export interface NoteSectionBlock {
+  id: string;
+  heading: string;
+  points: string[];
+}
+
+export interface KeyTermPair {
+  id: string;
+  term: string;
+  definition: string;
+}
+
+export interface TimelineEventItem {
+  id: string;
+  date: string;
+  title: string;
+  detail: string;
+  era?: string;
+}
+
+export interface StructuredNoteData {
+  summary: string;
+  sections: NoteSectionBlock[];
+  keyTerms: KeyTermPair[];
+  examTip: string;
+  workedExample: string;
+  legacyHtml?: string;
+  updatedAt: string;
+}
+
+export interface StudyTopic {
+  id: string;
+  subjectId: string;
+  name: string;
+  specCode?: string;
+  completed?: boolean;
+  notes: StructuredNoteData;
+  timelineEvents?: TimelineEventItem[];
+  createdAt: string;
+}
+
+export interface StudySubject {
+  id: string;
+  name: string;
+  examBoard: string;
+  color: string;
+  examDate: string;
+  weight: 1 | 2 | 3; // 1=Low, 2=Standard, 3=High priority
+  targetGrade?: string;
+  hasTimeline?: boolean;
+  createdAt: string;
+}
+
+export interface StudyFlashcard {
+  id: string;
+  subjectId: string;
+  topicId: string;
+  sectionName: string;
+  q: string;
+  a: string;
+  box: 1 | 2 | 3 | 4 | 5;
+  dueAt: number;
+  lastReviewedAt?: number;
+  flagged: boolean;
+  createdAt: string;
+}
+
+export interface TodoStepItem {
+  text: string;
+  done: boolean;
+}
+
+export interface TodoTaskItem {
+  id: string;
+  title: string;
+  subjectId?: string;
+  dueDate: string;
+  priority: 0 | 1 | 2 | 3; // 0=None, 1=Low, 2=Normal, 3=High
+  done: boolean;
+  doneAt?: string;
+  category?: 'exam' | 'hw' | 'oth';
+  starred?: boolean;
+  addedToday?: string; // YYYY-MM-DD
+  tags?: string[];
+  estMins?: number;
+  repeat?: '' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
+  steps?: TodoStepItem[];
+  note?: string;
+  createdAt: string;
+}
+
+export interface CalendarStudyBlock {
+  id: string;
+  date: string; // YYYY-MM-DD
+  startTime: string; // HH:mm
+  durationMins: number;
+  endTime?: string; // HH:mm optional (used for busy blocks)
+  title: string;
+  subjectId?: string;
+  topicId?: string;
+  kind: 'revision' | 'exam' | 'past-paper' | 'flashcards' | 'busy';
+  done: boolean;
+  manual?: boolean;
+}
+
+export interface PlannerSchedulePrefs {
+  weekdayStart: string;
+  weekendStart: string;
+  availHours: number[]; // Mon..Sun 7 numbers
+}
+
+export interface HomeWidgetPrefs {
+  dueCards: boolean;
+  schedule: boolean;
+  timer: boolean;
+  todos: boolean;
+  mastery: boolean;
+}
+
+export interface WorkspaceData {
+  version: 2;
+  subjects: StudySubject[];
+  topics: StudyTopic[];
+  flashcards: StudyFlashcard[];
+  todos: TodoTaskItem[];
+  calendarBlocks: CalendarStudyBlock[];
+  plannerPrefs?: PlannerSchedulePrefs;
+  studyMinutesLogged: number;
+  studyStreakDays: number;
+  lastStudyDate: string;
+  homeWidgets: HomeWidgetPrefs;
+  updatedAt: string;
+}
+
+// ============================================================================
+// Community & Direct Sharing Types (Replaces Study Packs)
+// ============================================================================
+
+export type SharedItemType = 'notes' | 'flashcards' | 'subject';
+export type SharedItemVisibility = 'public' | 'unlisted';
+
+export interface SharedNotesPayload {
+  topicName: string;
+  notes: StructuredNoteData;
+  timelineEvents?: TimelineEventItem[];
+}
+
+export interface SharedFlashcardsPayload {
+  sectionName: string;
+  cards: Array<{ q: string; a: string; sectionName?: string }>;
+}
+
+export interface SharedSubjectPayload {
+  subject: {
+    name: string;
+    examBoard: string;
+    color: string;
+    hasTimeline?: boolean;
+  };
+  topics: Array<{
+    name: string;
+    specCode?: string;
+    notes: StructuredNoteData;
+    timelineEvents?: TimelineEventItem[];
+  }>;
+  cards: Array<{
+    topicName: string;
+    sectionName: string;
+    q: string;
+    a: string;
+  }>;
+}
+
+export interface SharedStudyItem {
+  id: string;
+  shareCode: string;
+  type: SharedItemType;
+  title: string;
+  subjectName: string;
+  examBoard: string;
+  summary: string;
+  visibility: SharedItemVisibility;
+  ownerId: string;
+  ownerName: string;
+  itemCount: number;
+  copyCount: number;
+  createdAt: string;
+  updatedAt: string;
+  notesPayload?: SharedNotesPayload;
+  flashcardsPayload?: SharedFlashcardsPayload;
+  subjectPayload?: SharedSubjectPayload;
+}
+
+// ============================================================================
+// Live Quiz & Compatibility Snapshot Types
+// ============================================================================
+
 export interface DeckSubject {
   id: string;
   n: string;
@@ -142,82 +357,6 @@ export interface DeckSnapshot {
   topics: DeckTopic[];
   sections: DeckSection[];
   cards: DeckFlashcard[];
-}
-
-export type StudyPackCategory = 'combo' | 'flashcards' | 'notes';
-
-export interface StudyPackRevisionPayload {
-  baseTopics?: string[];
-  subjects?: Array<{
-    id?: string;
-    name: string;
-    kind?: 'tl' | 'doc';
-    views?: { notes?: boolean; timeline?: boolean; mindmap?: boolean };
-    topics: Array<{
-      id?: string;
-      label: string;
-      title?: string;
-      sections?: string[];
-      notesHtml?: string;
-    }>;
-  }>;
-  sections?: Array<{
-    id: string;
-    topicId?: string;
-    topicLabel?: string;
-    subjectName?: string;
-    name: string;
-  }>;
-  cards?: Array<{
-    sectionId?: string;
-    sectionName?: string;
-    topicId?: string;
-    topicLabel?: string;
-    subjectName?: string;
-    q: string;
-    a: string;
-  }>;
-}
-
-export interface StudyPackPlannerPayload {
-  start?: string;
-  subjects?: Array<{
-    name: string;
-    weight?: number;
-    date?: string;
-    topics: string[];
-    exams?: Array<{ d: string; t: string; n: string }>;
-  }>;
-  todos?: Array<{
-    title: string;
-    due?: string;
-    pri?: number;
-    cat?: string;
-    subjectName?: string;
-    note?: string;
-  }>;
-}
-
-export interface StudyPack {
-  id: string;
-  title: string;
-  subtitle: string;
-  category: StudyPackCategory;
-  examBoard: string;
-  highlights: string[];
-  tags: string[];
-  author?: string;
-  isStandard?: boolean;
-  isCustom?: boolean;
-  visibility?: 'private' | 'public';
-  ownerId?: string;
-  ownerName?: string;
-  createdAt?: string;
-  cardCountPreview: number;
-  topicCountPreview: number;
-  subjectCountPreview: number;
-  revision: StudyPackRevisionPayload;
-  planner: StudyPackPlannerPayload;
 }
 
 export interface QuizSectionInfo {
@@ -278,6 +417,7 @@ export interface QuizRoomState {
   status: 'lobby' | 'question' | 'reveal' | 'finished';
   totalQuestions: number;
   currentIndex: number;
+  roundId?: string;
   questionStartedAt: number | null;
   questionEndsAt: number | null;
   serverNow: number;

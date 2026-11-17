@@ -1,0 +1,425 @@
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  increment,
+  limit,
+  query,
+  serverTimestamp,
+  setDoc,
+  Timestamp,
+  updateDoc,
+  where,
+} from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../firebase';
+import { createEmptyStructuredNote, makeNoteId } from './noteFormat';
+import { makeId } from './workspaceStore';
+import {
+  SharedFlashcardsPayload,
+  SharedItemType,
+  SharedItemVisibility,
+  SharedNotesPayload,
+  SharedStudyItem,
+  SharedSubjectPayload,
+  StudyFlashcard,
+  StudySubject,
+  StudyTopic,
+  WorkspaceData,
+} from '../types';
+
+const SHARE_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+let cachedPublicItems: { items: SharedStudyItem[]; fetchedAt: number } | null = null;
+
+export function clearCommunityCache(): void {
+  cachedPublicItems = null;
+}
+
+function generateShareCode(): string {
+  let out = '';
+  for (let i = 0; i < 6; i++) {
+    out += SHARE_CODE_CHARS[Math.floor(Math.random() * SHARE_CODE_CHARS.length)];
+  }
+  return out;
+}
+
+function parseSharedDoc(id: string, raw: Record<string, unknown>): SharedStudyItem | null {
+  try {
+    const payload = JSON.parse(String(raw.payloadJson || '{}')) as {
+      notesPayload?: SharedNotesPayload;
+      flashcardsPayload?: SharedFlashcardsPayload;
+      subjectPayload?: SharedSubjectPayload;
+    };
+    const createdAt =
+      raw.createdAt instanceof Timestamp
+        ? raw.createdAt.toDate().toISOString()
+        : new Date().toISOString();
+    const updatedAt =
+      raw.updatedAt instanceof Timestamp
+        ? raw.updatedAt.toDate().toISOString()
+        : createdAt;
+
+    return {
+      id,
+      shareCode: String(raw.shareCode || ''),
+      type: (raw.type as SharedItemType) || 'notes',
+      title: String(raw.title || 'Shared Resource'),
+      subjectName: String(raw.subjectName || 'General'),
+      examBoard: String(raw.examBoard || 'GCSE / Revision'),
+      summary: String(raw.summary || ''),
+      visibility: (raw.visibility as SharedItemVisibility) === 'unlisted' ? 'unlisted' : 'public',
+      ownerId: String(raw.ownerId || ''),
+      ownerName: String(raw.ownerName || 'StudyDeck Student'),
+      itemCount: Number(raw.itemCount || 0),
+      copyCount: Number(raw.copyCount || 0),
+      createdAt,
+      updatedAt,
+      notesPayload: payload.notesPayload,
+      flashcardsPayload: payload.flashcardsPayload,
+      subjectPayload: payload.subjectPayload,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPublicSharedItems(forceRefresh = false): Promise<SharedStudyItem[]> {
+  if (!forceRefresh && cachedPublicItems && Date.now() - cachedPublicItems.fetchedAt < CACHE_TTL_MS) {
+    return cachedPublicItems.items;
+  }
+  const path = 'sharedItems';
+  try {
+    const q = query(
+      collection(db, 'sharedItems'),
+      where('visibility', '==', 'public'),
+      limit(60)
+    );
+    const snap = await getDocs(q);
+    const items = snap.docs
+      .map((d) => parseSharedDoc(d.id, d.data() as Record<string, unknown>))
+      .filter((x): x is SharedStudyItem => Boolean(x))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+    cachedPublicItems = { items, fetchedAt: Date.now() };
+    return items;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+export async function fetchUserSharedItems(uid: string): Promise<SharedStudyItem[]> {
+  const path = `sharedItems(ownerId=${uid})`;
+  try {
+    const q = query(
+      collection(db, 'sharedItems'),
+      where('ownerId', '==', uid),
+      limit(60)
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+      .map((d) => parseSharedDoc(d.id, d.data() as Record<string, unknown>))
+      .filter((x): x is SharedStudyItem => Boolean(x))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+export async function lookupSharedItemByCode(rawCode: string): Promise<SharedStudyItem | null> {
+  const code = rawCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!code) return null;
+  const q = query(
+    collection(db, 'sharedItems'),
+    where('shareCode', '==', code),
+    limit(1)
+  );
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return parseSharedDoc(d.id, d.data() as Record<string, unknown>);
+}
+
+export async function publishSharedItem(params: {
+  uid: string;
+  ownerName: string;
+  type: SharedItemType;
+  title: string;
+  subjectName: string;
+  examBoard: string;
+  summary: string;
+  visibility: SharedItemVisibility;
+  itemCount: number;
+  notesPayload?: SharedNotesPayload;
+  flashcardsPayload?: SharedFlashcardsPayload;
+  subjectPayload?: SharedSubjectPayload;
+}): Promise<SharedStudyItem> {
+  const shareCode = generateShareCode();
+  const id = `sh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const payloadJson = JSON.stringify({
+    notesPayload: params.notesPayload,
+    flashcardsPayload: params.flashcardsPayload,
+    subjectPayload: params.subjectPayload,
+  });
+
+  if (payloadJson.length > 400000) {
+    throw new Error('This shared item is over the 400 KB limit. Try sharing one topic or deck at a time.');
+  }
+
+  const docRef = doc(db, 'sharedItems', id);
+  const path = `sharedItems/${id}`;
+  const cleanTitle = (params.title || 'Untitled Share').trim().slice(0, 140);
+  const cleanSubject = (params.subjectName || 'General').trim().slice(0, 80);
+  const cleanBoard = (params.examBoard || 'GCSE / Revision').trim().slice(0, 80);
+  const cleanSummary = (params.summary || '').trim().slice(0, 280);
+  const cleanOwner = (params.ownerName || 'StudyDeck Student').trim().slice(0, 100);
+
+  try {
+    await setDoc(docRef, {
+      id,
+      shareCode,
+      type: params.type,
+      title: cleanTitle,
+      subjectName: cleanSubject,
+      examBoard: cleanBoard,
+      summary: cleanSummary,
+      visibility: params.visibility,
+      ownerId: params.uid,
+      ownerName: cleanOwner,
+      itemCount: Math.max(0, Math.round(params.itemCount)),
+      copyCount: 0,
+      payloadJson,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+
+  cachedPublicItems = null;
+  const nowIso = new Date().toISOString();
+  return {
+    id,
+    shareCode,
+    type: params.type,
+    title: cleanTitle,
+    subjectName: cleanSubject,
+    examBoard: cleanBoard,
+    summary: cleanSummary,
+    visibility: params.visibility,
+    ownerId: params.uid,
+    ownerName: cleanOwner,
+    itemCount: Math.max(0, Math.round(params.itemCount)),
+    copyCount: 0,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    notesPayload: params.notesPayload,
+    flashcardsPayload: params.flashcardsPayload,
+    subjectPayload: params.subjectPayload,
+  };
+}
+
+export async function deleteSharedItem(id: string): Promise<void> {
+  const path = `sharedItems/${id}`;
+  try {
+    await deleteDoc(doc(db, 'sharedItems', id));
+    cachedPublicItems = null;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export async function incrementSharedCopyCount(id: string): Promise<void> {
+  try {
+    const snap = await getDoc(doc(db, 'sharedItems', id));
+    if (!snap.exists()) return;
+    await updateDoc(doc(db, 'sharedItems', id), {
+      copyCount: increment(1),
+    });
+  } catch {
+    // Non-fatal counter bump
+  }
+}
+
+/**
+ * Copies a Community/Shared Notes, Flashcard Deck, or Full Subject cleanly into the user's workspace.
+ */
+export function copySharedItemIntoWorkspace(
+  ws: WorkspaceData,
+  item: SharedStudyItem
+): { workspace: WorkspaceData; summary: string } {
+  const next: WorkspaceData = {
+    ...ws,
+    subjects: [...ws.subjects],
+    topics: [...ws.topics],
+    flashcards: [...ws.flashcards],
+    updatedAt: new Date().toISOString(),
+  };
+
+  const ensureSubj = (name: string, board?: string, color?: string, hasTimeline?: boolean): StudySubject => {
+    const clean = (name || 'Shared Subject').trim();
+    const found = next.subjects.find((s) => s.name.toLowerCase() === clean.toLowerCase());
+    if (found) return found;
+    const created: StudySubject = {
+      id: makeId('subj'),
+      name: clean,
+      examBoard: board || item.examBoard || 'GCSE / Revision',
+      color: color || '#2F5F8A',
+      examDate: '',
+      weight: 2,
+      hasTimeline: Boolean(hasTimeline),
+      createdAt: new Date().toISOString(),
+    };
+    next.subjects.push(created);
+    return created;
+  };
+
+  if (item.type === 'notes' && item.notesPayload) {
+    const subj = ensureSubj(item.subjectName, item.examBoard);
+    const topicName = item.notesPayload.topicName || item.title;
+    const uniqueName = next.topics.some(
+      (t) => t.subjectId === subj.id && t.name.toLowerCase() === topicName.toLowerCase()
+    )
+      ? `${topicName} (Shared)`
+      : topicName;
+
+    const newTopic: StudyTopic = {
+      id: makeId('top'),
+      subjectId: subj.id,
+      name: uniqueName,
+      notes: {
+        ...createEmptyStructuredNote(),
+        ...item.notesPayload.notes,
+        sections: (item.notesPayload.notes.sections || []).map((sec) => ({
+          ...sec,
+          id: makeNoteId('sec'),
+        })),
+        keyTerms: (item.notesPayload.notes.keyTerms || []).map((kt) => ({
+          ...kt,
+          id: makeNoteId('term'),
+        })),
+        updatedAt: new Date().toISOString(),
+      },
+      timelineEvents: item.notesPayload.timelineEvents?.map((ev) => ({
+        ...ev,
+        id: makeId('tl'),
+      })),
+      createdAt: new Date().toISOString(),
+    };
+    next.topics.push(newTopic);
+    return {
+      workspace: next,
+      summary: `Copied notes "${uniqueName}" into ${subj.name}`,
+    };
+  }
+
+  if (item.type === 'flashcards' && item.flashcardsPayload) {
+    const subj = ensureSubj(item.subjectName, item.examBoard);
+    let topic = next.topics.find((t) => t.subjectId === subj.id);
+    if (!topic) {
+      topic = {
+        id: makeId('top'),
+        subjectId: subj.id,
+        name: item.flashcardsPayload.sectionName || item.title,
+        notes: createEmptyStructuredNote(),
+        createdAt: new Date().toISOString(),
+      };
+      next.topics.push(topic);
+    }
+    const existingQ = new Set(next.flashcards.map((c) => `${c.subjectId}::${c.q.toLowerCase()}`));
+    let added = 0;
+    for (const c of item.flashcardsPayload.cards) {
+      const key = `${subj.id}::${c.q.trim().toLowerCase()}`;
+      if (!c.q.trim() || !c.a.trim() || existingQ.has(key)) continue;
+      existingQ.add(key);
+      const card: StudyFlashcard = {
+        id: makeId('fc'),
+        subjectId: subj.id,
+        topicId: topic.id,
+        sectionName: c.sectionName || item.flashcardsPayload.sectionName || item.title,
+        q: c.q.trim(),
+        a: c.a.trim(),
+        box: 1,
+        dueAt: Date.now(),
+        flagged: false,
+        createdAt: new Date().toISOString(),
+      };
+      next.flashcards.push(card);
+      added++;
+    }
+    return {
+      workspace: next,
+      summary: `Added ${added} flashcard${added === 1 ? '' : 's'} into ${subj.name}`,
+    };
+  }
+
+  if (item.type === 'subject' && item.subjectPayload) {
+    const sp = item.subjectPayload;
+    const subj = ensureSubj(
+      sp.subject.name,
+      sp.subject.examBoard,
+      sp.subject.color,
+      sp.subject.hasTimeline
+    );
+    const topicMap = new Map<string, StudyTopic>();
+    let topicsAdded = 0;
+    for (const tp of sp.topics) {
+      const existing = next.topics.find(
+        (x) => x.subjectId === subj.id && x.name.toLowerCase() === tp.name.toLowerCase()
+      );
+      if (existing) {
+        topicMap.set(tp.name.toLowerCase(), existing);
+      } else {
+        const created: StudyTopic = {
+          id: makeId('top'),
+          subjectId: subj.id,
+          name: tp.name,
+          specCode: tp.specCode,
+          notes: {
+            ...createEmptyStructuredNote(),
+            ...tp.notes,
+            updatedAt: new Date().toISOString(),
+          },
+          timelineEvents: tp.timelineEvents,
+          createdAt: new Date().toISOString(),
+        };
+        next.topics.push(created);
+        topicMap.set(tp.name.toLowerCase(), created);
+        topicsAdded++;
+      }
+    }
+
+    let cardsAdded = 0;
+    const existingQ = new Set(next.flashcards.map((c) => `${c.subjectId}::${c.q.toLowerCase()}`));
+    for (const c of sp.cards) {
+      const key = `${subj.id}::${c.q.trim().toLowerCase()}`;
+      if (!c.q.trim() || !c.a.trim() || existingQ.has(key)) continue;
+      existingQ.add(key);
+      const t =
+        topicMap.get((c.topicName || '').toLowerCase()) ||
+        next.topics.find((x) => x.subjectId === subj.id);
+      next.flashcards.push({
+        id: makeId('fc'),
+        subjectId: subj.id,
+        topicId: t?.id || makeId('top'),
+        sectionName: c.sectionName || c.topicName || 'Core Deck',
+        q: c.q.trim(),
+        a: c.a.trim(),
+        box: 1,
+        dueAt: Date.now(),
+        flagged: false,
+        createdAt: new Date().toISOString(),
+      });
+      cardsAdded++;
+    }
+
+    return {
+      workspace: next,
+      summary: `Copied ${subj.name} (${topicsAdded} topics, ${cardsAdded} flashcards)`,
+    };
+  }
+
+  return { workspace: next, summary: 'Nothing new to copy.' };
+}

@@ -11,7 +11,7 @@ import {
   getQuizDb,
   listDecks,
   parseCsvCards,
-  ParsedCsvCard,
+  type ParsedCsvCard,
 } from './server/quizDb.ts';
 import {
   attachQuizWebSocketServer,
@@ -33,8 +33,16 @@ function resolvePort(): number {
       if (Number.isFinite(n) && n > 0) return n;
     }
   }
-  const envPort = Number(process.env.PORT || 3000);
-  return Number.isFinite(envPort) && envPort > 0 ? envPort : 3000;
+  const defaultAppPort = Number(process.env.DEFAULT_APP_PORT);
+  if (Number.isFinite(defaultAppPort) && defaultAppPort > 0) {
+    return defaultAppPort;
+  }
+  const envPort = Number(process.env.PORT);
+  const nginxPort = Number(process.env.NGINX_PORT);
+  if (Number.isFinite(envPort) && envPort > 0 && envPort !== nginxPort) {
+    return envPort;
+  }
+  return 3000;
 }
 
 const PORT = resolvePort();
@@ -204,17 +212,33 @@ async function startServer() {
   attachQuizWebSocketServer(httpServer);
 
   if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const disableHmr = process.env.DISABLE_HMR === 'true';
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: disableHmr ? false : { server: httpServer },
-        ...(disableHmr ? { watch: null } : {}),
-      },
-      appType: 'spa',
+    const inAiStudioRuntime =
+      process.env.DISABLE_HMR === 'true' ||
+      Boolean(process.env.CONTROL_PLANE_PORT || process.env.NGINX_PORT || process.env.APPLET_ID);
+
+    const viteReady = import('vite').then(({ createServer: createViteServer }) =>
+      createViteServer({
+        server: {
+          middlewareMode: true,
+          allowedHosts: true,
+          ...(inAiStudioRuntime
+            ? { hmr: false, ws: false, watch: null }
+            : { ws: { server: httpServer } }),
+        },
+        appType: 'spa',
+      })
+    );
+
+    app.use((req, res, next) => {
+      viteReady
+        .then((vite) => vite.middlewares(req, res, next))
+        .catch(next);
     });
-    app.use(vite.middlewares);
+
+    viteReady.catch((err) => {
+      console.error('Failed to initialize Vite dev middleware:', err);
+      process.exit(1);
+    });
   } else {
     const distDir = path.resolve(__dirname, 'dist');
     app.use(express.static(distDir));

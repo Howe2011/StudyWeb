@@ -1,0 +1,416 @@
+export interface CatalogSubjectTemplate {
+  key: string;
+  name: string;
+  category: 'Sciences' | 'Mathematics' | 'Humanities' | 'English' | 'Languages' | 'Tech & Arts';
+  examBoard: string;
+  color: string;
+  hasTimeline?: boolean;
+  description: string;
+  topics: Array<{
+    name: string;
+    specCode?: string;
+    summary?: string;
+    keyTerms?: Array<{ term: string; definition: string }>;
+  }>;
+}
+
+export const SUBJECT_CATEGORIES = [
+  'All',
+  'Sciences',
+  'Mathematics',
+  'Humanities',
+  'English',
+  'Languages',
+  'Tech & Arts',
+] as const;
+
+export const SUBJECT_COLOR_SWATCHES = [
+  '#2F5F8A',
+  '#1F7A4D',
+  '#B3342F',
+  '#A8750C',
+  '#6B4FA1',
+  '#0E7490',
+  '#BE185D',
+  '#4D6B2A',
+] as const;
+
+export const QUICK_ADD_SUBJECT_CATALOG: CatalogSubjectTemplate[] = [
+  {
+    key: 'biology',
+    name: 'Biology',
+    category: 'Sciences',
+    examBoard: 'GCSE / IGCSE',
+    color: '#1F7A4D',
+    description: 'Cell biology, organisation, infection, bioenergetics & genetics.',
+    topics: [
+      {
+        name: 'Cell Biology & Organisation',
+        specCode: '1.1',
+        summary: 'Eukaryotic vs prokaryotic cells, microscopy, specialised cells, and levels of organisation.',
+        keyTerms: [
+          { term: 'Mitochondria', definition: 'Organelle where aerobic respiration takes place to release ATP energy.' },
+          { term: 'Osmosis', definition: 'Net movement of water molecules from high to low water potential across a partially permeable membrane.' },
+        ],
+      },
+      { name: 'Movement Across Membranes', specCode: '1.2' },
+      { name: 'Enzymes & Digestion', specCode: '2.1' },
+      { name: 'Infection & Response', specCode: '3.1' },
+      { name: 'Photosynthesis & Respiration', specCode: '4.1' },
+      { name: 'Homeostasis & Nervous System', specCode: '5.1' },
+      { name: 'Inheritance, Variation & Evolution', specCode: '6.1' },
+      { name: 'Ecology & Ecosystems', specCode: '7.1' },
+    ],
+  },
+  {
+    key: 'chemistry',
+    name: 'Chemistry',
+    category: 'Sciences',
+    examBoard: 'GCSE / IGCSE',
+    color: '#0E7490',
+    description: 'Atomic structure, bonding, quantitative chemistry, reactions & organic.',
+    topics: [
+      {
+        name: 'Atomic Structure & Periodic Table',
+        specCode: 'C1',
+        summary: 'Protons, neutrons, electrons, isotopes, and trends across Groups 1, 7 and 0.',
+        keyTerms: [
+          { term: 'Isotope', definition: 'Atoms of the same element with the same number of protons but different numbers of neutrons.' },
+        ],
+      },
+      { name: 'Ionic, Covalent & Metallic Bonding', specCode: 'C2' },
+      { name: 'Quantitative Chemistry & Moles', specCode: 'C3' },
+      { name: 'Chemical Changes & Electrolysis', specCode: 'C4' },
+      { name: 'Energy Changes', specCode: 'C5' },
+      { name: 'Rates of Reaction & Equilibrium', specCode: 'C6' },
+      { name: 'Organic Chemistry', specCode: 'C7' },
+    ],
+  },
+  {
+    key: 'physics',
+    name: 'Physics',
+    category: 'Sciences',
+    examBoard: 'GCSE / IGCSE',
+    color: '#2F5F8A',
+    description: 'Energy, electricity, particle model, waves, forces & electromagnetism.',
+    topics: [
+      {
+        name: 'Energy Stores & Transfers',
+        specCode: 'P1',
+        summary: 'Conservation of energy, kinetic & gravitational potential stores, efficiency, and power.',
+        keyTerms: [
+          { term: 'Specific Heat Capacity', definition: 'Energy needed to raise the temperature of 1 kg of a substance by 1 °C.' },
+        ],
+      },
+      { name: 'Electricity & Circuits', specCode: 'P2' },
+      { name: 'Particle Model of Matter', specCode: 'P3' },
+      { name: 'Atomic Structure & Radioactivity', specCode: 'P4' },
+      { name: 'Forces & Motion', specCode: 'P5' },
+      { name: 'Waves & Electromagnetic Spectrum', specCode: 'P6' },
+      { name: 'Magnetism & Electromagnetism', specCode: 'P7' },
+    ],
+  },
+  {
+    key: 'combined_science',
+    name: 'Combined Science',
+    category: 'Sciences',
+    examBoard: 'GCSE Trilogy',
+    color: '#0D9488',
+    description: 'Integrated Biology, Chemistry & Physics specification topics.',
+    topics: [
+      { name: 'Biology: Cells, Transport & Respiration', specCode: 'B1' },
+      { name: 'Biology: Disease, Homeostasis & Ecology', specCode: 'B2' },
+      { name: 'Chemistry: Atoms, Bonding & Moles', specCode: 'C1' },
+      { name: 'Chemistry: Rates, Energy & Atmosphere', specCode: 'C2' },
+      { name: 'Physics: Energy, Electricity & Waves', specCode: 'P1' },
+      { name: 'Physics: Forces, Motion & Magnetism', specCode: 'P2' },
+    ],
+  },
+  {
+    key: 'maths',
+    name: 'Mathematics',
+    category: 'Mathematics',
+    examBoard: 'GCSE / Higher',
+    color: '#B3342F',
+    description: 'Number, algebra, ratio & proportion, geometry, trigonometry & statistics.',
+    topics: [
+      {
+        name: 'Algebra & Quadratics',
+        specCode: 'A1',
+        summary: 'Expanding brackets, factorising quadratics, simultaneous equations, and rearranging formulae.',
+        keyTerms: [
+          { term: 'Quadratic Formula', definition: 'x = (-b ± √(b² - 4ac)) / 2a for equations in the form ax² + bx + c = 0.' },
+        ],
+      },
+      { name: 'Number, Indices & Surds', specCode: 'N1' },
+      { name: 'Ratio, Proportion & Percentages', specCode: 'R1' },
+      { name: 'Geometry, Circle Theorems & Vectors', specCode: 'G1' },
+      { name: 'Pythagoras & Trigonometry', specCode: 'G2' },
+      { name: 'Probability & Statistics', specCode: 'S1' },
+    ],
+  },
+  {
+    key: 'further_maths',
+    name: 'Further Mathematics',
+    category: 'Mathematics',
+    examBoard: 'Level 2 / A-Level',
+    color: '#9F1239',
+    description: 'Matrices, calculus differentiation, binomial expansion & trigonometry.',
+    topics: [
+      { name: 'Algebraic Proof & Polynomials', specCode: 'FM1' },
+      { name: 'Matrices & Transformations', specCode: 'FM2' },
+      { name: 'Differentiation & Stationary Points', specCode: 'FM3' },
+      { name: 'Trigonometric Identities', specCode: 'FM4' },
+    ],
+  },
+  {
+    key: 'history',
+    name: 'History',
+    category: 'Humanities',
+    examBoard: 'GCSE / Edexcel',
+    color: '#A8750C',
+    hasTimeline: true,
+    description: 'Modern depth studies, Cold War, Medicine Through Time & interactive timelines.',
+    topics: [
+      {
+        name: 'Weimar & Nazi Germany (1918–39)',
+        specCode: 'H1',
+        summary: 'Post-WWI Republic, Treaty of Versailles, Hyperinflation, Stresemann recovery, and Hitler’s rise.',
+        keyTerms: [
+          { term: 'Article 48', definition: 'Emergency clause in the Weimar Constitution allowing the President to rule by decree.' },
+          { term: 'Rentenmark', definition: 'New currency introduced in November 1923 by Stresemann to end hyperinflation.' },
+        ],
+      },
+      { name: 'Superpower Relations & Cold War (1941–91)', specCode: 'H2' },
+      { name: 'Medicine in Britain (c1250–present)', specCode: 'H3' },
+      { name: 'Early Elizabethan England (1558–88)', specCode: 'H4' },
+    ],
+  },
+  {
+    key: 'geography',
+    name: 'Geography',
+    category: 'Humanities',
+    examBoard: 'GCSE / AQA / Edexcel',
+    color: '#4D6B2A',
+    description: 'Natural hazards, rivers & coasts, urban issues, ecosystems & fieldwork.',
+    topics: [
+      {
+        name: 'Tectonic & Weather Hazards',
+        specCode: 'G1',
+        summary: 'Plate margins, earthquakes, tropical storms, and climate change mitigation & adaptation.',
+        keyTerms: [
+          { term: 'Conservative Plate Margin', definition: 'Boundary where plates slide past each other causing earthquakes without volcanoes.' },
+        ],
+      },
+      { name: 'Living World & Ecosystems', specCode: 'G2' },
+      { name: 'Coastal & River Landscapes', specCode: 'G3' },
+      { name: 'Urban Issues & Challenges', specCode: 'G4' },
+      { name: 'Changing Economic World', specCode: 'G5' },
+      { name: 'Resource Management & Fieldwork', specCode: 'G6' },
+    ],
+  },
+  {
+    key: 'english_lit',
+    name: 'English Literature',
+    category: 'English',
+    examBoard: 'GCSE',
+    color: '#6B4FA1',
+    description: 'Shakespeare, 19th-century novel, modern drama & poetry anthology.',
+    topics: [
+      { name: 'Shakespeare (Macbeth / Romeo & Juliet)', specCode: 'EL1' },
+      { name: '19th-Century Novel (A Christmas Carol / Jekyll & Hyde)', specCode: 'EL2' },
+      { name: 'Modern Play (An Inspector Calls)', specCode: 'EL3' },
+      { name: 'Power & Conflict / Unseen Poetry', specCode: 'EL4' },
+    ],
+  },
+  {
+    key: 'english_lang',
+    name: 'English Language',
+    category: 'English',
+    examBoard: 'GCSE',
+    color: '#7C3AED',
+    description: 'Reading comprehension, language/structure analysis & persuasive writing.',
+    topics: [
+      { name: 'Language & Structure Analysis (AO2)', specCode: 'P1' },
+      { name: 'Evaluation & Writer’s Viewpoints', specCode: 'P2' },
+      { name: 'Descriptive & Narrative Writing', specCode: 'P3' },
+      { name: 'Transactional & Persuasive Writing', specCode: 'P4' },
+    ],
+  },
+  {
+    key: 'computer_science',
+    name: 'Computer Science',
+    category: 'Tech & Arts',
+    examBoard: 'OCR / AQA GCSE',
+    color: '#2563EB',
+    description: 'Architecture, networks, cybersecurity, algorithms, SQL & Python logic.',
+    topics: [
+      {
+        name: 'Systems Architecture & CPU',
+        specCode: '1.1',
+        summary: 'Von Neumann architecture, Fetch-Decode-Execute cycle, registers, cache & clock speed.',
+        keyTerms: [
+          { term: 'MAR (Memory Address Register)', definition: 'Holds the memory address of the current instruction or data being fetched or written.' },
+        ],
+      },
+      { name: 'Memory, Storage & Data Representation', specCode: '1.2' },
+      { name: 'Computer Networks & Security', specCode: '1.3' },
+      { name: 'Algorithms, Searching & Sorting', specCode: '2.1' },
+      { name: 'Programming Fundamentals & SQL', specCode: '2.2' },
+      { name: 'Boolean Logic & Testing', specCode: '2.4' },
+    ],
+  },
+  {
+    key: 'business',
+    name: 'Business Studies',
+    category: 'Humanities',
+    examBoard: 'GCSE / Edexcel',
+    color: '#0F766E',
+    description: 'Enterprise, marketing mix, finance, human resources & operations.',
+    topics: [
+      { name: 'Enterprise & Business Ownership', specCode: 'B1' },
+      { name: 'Marketing Mix (4 Ps) & Market Research', specCode: 'B2' },
+      { name: 'Finance, Break-Even & Cash Flow', specCode: 'B3' },
+      { name: 'Operations & Quality Control', specCode: 'B4' },
+      { name: 'Human Resources & Motivation', specCode: 'B5' },
+    ],
+  },
+  {
+    key: 'economics',
+    name: 'Economics',
+    category: 'Humanities',
+    examBoard: 'GCSE / A-Level',
+    color: '#0369A1',
+    description: 'Supply & demand, elasticity, market failure, inflation & monetary policy.',
+    topics: [
+      { name: 'Scarcity, Supply & Demand', specCode: 'E1' },
+      { name: 'Elasticity & Market Failure', specCode: 'E2' },
+      { name: 'Macroeconomic Objectives & GDP', specCode: 'E3' },
+      { name: 'Fiscal, Monetary & Supply-Side Policy', specCode: 'E4' },
+    ],
+  },
+  {
+    key: 'religious_studies',
+    name: 'Religious Studies',
+    category: 'Humanities',
+    examBoard: 'GCSE',
+    color: '#9333EA',
+    description: 'Beliefs & teachings, practices, ethics, peace & conflict.',
+    topics: [
+      { name: 'Core Beliefs & Teachings', specCode: 'RS1' },
+      { name: 'Religious Practices & Festivals', specCode: 'RS2' },
+      { name: 'Religion, Peace & Conflict', specCode: 'RS3' },
+      { name: 'Crime, Punishment & Ethics', specCode: 'RS4' },
+    ],
+  },
+  {
+    key: 'psychology',
+    name: 'Psychology',
+    category: 'Tech & Arts',
+    examBoard: 'GCSE / A-Level',
+    color: '#DB2777',
+    description: 'Memory models, attachment, social influence, psychopathology & research methods.',
+    topics: [
+      { name: 'Memory Models & Eyewitness Testimony', specCode: 'PS1' },
+      { name: 'Social Influence & Conformity', specCode: 'PS2' },
+      { name: 'Attachment & Early Development', specCode: 'PS3' },
+      { name: 'Research Methods & Statistical Tests', specCode: 'PS4' },
+    ],
+  },
+  {
+    key: 'sociology',
+    name: 'Sociology',
+    category: 'Tech & Arts',
+    examBoard: 'GCSE / A-Level',
+    color: '#EA580C',
+    description: 'Families, education, crime & deviance, and sociological theory.',
+    topics: [
+      { name: 'Sociological Perspectives (Functionalism, Marxism, Feminism)', specCode: 'SO1' },
+      { name: 'Families & Households', specCode: 'SO2' },
+      { name: 'Education & Attainment', specCode: 'SO3' },
+      { name: 'Crime & Deviance', specCode: 'SO4' },
+    ],
+  },
+  {
+    key: 'french',
+    name: 'French',
+    category: 'Languages',
+    examBoard: 'GCSE',
+    color: '#1D4ED8',
+    description: 'Identity & culture, local area, school, future plans & key verb tenses.',
+    topics: [
+      { name: 'Identity, Family & Free Time', specCode: 'FR1' },
+      { name: 'Town, Travel & Environment', specCode: 'FR2' },
+      { name: 'School, Work & Future Plans', specCode: 'FR3' },
+      { name: 'High-Frequency Verbs & Tenses', specCode: 'FR4' },
+    ],
+  },
+  {
+    key: 'spanish',
+    name: 'Spanish',
+    category: 'Languages',
+    examBoard: 'GCSE',
+    color: '#DC2626',
+    description: 'Core vocabulary themes, opinions, past/future tenses & speaking prompts.',
+    topics: [
+      { name: 'Identity, Friends & Technology', specCode: 'ES1' },
+      { name: 'Holidays, Town & Local Region', specCode: 'ES2' },
+      { name: 'School & Career Ambitions', specCode: 'ES3' },
+      { name: 'Key Irregular Verbs & Idioms', specCode: 'ES4' },
+    ],
+  },
+  {
+    key: 'german',
+    name: 'German',
+    category: 'Languages',
+    examBoard: 'GCSE',
+    color: '#B45309',
+    description: 'Vocabulary themes, word order (TMP), cases & core grammar.',
+    topics: [
+      { name: 'Family, Media & Free Time', specCode: 'DE1' },
+      { name: 'Travel, Home & Environment', specCode: 'DE2' },
+      { name: 'School, Future & Jobs', specCode: 'DE3' },
+      { name: 'Cases & Word Order Rules', specCode: 'DE4' },
+    ],
+  },
+  {
+    key: 'pe',
+    name: 'Physical Education',
+    category: 'Tech & Arts',
+    examBoard: 'GCSE PE',
+    color: '#16A34A',
+    description: 'Anatomy & physiology, movement analysis, physical training & sports psychology.',
+    topics: [
+      { name: 'Skeletal, Muscular & Cardiovascular Systems', specCode: 'PE1' },
+      { name: 'Aerobic & Anaerobic Exercise', specCode: 'PE2' },
+      { name: 'Principles & Methods of Training', specCode: 'PE3' },
+      { name: 'Sports Psychology & Nutrition', specCode: 'PE4' },
+    ],
+  },
+  {
+    key: 'music',
+    name: 'Music',
+    category: 'Tech & Arts',
+    examBoard: 'GCSE',
+    color: '#8B5CF6',
+    description: 'Musical elements (DR SMITH), set works, harmony & music theory.',
+    topics: [
+      { name: 'Elements of Music (DR SMITH)', specCode: 'MU1' },
+      { name: 'Instrumental & Vocal Set Works', specCode: 'MU2' },
+      { name: 'Chords, Cadences & Notation', specCode: 'MU3' },
+    ],
+  },
+  {
+    key: 'art_design',
+    name: 'Art & Design',
+    category: 'Tech & Arts',
+    examBoard: 'GCSE',
+    color: '#EC4899',
+    description: 'Artist research, formal elements, media experimentation & annotations.',
+    topics: [
+      { name: 'Formal Elements & Composition', specCode: 'AD1' },
+      { name: 'Artist Analysis & Contextual Studies', specCode: 'AD2' },
+      { name: 'Portfolio Development & Annotations', specCode: 'AD3' },
+    ],
+  },
+];

@@ -11,19 +11,30 @@ interface VercelResponse {
 }
 
 const GRADING_MODEL_CANDIDATES = [
-  'gemini-2.5-flash-lite',
-  'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-4-hydrogen',
-];
+] as const;
+
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'and', 'or', 'by', 'is',
+  'are', 'was', 'were', 'be', 'being', 'been', 'it', 'its', 'with', 'from', 'that',
+  'this', 'as', 'into', 'between', 'which', 'who', 'what', 'when', 'where', 'their',
+]);
 
 function normalizeForFastCheck(raw: string): string {
   let cleaned = String(raw || '')
     .toLowerCase()
     .replace(/['’]/g, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/(\d),(?=\d{3}\b)/g, '$1')
+    .replace(/[^\p{L}\p{N}\s.%+-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+  cleaned = cleaned.replace(/\b(\d+(?:\.\d+)?)k\b/g, (_, num) =>
+    String(Math.round(Number(num) * 1000))
+  );
+  cleaned = cleaned.replace(/\b(\d+)%/g, '$1 percent');
+  cleaned = cleaned.replace(/[.%+-]+/g, ' ').replace(/\s+/g, ' ').trim();
 
   let prev = '';
   while (cleaned !== prev) {
@@ -40,11 +51,30 @@ function fastLocalCheck(studentAnswer: string, officialAnswer: string): boolean 
   if (!officialNorm) return false;
   if (studentNorm === officialNorm) return true;
 
+  const noParen = normalizeForFastCheck(officialAnswer.replace(/\([^)]*\)/g, ' '));
+  if (noParen && noParen === studentNorm) return true;
+
   const parts = officialAnswer
     .split(/\s*[;/]\s*/)
     .map((p) => normalizeForFastCheck(p))
     .filter((p) => p.length >= 2);
   return parts.length > 1 && parts.some((p) => p === studentNorm);
+}
+
+function smartSemanticFallbackCheck(studentAnswer: string, officialAnswer: string): boolean {
+  if (fastLocalCheck(studentAnswer, officialAnswer)) return true;
+  const sTokens = normalizeForFastCheck(studentAnswer)
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
+  const oTokens = normalizeForFastCheck(officialAnswer)
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
+  if (!sTokens.length || !oTokens.length) return false;
+
+  const matched = oTokens.filter((ot) =>
+    sTokens.some((st) => st === ot || (st.length >= 5 && ot.length >= 5 && st.startsWith(ot.slice(0, 5))))
+  ).length;
+  return matched / oTokens.length >= 0.65 && matched / sTokens.length >= 0.45;
 }
 
 interface BatchItem {
@@ -123,10 +153,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const apiKey = (process.env.GEMINI_API_KEY || '').trim();
     if (!apiKey) {
       for (const item of needsAi) {
-        results.set(item.id, { id: item.id, correct: false, source: 'fallback' });
+        results.set(item.id, {
+          id: item.id,
+          correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
+          source: 'fallback',
+        });
       }
     } else {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
       const promptLines = needsAi
         .map(
           (it, idx) =>
@@ -148,23 +189,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       let graded = false;
       for (const model of GRADING_MODEL_CANDIDATES) {
-        const isFlashLite = model.includes('flash-lite');
-        const thinkingConfig = isFlashLite
-          ? { thinkingBudget: 0 }
-          : { thinkingLevel: ThinkingLevel.MINIMAL };
-
+        const thinkingLevel = model === 'gemini-4-hydrogen' ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL;
         try {
-          const response = await ai.models.generateContent({
-            model,
-            contents: promptLines,
-            config: {
-              systemInstruction:
-                'Grade each numbered student flashcard answer generously by core factual meaning against the official answer (accepting abbreviations and month+year dates like "Nov 1918" for "9 November 1918"). Return strict JSON array of {id, correct}.',
-              thinkingConfig,
-              responseMimeType: 'application/json',
-              responseSchema,
-            },
-          });
+          const response = await Promise.race([
+            ai.models.generateContent({
+              model,
+              contents: promptLines,
+              config: {
+                systemInstruction:
+                  'Grade each numbered student flashcard answer generously by core factual meaning against the official answer (accepting abbreviations, synonyms, unit formats, and month+year dates like "Nov 1918" for "9 November 1918"). Return strict JSON array of {id, correct}.',
+                thinkingConfig: { thinkingLevel },
+                responseMimeType: 'application/json',
+                responseSchema,
+              },
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Gemini batch timeout')), 5000)
+            ),
+          ]);
 
           const parsed = JSON.parse((response.text || '[]').trim()) as Array<{
             id: string;
@@ -194,7 +236,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (!graded) {
         for (const item of needsAi) {
-          results.set(item.id, { id: item.id, correct: false, source: 'fallback' });
+          results.set(item.id, {
+            id: item.id,
+            correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
+            source: 'fallback',
+          });
         }
       }
     }

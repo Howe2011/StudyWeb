@@ -313,3 +313,180 @@
   outline-offset: 2px;
 }
 
+/* Original 3D Flip Flashcards & Slide Transitions */
+.fc3 {
+  position: relative;
+  height: clamp(270px, 44vh, 390px);
+  perspective: 1400px;
+  cursor: pointer;
+  outline: none;
+  --fc-accent: var(--e3);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: pan-y;
+}
+
+.fc3-inner {
+  position: absolute;
+  inset: 0;
+  transition: transform 0.65s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-style: preserve-3d;
+}
+
+.fc3.fc3-flipped .fc3-inner {
+  transform: rotateY(180deg);
+}
+
+.fc3-face {
+  position: absolute;
+  inset: 0;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border-radius: 22px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--sh);
+  padding: 24px 26px 20px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.fc3-face::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  border-radius: 22px 0 0 22px;
+  background: var(--fc-accent);
+}
+
+.fc3-back {
+  transform: rotateY(180deg);
+}
+
+.fc3:focus-visible .fc3-face {
+  outline: 3px solid var(--e3);
+  outline-offset: 3px;
+}
+
+.fc3-in {
+  animation: fc3-cin 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.fc3-out-r {
+  animation: fc3-outr 0.28s cubic-bezier(0.5, 0, 0.9, 0.5) both;
+}
+
+.fc3-out-l {
+  animation: fc3-outl 0.28s cubic-bezier(0.5, 0, 0.9, 0.5) both;
+}
+
+@keyframes fc3-cin {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fc3-outr {
+  to {
+    opacity: 0;
+    transform: translateX(70px) rotate(5deg);
+  }
+}
+
+@keyframes fc3-outl {
+  to {
+    opacity: 0;
+    transform: translateX(-70px) rotate(-5deg);
+  }
+}
+
+.sd-cloze-gap {
+  display: inline-block;
+  border-bottom: 3px solid var(--fc-accent, var(--e3));
+  text-align: center;
+  color: var(--fc-accent, var(--e3));
+  font-weight: 800;
+  margin: 0 3px;
+  line-height: 1.1;
+  vertical-align: baseline;
+}
+
+.sd-cloze-fill {
+  background: color-mix(in srgb, var(--fc-accent, var(--e3)) 22%, transparent);
+  color: inherit;
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-weight: 800;
+}
+
+/* Toggle Switch */
+.sd-sw {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.sd-sw input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.sd-sw-track {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.sd-sw-track::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+
+.sd-sw input:checked + .sd-sw-track {
+  background: var(--ok);
+}
+
+.sd-sw input:checked + .sd-sw-track::after {
+  transform: translateX(18px);
+}
+
+.sd-sw input:focus-visible + .sd-sw-track {
+  outline: 2px solid var(--e3);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fc3-inner {
+    transition: none;
+  }
+  .fc3-in,
+  .fc3-out-r,
+  .fc3-out-l {
+    animation: none;
+  }
+}
+

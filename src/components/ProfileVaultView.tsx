@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
   Check,
@@ -22,32 +22,27 @@ import {
 } from 'lucide-react';
 import { AdminPanel } from './AdminPanel';
 import { getDeviceInfo, setCustomDeviceName } from '../lib/device';
-import { buildStudyPackFromDraft, parseStudyPackInput } from '../lib/packParser';
+import { isNoteEmpty, structuredNoteToHtml } from '../lib/noteFormat';
 import { BOOTSTRAP_ADMIN_EMAIL } from '../lib/syncService';
 import {
-  DeckSnapshot,
+  convertLegacyEntriesToWorkspace,
+  createEmptyWorkspace,
+  normalizeWorkspace,
+} from '../lib/workspaceStore';
+import {
   DecryptedProfile,
-  StudyPack,
   UserAccountDoc,
   UserActivityDoc,
   UserDeviceDoc,
+  WorkspaceData,
 } from '../types';
 
 export type VaultSection = 'account' | 'data' | 'admin';
 
-export type BackupCategory =
-  | 'notes'
-  | 'flashcards'
-  | 'timelines'
-  | 'planner'
-  | 'subjects';
-
-interface WorkspaceSnapshot {
-  revision: Record<string, string>;
-  planner: Record<string, string>;
-}
+export type BackupCategory = 'notes' | 'flashcards' | 'timelines' | 'planner' | 'subjects';
 
 interface ProfileVaultViewProps {
+  workspace: WorkspaceData;
   firebaseUser: User | null;
   account: UserAccountDoc | null;
   vaultUnlocked: boolean;
@@ -57,7 +52,6 @@ interface ProfileVaultViewProps {
   chunkCount: number;
   syncState: 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
   hasGuestData: boolean;
-  deckSnapshot?: DeckSnapshot;
   initialSection?: VaultSection;
   onOpenAuth: () => void;
   onSignOut: () => Promise<void>;
@@ -69,15 +63,10 @@ interface ProfileVaultViewProps {
   onRemoveDevice: (deviceId: string) => Promise<void>;
   onDeviceRenamed: () => Promise<void>;
   onOpenCustomize: () => void;
+  onOpenUniversalImport: () => void;
   onOpenRevisionCards: () => void;
   onOpenPlannerOptions: () => void;
-  onGetWorkspaceSnapshot: () => Promise<WorkspaceSnapshot>;
-  onImportWorkspaceData: (payload: {
-    revision: Record<string, string>;
-    planner: Record<string, string>;
-    mode: 'merge' | 'replace';
-  }) => Promise<void>;
-  onApplyImportedPack?: (pack: StudyPack) => Promise<void>;
+  onImportWorkspaceData: (incoming: WorkspaceData, mode: 'merge' | 'replace') => Promise<void>;
   onResetWorkspace: () => Promise<void>;
 }
 
@@ -86,157 +75,12 @@ const ALL_CATEGORIES: {
   label: string;
   desc: string;
 }[] = [
-  { id: 'notes', label: 'Notes', desc: 'Formatted study notes & Word doc imports' },
-  { id: 'flashcards', label: 'Flashcards', desc: 'Custom cards, decks & spaced-repetition progress' },
-  { id: 'timelines', label: 'Timelines & Mindmaps', desc: 'Custom milestones, eras, known dates & mindmaps' },
-  { id: 'planner', label: 'Planner & To-Do', desc: 'Home widgets, to-do tasks, schedule & mocks' },
-  { id: 'subjects', label: 'Subjects & Settings', desc: 'Custom subjects/topics, section layouts & theme' },
+  { id: 'subjects', label: 'Subjects & Topics', desc: 'Subjects, exam dates, and topic list' },
+  { id: 'notes', label: 'Structured Notes', desc: 'Summaries, sections, key terms & worked examples' },
+  { id: 'flashcards', label: 'Flashcards', desc: 'Cards & spaced-repetition progress' },
+  { id: 'timelines', label: 'Timelines', desc: 'History timeline milestones & eras' },
+  { id: 'planner', label: 'Planner & To-Do', desc: 'Weekly calendar blocks, to-do tasks & logged minutes' },
 ];
-
-function classifyRevisionKey(key: string): BackupCategory {
-  if (/^gdoc-/.test(key) && !/-cfg$/.test(key)) return 'notes';
-  if (/^(fc-state|cb-ui)$/.test(key)) return 'flashcards';
-  if (/^(edits-|known-|mindmap-)/.test(key)) return 'timelines';
-  return 'subjects';
-}
-
-function summarizeSnapshot(snap: WorkspaceSnapshot, deckSnapshot?: DeckSnapshot) {
-  let noteDocs = 0;
-  let customCards = 0;
-  let cardProgress = 0;
-  let timelineEdits = 0;
-  let mindmaps = 0;
-  let plannerTasks = 0;
-  let plannerMocks = 0;
-  let plannerSubjects = 0;
-  let customSubjects = 0;
-
-  const countsByCat: Record<BackupCategory, number> = {
-    notes: 0,
-    flashcards: 0,
-    timelines: 0,
-    planner: 0,
-    subjects: 0,
-  };
-
-  for (const [k, v] of Object.entries(snap.revision || {})) {
-    const cat = classifyRevisionKey(k);
-    countsByCat[cat] += 1;
-    if (cat === 'notes' && v) {
-      const stripped = v.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim();
-      if (stripped.length > 0) noteDocs += 1;
-    }
-    if (k === 'fc-state') {
-      try {
-        const fc = JSON.parse(v) as { add?: unknown[]; prog?: Record<string, unknown> };
-        customCards = Array.isArray(fc.add) ? fc.add.length : 0;
-        cardProgress = fc.prog ? Object.keys(fc.prog).length : 0;
-      } catch {
-        // ignore
-      }
-    }
-    if (/^edits-/.test(k)) {
-      try {
-        const ed = JSON.parse(v) as {
-          add?: unknown[];
-          mod?: Record<string, unknown>;
-          del?: unknown[];
-          ne?: unknown[];
-        };
-        const hasAny =
-          (Array.isArray(ed.add) && ed.add.length > 0) ||
-          (ed.mod && Object.keys(ed.mod).length > 0) ||
-          (Array.isArray(ed.del) && ed.del.length > 0) ||
-          (Array.isArray(ed.ne) && ed.ne.length > 0);
-        if (hasAny) timelineEdits += 1;
-      } catch {
-        timelineEdits += 1;
-      }
-    }
-    if (/^mindmap-/.test(k)) mindmaps += 1;
-    if (k === 'user-subjects') {
-      try {
-        const reg = JSON.parse(v) as {
-          subs?: unknown[];
-          extraTopics?: unknown[];
-          baseTopics?: unknown[];
-        };
-        customSubjects =
-          (Array.isArray(reg.subs) ? reg.subs.length : 0) +
-          (Array.isArray(reg.baseTopics) && reg.baseTopics.length > 0 ? 1 : 0);
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  for (const [, v] of Object.entries(snap.planner || {})) {
-    countsByCat.planner += 1;
-    try {
-      const pl = JSON.parse(v) as {
-        todos?: unknown[];
-        td?: { items?: unknown[] };
-        mocks?: unknown[];
-        scores?: unknown[];
-        subs?: Array<{ on?: boolean; ex?: unknown[] }>;
-      };
-      if (Array.isArray(pl.td?.items)) plannerTasks += pl.td.items.length;
-      else if (Array.isArray(pl.todos)) plannerTasks += pl.todos.length;
-
-      if (Array.isArray(pl.scores)) plannerMocks += pl.scores.length;
-      if (Array.isArray(pl.mocks)) plannerMocks += pl.mocks.length;
-      if (Array.isArray(pl.subs)) {
-        const activeSubs = pl.subs.filter((s) => s && s.on !== false);
-        plannerSubjects += activeSubs.length;
-        for (const s of activeSubs) {
-          if (Array.isArray(s.ex)) plannerMocks += s.ex.length;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  const totalCards = deckSnapshot ? deckSnapshot.cards.length : customCards;
-  const activeSubjects = deckSnapshot
-    ? Math.max(deckSnapshot.subjects.length, plannerSubjects)
-    : Math.max(customSubjects, plannerSubjects);
-  const totalTopics = deckSnapshot ? deckSnapshot.topics.length : 0;
-
-  return {
-    countsByCat,
-    noteDocs,
-    totalCards,
-    customCards,
-    cardProgress,
-    timelineEdits,
-    mindmaps,
-    plannerTasks,
-    plannerMocks,
-    plannerSubjects,
-    customSubjects,
-    activeSubjects,
-    totalTopics,
-  };
-}
-
-function filterSnapshotByCategories(
-  snap: WorkspaceSnapshot,
-  selected: Record<BackupCategory, boolean>
-): WorkspaceSnapshot {
-  const revision: Record<string, string> = {};
-  for (const [k, v] of Object.entries(snap.revision || {})) {
-    const cat = classifyRevisionKey(k);
-    if (selected[cat]) revision[k] = v;
-  }
-  const planner: Record<string, string> = {};
-  if (selected.planner) {
-    for (const [k, v] of Object.entries(snap.planner || {})) {
-      planner[k] = v;
-    }
-  }
-  return { revision, planner };
-}
 
 function downloadBlob(filename: string, content: string, mime: string) {
   const blob = new Blob([content], { type: mime });
@@ -254,7 +98,38 @@ function csvCell(val: string): string {
   return `"${String(val || '').replace(/"/g, '""')}"`;
 }
 
+function filterWorkspaceByCategories(
+  ws: WorkspaceData,
+  cats: Record<BackupCategory, boolean>
+): WorkspaceData {
+  const next = createEmptyWorkspace();
+  if (cats.subjects || cats.notes || cats.timelines || cats.flashcards) {
+    next.subjects = [...ws.subjects];
+  }
+  if (cats.notes || cats.timelines || cats.subjects) {
+    next.topics = ws.topics.map((t) => ({
+      ...t,
+      notes: cats.notes
+        ? t.notes
+        : { summary: '', sections: [], keyTerms: [], examTip: '', workedExample: '', updatedAt: t.notes.updatedAt },
+      timelineEvents: cats.timelines ? t.timelineEvents : undefined,
+    }));
+  }
+  if (cats.flashcards) {
+    next.flashcards = [...ws.flashcards];
+  }
+  if (cats.planner) {
+    next.todos = [...ws.todos];
+    next.calendarBlocks = [...ws.calendarBlocks];
+    next.studyMinutesLogged = ws.studyMinutesLogged;
+    next.studyStreakDays = ws.studyStreakDays;
+    next.lastStudyDate = ws.lastStudyDate;
+  }
+  return next;
+}
+
 export function ProfileVaultView({
+  workspace,
   firebaseUser,
   account,
   vaultUnlocked,
@@ -264,7 +139,6 @@ export function ProfileVaultView({
   chunkCount,
   syncState,
   hasGuestData,
-  deckSnapshot,
   initialSection = 'account',
   onOpenAuth,
   onSignOut,
@@ -276,11 +150,10 @@ export function ProfileVaultView({
   onRemoveDevice,
   onDeviceRenamed,
   onOpenCustomize,
+  onOpenUniversalImport,
   onOpenRevisionCards,
   onOpenPlannerOptions,
-  onGetWorkspaceSnapshot,
   onImportWorkspaceData,
-  onApplyImportedPack,
   onResetWorkspace,
 }: ProfileVaultViewProps) {
   const currentDev = getDeviceInfo();
@@ -290,7 +163,7 @@ export function ProfileVaultView({
     fullName: firebaseUser?.displayName || '',
     school: '',
     yearGroup: '',
-    examBoard: 'Edexcel / Cambridge',
+    examBoard: 'GCSE / Edexcel',
     targetGrades: '',
     studyNotes: '',
   });
@@ -306,58 +179,36 @@ export function ProfileVaultView({
   const [armReset, setArmReset] = useState(false);
   const [resettingWorkspace, setResettingWorkspace] = useState(false);
 
-  // Data & Backup Center state
-  const [snapshot, setSnapshot] = useState<WorkspaceSnapshot>({ revision: {}, planner: {} });
-  const [loadingSnap, setLoadingSnap] = useState(false);
   const [exportCats, setExportCats] = useState<Record<BackupCategory, boolean>>({
+    subjects: true,
     notes: true,
     flashcards: true,
     timelines: true,
     planner: true,
-    subjects: true,
   });
   const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   const [importSourceTab, setImportSourceTab] = useState<'file' | 'text'>('file');
   const [importTextRaw, setImportTextRaw] = useState('');
-  const [parsedImport, setParsedImport] = useState<{
+  const [parsedBackup, setParsedBackup] = useState<{
     fileName: string;
-    revision: Record<string, string>;
-    planner: Record<string, string>;
+    workspace: WorkspaceData;
     available: Record<BackupCategory, boolean>;
-    textPack?: StudyPack;
-    textStats?: { subjects: number; topics: number; cards: number; notes: number; todos: number };
   } | null>(null);
   const [importCats, setImportCats] = useState<Record<BackupCategory, boolean>>({
+    subjects: true,
     notes: true,
     flashcards: true,
     timelines: true,
     planner: true,
-    subjects: true,
   });
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
   const [importStatus, setImportStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [importing, setImporting] = useState(false);
 
-  const refreshSnapshot = useCallback(async () => {
-    setLoadingSnap(true);
-    try {
-      const snap = await onGetWorkspaceSnapshot();
-      setSnapshot(snap);
-    } finally {
-      setLoadingSnap(false);
-    }
-  }, [onGetWorkspaceSnapshot]);
-
   useEffect(() => {
     setSection(initialSection);
   }, [initialSection]);
-
-  useEffect(() => {
-    if (section === 'data') {
-      void refreshSnapshot();
-    }
-  }, [section, refreshSnapshot]);
 
   useEffect(() => {
     if (profile) {
@@ -371,10 +222,29 @@ export function ProfileVaultView({
     }
   }, [profile, firebaseUser]);
 
-  const snapSummary = useMemo(
-    () => summarizeSnapshot(snapshot, deckSnapshot),
-    [snapshot, deckSnapshot]
-  );
+  const summary = useMemo(() => {
+    const noteDocs = workspace.topics.filter((t) => !isNoteEmpty(t.notes)).length;
+    const timelineTopics = workspace.topics.filter(
+      (t) => t.timelineEvents && t.timelineEvents.length > 0
+    ).length;
+    const timelineEventsCount = workspace.topics.reduce(
+      (acc, t) => acc + (t.timelineEvents?.length || 0),
+      0
+    );
+    const masteredCards = workspace.flashcards.filter((c) => c.box >= 4).length;
+
+    return {
+      subjects: workspace.subjects.length,
+      topics: workspace.topics.length,
+      noteDocs,
+      flashcards: workspace.flashcards.length,
+      masteredCards,
+      timelineTopics,
+      timelineEventsCount,
+      todos: workspace.todos.length,
+      calendarBlocks: workspace.calendarBlocks.length,
+    };
+  }, [workspace]);
 
   const handleProfileSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -420,39 +290,38 @@ export function ProfileVaultView({
     await onDeviceRenamed();
   };
 
-  const buildBackupJson = async () => {
-    const fresh = await onGetWorkspaceSnapshot();
-    setSnapshot(fresh);
-    const filtered = filterSnapshotByCategories(fresh, exportCats);
-    const selectedList = ALL_CATEGORIES.filter((c) => exportCats[c.id]).map((c) => c.id);
+  const buildBackupJson = () => {
+    const filtered = filterWorkspaceByCategories(workspace, exportCats);
     const payload = {
       app: 'studydeck',
       v: 2,
       exported: new Date().toISOString(),
-      categories: selectedList,
-      revision: filtered.revision,
-      planner: filtered.planner,
+      workspace: filtered,
     };
+    const itemCount =
+      filtered.subjects.length +
+      filtered.topics.length +
+      filtered.flashcards.length +
+      filtered.todos.length +
+      filtered.calendarBlocks.length;
     return {
       json: JSON.stringify(payload, null, 2),
-      itemCount:
-        Object.keys(filtered.revision).length + Object.keys(filtered.planner).length,
+      itemCount,
     };
   };
 
-  const handleDownloadJson = async () => {
-    const { json, itemCount } = await buildBackupJson();
+  const handleDownloadJson = () => {
+    const { json, itemCount } = buildBackupJson();
     if (!itemCount) {
       setExportStatus('No saved items matched your selected categories.');
       return;
     }
-    const dateStr = new Date().toISOString().slice(0, 10);
-    downloadBlob(`studydeck-backup-${dateStr}.json`, json, 'application/json');
-    setExportStatus(`Downloaded backup with ${itemCount} data records.`);
+    downloadBlob(`studydeck-backup-${new Date().toISOString().slice(0, 10)}.json`, json, 'application/json');
+    setExportStatus(`Downloaded JSON backup (${itemCount} study records).`);
   };
 
   const handleCopyJson = async () => {
-    const { json, itemCount } = await buildBackupJson();
+    const { json, itemCount } = buildBackupJson();
     if (!itemCount) {
       setExportStatus('No saved items matched your selected categories.');
       return;
@@ -465,259 +334,141 @@ export function ProfileVaultView({
     }
   };
 
-  const handleDownloadFlashcardsCsv = async () => {
-    const fresh = await onGetWorkspaceSnapshot();
-    setSnapshot(fresh);
-    const rawFc = fresh.revision['fc-state'];
-    if (!rawFc) {
-      setExportStatus('No custom flashcards saved yet.');
+  const handleDownloadFlashcardsCsv = () => {
+    if (workspace.flashcards.length === 0) {
+      setExportStatus('No flashcards saved yet.');
       return;
     }
-    try {
-      const fc = JSON.parse(rawFc) as {
-        add?: { q?: string; a?: string; s?: string }[];
-        secs?: { id?: string; n?: string }[];
-      };
-      const secMap = new Map((fc.secs || []).map((s) => [s.id || '', s.n || 'Custom']));
-      const cards = fc.add || [];
-      if (!cards.length) {
-        setExportStatus('No custom flashcards added yet.');
-        return;
-      }
-      const csv =
-        'question,answer,section\n' +
-        cards
-          .map((c) => [csvCell(c.q || ''), csvCell(c.a || ''), csvCell(secMap.get(c.s || '') || 'Custom')].join(','))
-          .join('\n');
-      downloadBlob(`studydeck-custom-cards-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
-      setExportStatus(`Exported ${cards.length} custom flashcard(s) as CSV.`);
-    } catch {
-      setExportStatus('Could not parse flashcards.');
-    }
+    const subjMap = new Map(workspace.subjects.map((s) => [s.id, s.name]));
+    const csv =
+      'question,answer,section,subject\n' +
+      workspace.flashcards
+        .map((c) =>
+          [
+            csvCell(c.q),
+            csvCell(c.a),
+            csvCell(c.sectionName || 'Core Deck'),
+            csvCell(subjMap.get(c.subjectId) || 'General'),
+          ].join(',')
+        )
+        .join('\n');
+    downloadBlob(`studydeck-flashcards-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
+    setExportStatus(`Exported ${workspace.flashcards.length} flashcard(s) as CSV.`);
   };
 
-  const handleDownloadNotesHtml = async () => {
-    const fresh = await onGetWorkspaceSnapshot();
-    setSnapshot(fresh);
-    const docs = Object.entries(fresh.revision).filter(
-      ([k, v]) => /^gdoc-/.test(k) && !/-cfg$/.test(k) && v && v.replace(/<[^>]*>/g, '').trim()
-    );
-    if (!docs.length) {
-      setExportStatus('No edited notes saved yet.');
+  const handleDownloadNotesHtml = () => {
+    const populated = workspace.topics.filter((t) => !isNoteEmpty(t.notes));
+    if (populated.length === 0) {
+      setExportStatus('No structured notes saved yet.');
       return;
     }
-    const htmlBody = docs
-      .map(([k, v]) => `<section><h1>${k.replace(/^gdoc-/, '')}</h1>${v}</section><hr>`)
+    const subjMap = new Map(workspace.subjects.map((s) => [s.id, s.name]));
+    const body = populated
+      .map(
+        (t) =>
+          `<section>${structuredNoteToHtml(
+            `${subjMap.get(t.subjectId) || 'Subject'} — ${t.name}`,
+            t.notes
+          )}</section><hr>`
+      )
       .join('\n');
-    const doc = `<!doctype html><html><head><meta charset="utf-8"><title>StudyDeck Notes</title><style>body{font-family:system-ui,sans-serif;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.55}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}</style></head><body>${htmlBody}</body></html>`;
-    downloadBlob(`studydeck-notes-${new Date().toISOString().slice(0, 10)}.html`, doc, 'text/html');
-    setExportStatus(`Exported ${docs.length} note document(s) as HTML.`);
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>StudyDeck Notes</title><style>body{font-family:system-ui,sans-serif;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.55}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}blockquote{border-left:3px solid #2F5F8A;padding-left:12px;color:#333}</style></head><body>${body}</body></html>`;
+    downloadBlob(`studydeck-notes-${new Date().toISOString().slice(0, 10)}.html`, html, 'text/html');
+    setExportStatus(`Exported ${populated.length} note document(s) as HTML.`);
   };
 
-  const handleDownloadTodosCsv = async () => {
-    const fresh = await onGetWorkspaceSnapshot();
-    setSnapshot(fresh);
-    const rawPl = fresh.planner['mockplanner.v1'];
-    if (!rawPl) {
-      setExportStatus('No planner or to-do data saved yet.');
+  const handleDownloadTodosCsv = () => {
+    if (workspace.todos.length === 0) {
+      setExportStatus('No to-do tasks saved yet.');
       return;
     }
-    try {
-      const pl = JSON.parse(rawPl) as {
-        subs?: { n?: string }[];
-        td?: {
-          items?: {
-            t?: string;
-            i?: number | null;
-            d?: string;
-            pri?: number;
-            c?: string;
-            done?: number | boolean;
-          }[];
-        };
-        todos?: { text?: string; subj?: string; due?: string; pri?: string; done?: boolean }[];
-      };
-      const rows =
-        Array.isArray(pl.td?.items) && pl.td.items.length
-          ? pl.td.items.map((item) => ({
-              task: item.t || '',
-              subject:
-                item.i != null && pl.subs?.[item.i]?.n ? pl.subs[item.i].n || '' : '',
-              due: item.d || '',
-              priority: item.pri === 3 ? 'High' : item.pri === 2 ? 'Medium' : 'Normal',
-              done: Boolean(item.done),
-            }))
-          : (pl.todos || []).map((t) => ({
-              task: t.text || '',
-              subject: t.subj || '',
-              due: t.due || '',
-              priority: t.pri || '',
-              done: Boolean(t.done),
-            }));
-
-      if (!rows.length) {
-        setExportStatus('No to-do tasks saved yet.');
-        return;
-      }
-      const csv =
-        'task,subject,due_date,priority,completed\n' +
-        rows
-          .map((t) =>
-            [
-              csvCell(t.task),
-              csvCell(t.subject),
-              csvCell(t.due),
-              csvCell(t.priority),
-              csvCell(t.done ? 'Yes' : 'No'),
-            ].join(',')
-          )
-          .join('\n');
-      downloadBlob(`studydeck-todos-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
-      setExportStatus(`Exported ${rows.length} to-do task(s) as CSV.`);
-    } catch {
-      setExportStatus('Could not parse to-do tasks.');
-    }
+    const subjMap = new Map(workspace.subjects.map((s) => [s.id, s.name]));
+    const csv =
+      'task,subject,due_date,priority,completed\n' +
+      workspace.todos
+        .map((t) =>
+          [
+            csvCell(t.title),
+            csvCell(t.subjectId ? subjMap.get(t.subjectId) || '' : ''),
+            csvCell(t.dueDate || ''),
+            csvCell(t.priority === 3 ? 'High' : t.priority === 1 ? 'Low' : 'Normal'),
+            csvCell(t.done ? 'Yes' : 'No'),
+          ].join(',')
+        )
+        .join('\n');
+    downloadBlob(`studydeck-todos-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
+    setExportStatus(`Exported ${workspace.todos.length} to-do task(s) as CSV.`);
   };
 
-  const parseRawImportText = (raw: string, sourceLabel: string) => {
+  const parseRawBackupJson = (raw: string, sourceLabel: string) => {
     const trimmed = raw.trim();
     if (!trimmed) {
-      setParsedImport(null);
-      setImportStatus({ ok: false, msg: 'Paste JSON backup data or study text first.' });
+      setParsedBackup(null);
+      setImportStatus({ ok: false, msg: 'Paste a StudyDeck JSON backup first.' });
       return;
     }
 
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        const obj = JSON.parse(trimmed) as Record<string, unknown>;
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, unknown>;
+      let parsedWs: WorkspaceData | null = null;
+
+      if (obj && obj.app === 'studydeck' && obj.v === 2 && obj.workspace) {
+        parsedWs = normalizeWorkspace(obj.workspace);
+      } else if (obj && obj.version === 2 && Array.isArray(obj.subjects)) {
+        parsedWs = normalizeWorkspace(obj);
+      } else {
+        // Legacy v1 StudyDeck / revision-site / mock-revision-planner backup conversion
         const rev: Record<string, string> = {};
         const pln: Record<string, string> = {};
-
         if (obj && obj.app === 'studydeck') {
           const rObj = (obj.revision && typeof obj.revision === 'object' ? obj.revision : {}) as Record<string, unknown>;
           const pObj = (obj.planner && typeof obj.planner === 'object' ? obj.planner : {}) as Record<string, unknown>;
-          for (const [k, v] of Object.entries(rObj)) {
-            if (typeof v === 'string') rev[k] = v;
-          }
-          for (const [k, v] of Object.entries(pObj)) {
-            if (typeof v === 'string') pln[k] = v;
-          }
+          for (const [k, v] of Object.entries(rObj)) if (typeof v === 'string') rev[k] = v;
+          for (const [k, v] of Object.entries(pObj)) if (typeof v === 'string') pln[k] = v;
         } else if (obj && obj.app === 'revision-site' && obj.data && typeof obj.data === 'object') {
           for (const [k, v] of Object.entries(obj.data as Record<string, unknown>)) {
             if (typeof v === 'string') rev[k] = v;
           }
-        } else if (
-          obj &&
-          obj.app === 'mock-revision-planner' &&
-          obj.data &&
-          typeof obj.data === 'object'
-        ) {
+        } else if (obj && obj.app === 'mock-revision-planner' && obj.data && typeof obj.data === 'object') {
           pln['mockplanner.v1'] = JSON.stringify(obj.data);
         } else if (
           obj &&
-          (Array.isArray(obj.subs) ||
-            Array.isArray(obj.todos) ||
-            Array.isArray(obj.blocks) ||
-            (obj.td && typeof obj.td === 'object'))
+          (Array.isArray(obj.subs) || Array.isArray(obj.todos) || Array.isArray(obj.blocks) || (obj.td && typeof obj.td === 'object'))
         ) {
           pln['mockplanner.v1'] = JSON.stringify(obj);
-        } else {
-          setParsedImport(null);
-          setImportStatus({
-            ok: false,
-            msg: 'Unrecognized JSON format. Paste a StudyDeck, Revision, or Planner JSON backup — or plain study text/CSV.',
-          });
-          return;
         }
 
-        const available: Record<BackupCategory, boolean> = {
-          notes: false,
-          flashcards: false,
-          timelines: false,
-          planner: Object.keys(pln).length > 0,
-          subjects: false,
-        };
-        for (const k of Object.keys(rev)) {
-          available[classifyRevisionKey(k)] = true;
-        }
+        const conv = convertLegacyEntriesToWorkspace(rev, pln);
+        if (conv.hadLegacyData) parsedWs = conv.workspace;
+      }
 
-        if (!Object.values(available).some(Boolean)) {
-          setParsedImport(null);
-          setImportStatus({ ok: false, msg: 'This JSON contains no data records.' });
-          return;
-        }
-
-        setParsedImport({ fileName: sourceLabel, revision: rev, planner: pln, available });
-        setImportCats({ ...available });
-        setImportStatus(null);
-        return;
-      } catch {
-        setParsedImport(null);
+      if (!parsedWs) {
+        setParsedBackup(null);
         setImportStatus({
           ok: false,
-          msg: 'Invalid JSON syntax. Check for missing braces/quotes, or import plain text instead.',
+          msg: 'Unrecognized JSON format. Use a StudyDeck JSON backup or use Smart Note & Flashcard Import for text/Word/CSV.',
         });
         return;
       }
-    }
 
-    // Parse plain text / Markdown / CSV / Study Pack template format
-    const draft = parseStudyPackInput(trimmed, {
-      fallbackTitle: 'Imported Text Data',
-    });
-    const hasContent =
-      draft.subjects.length > 0 ||
-      draft.cards.length > 0 ||
-      draft.notesByTopic.some((n) => n.notesLines.length > 0) ||
-      draft.todos.length > 0;
+      const available: Record<BackupCategory, boolean> = {
+        subjects: parsedWs.subjects.length > 0 || parsedWs.topics.length > 0,
+        notes: parsedWs.topics.some((t) => !isNoteEmpty(t.notes)),
+        flashcards: parsedWs.flashcards.length > 0,
+        timelines: parsedWs.topics.some((t) => t.timelineEvents && t.timelineEvents.length > 0),
+        planner: parsedWs.todos.length > 0 || parsedWs.calendarBlocks.length > 0,
+      };
 
-    if (!hasContent) {
-      setParsedImport(null);
+      setParsedBackup({ fileName: sourceLabel, workspace: parsedWs, available });
+      setImportCats({ ...available });
+      setImportStatus(null);
+    } catch {
+      setParsedBackup(null);
       setImportStatus({
         ok: false,
-        msg: 'Could not detect subjects, flashcards (Q | A or CSV), notes, or to-dos in that text.',
+        msg: 'Invalid JSON syntax. To import notes, Markdown, CSV, or .docx files, click Smart Import.',
       });
-      return;
     }
-
-    const pack = buildStudyPackFromDraft(draft, {
-      title: draft.title || 'Text Import',
-      subtitle: draft.subtitle || 'Imported from pasted text',
-      examBoard: draft.examBoard || 'Imported Data',
-      category:
-        draft.cards.length && !draft.notesByTopic.some((n) => n.notesLines.length)
-          ? 'flashcards'
-          : 'combo',
-      includeSubjects: true,
-      includeFlashcards: draft.cards.length > 0,
-      includeNotes: draft.notesByTopic.some((n) => n.notesLines.length > 0),
-      includeTodos: draft.todos.length > 0,
-    });
-
-    const available: Record<BackupCategory, boolean> = {
-      notes: draft.notesByTopic.some((n) => n.notesLines.length > 0),
-      flashcards: draft.cards.length > 0,
-      timelines: false,
-      planner: draft.todos.length > 0 || draft.subjects.length > 0,
-      subjects: draft.subjects.length > 0,
-    };
-
-    setParsedImport({
-      fileName: sourceLabel,
-      revision: {},
-      planner: {},
-      available,
-      textPack: pack,
-      textStats: {
-        subjects: draft.subjects.length,
-        topics: draft.subjects.reduce((sum, s) => sum + s.topics.length, 0),
-        cards: draft.cards.length,
-        notes: draft.notesByTopic.filter((n) => n.notesLines.length > 0).length,
-        todos: draft.todos.length,
-      },
-    });
-    setImportCats({ ...available });
-    setImportStatus(null);
   };
 
   const handleImportFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -726,90 +477,40 @@ export function ProfileVaultView({
     setImportStatus(null);
     const reader = new FileReader();
     reader.onload = () => {
-      parseRawImportText(String(reader.result || ''), file.name);
+      parseRawBackupJson(String(reader.result || ''), file.name);
       e.target.value = '';
     };
     reader.readAsText(file);
   };
 
   const handleRunImport = async () => {
-    if (!parsedImport) return;
-    if (parsedImport.textPack && onApplyImportedPack) {
-      setImporting(true);
-      setImportStatus(null);
-      try {
-        const src = parsedImport.textPack;
-        const filteredPack: StudyPack = {
-          ...src,
-          revision: {
-            ...src.revision,
-            subjects:
-              importCats.subjects || importCats.notes || importCats.flashcards
-                ? (src.revision.subjects || []).map((s) => ({
-                    ...s,
-                    topics: s.topics.map((t) => ({
-                      ...t,
-                      notesHtml: importCats.notes ? t.notesHtml : '',
-                    })),
-                  }))
-                : [],
-            sections: importCats.flashcards ? src.revision.sections : [],
-            cards: importCats.flashcards ? src.revision.cards : [],
-          },
-          planner: {
-            ...src.planner,
-            subjects: importCats.subjects || importCats.planner ? src.planner.subjects : [],
-            todos: importCats.planner ? src.planner.todos : [],
-          },
-        };
-        await onApplyImportedPack(filteredPack);
-        await refreshSnapshot();
-        setImportStatus({
-          ok: true,
-          msg: `Imported study data from ${parsedImport.fileName} into your workspace.`,
-        });
-        setParsedImport(null);
-        setImportTextRaw('');
-      } catch (err) {
-        setImportStatus({
-          ok: false,
-          msg: err instanceof Error ? err.message : 'Text import failed.',
-        });
-      } finally {
-        setImporting(false);
-      }
+    if (!parsedBackup) return;
+    const filtered = filterWorkspaceByCategories(parsedBackup.workspace, importCats);
+    const hasAny =
+      filtered.subjects.length > 0 ||
+      filtered.topics.length > 0 ||
+      filtered.flashcards.length > 0 ||
+      filtered.todos.length > 0 ||
+      filtered.calendarBlocks.length > 0;
+    if (!hasAny) {
+      setImportStatus({ ok: false, msg: 'Select at least one section to restore.' });
       return;
     }
 
-    const filtered = filterSnapshotByCategories(
-      { revision: parsedImport.revision, planner: parsedImport.planner },
-      importCats
-    );
-    const totalKeys =
-      Object.keys(filtered.revision).length + Object.keys(filtered.planner).length;
-    if (!totalKeys) {
-      setImportStatus({ ok: false, msg: 'Select at least one data section to import.' });
-      return;
-    }
     setImporting(true);
     setImportStatus(null);
     try {
-      await onImportWorkspaceData({
-        revision: filtered.revision,
-        planner: filtered.planner,
-        mode: importMode,
-      });
-      await refreshSnapshot();
+      await onImportWorkspaceData(filtered, importMode);
       setImportStatus({
         ok: true,
-        msg: `Imported ${totalKeys} section(s) from ${parsedImport.fileName} (${importMode} mode).`,
+        msg: `Restored backup from ${parsedBackup.fileName} (${importMode} mode).`,
       });
-      setParsedImport(null);
+      setParsedBackup(null);
       setImportTextRaw('');
     } catch (err) {
       setImportStatus({
         ok: false,
-        msg: err instanceof Error ? err.message : 'Import failed.',
+        msg: err instanceof Error ? err.message : 'Restore failed.',
       });
     } finally {
       setImporting(false);
@@ -875,7 +576,7 @@ export function ProfileVaultView({
               <button
                 type="button"
                 onClick={() => void onSignOut()}
-                className="sd-btn px-3.5 py-2 text-xs"
+                className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
               >
                 <LogOut className="h-4 w-4" aria-hidden="true" />
                 <span>Sign out</span>
@@ -895,74 +596,69 @@ export function ProfileVaultView({
                   </h2>
                   <p className="mt-0.5 text-xs text-[var(--mute)]">
                     {firebaseUser && vaultUnlocked
-                      ? 'Synced live with your encrypted AES-256-GCM cloud vault.'
-                      : 'Stored in your browser. Export any part or all of your workspace below.'}
+                      ? 'Synced live in a single compact AES-256-GCM cloud document.'
+                      : 'Saved locally in your browser. Export or restore anytime.'}
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={() => void refreshSnapshot()}
-                  disabled={loadingSnap}
-                  className="sd-btn px-3 py-1.5 text-xs"
+                  onClick={onOpenUniversalImport}
+                  className="sd-btn-pri px-3.5 py-2 text-xs whitespace-nowrap shrink-0"
                 >
-                  <RefreshCw
-                    className={`h-3.5 w-3.5 ${loadingSnap ? 'animate-spin' : ''}`}
-                    aria-hidden="true"
-                  />
-                  <span>Refresh counts</span>
+                  <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Import Word / Notes / CSV</span>
                 </button>
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                  <div className="text-xs font-semibold text-[var(--mute)]">Subjects</div>
+                  <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
+                    {summary.subjects}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-[var(--mute)]">
+                    {summary.topics} topics
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
                   <div className="text-xs font-semibold text-[var(--mute)]">Notes</div>
                   <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
-                    {snapSummary.noteDocs}
+                    {summary.noteDocs}
                   </div>
-                  <div className="mt-0.5 text-[11px] text-[var(--mute)]">edited topic docs</div>
+                  <div className="mt-0.5 text-[11px] text-[var(--mute)]">structured docs</div>
                 </div>
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
                   <div className="text-xs font-semibold text-[var(--mute)]">Flashcards</div>
                   <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
-                    {snapSummary.totalCards}
+                    {summary.flashcards}
                   </div>
                   <div className="mt-0.5 text-[11px] text-[var(--mute)]">
-                    {snapSummary.customCards} custom · {snapSummary.cardProgress} tracked
+                    {summary.masteredCards} mastered
                   </div>
                 </div>
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
-                  <div className="text-xs font-semibold text-[var(--mute)]">Timelines &amp; Maps</div>
+                  <div className="text-xs font-semibold text-[var(--mute)]">Timelines</div>
                   <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
-                    {snapSummary.timelineEdits + snapSummary.mindmaps}
+                    {summary.timelineEventsCount}
                   </div>
                   <div className="mt-0.5 text-[11px] text-[var(--mute)]">
-                    {snapSummary.timelineEdits} timelines · {snapSummary.mindmaps} maps
+                    across {summary.timelineTopics} topics
                   </div>
                 </div>
                 <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
-                  <div className="text-xs font-semibold text-[var(--mute)]">Planner &amp; To-Do</div>
+                  <div className="text-xs font-semibold text-[var(--mute)]">Planner</div>
                   <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
-                    {snapSummary.plannerTasks}
+                    {summary.todos + summary.calendarBlocks}
                   </div>
                   <div className="mt-0.5 text-[11px] text-[var(--mute)]">
-                    tasks · {snapSummary.plannerMocks} papers/scores
-                  </div>
-                </div>
-                <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
-                  <div className="text-xs font-semibold text-[var(--mute)]">Subjects</div>
-                  <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
-                    {snapSummary.activeSubjects}
-                  </div>
-                  <div className="mt-0.5 text-[11px] text-[var(--mute)]">
-                    {snapSummary.totalTopics} topics total
+                    {summary.todos} todos · {summary.calendarBlocks} blocks
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Selective Export & Import Grid */}
+            {/* Selective Export & Restore Grid */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              {/* Export Card */}
               <div className="sd-card flex flex-col justify-between p-6">
                 <div>
                   <div className="flex items-center justify-between gap-2">
@@ -974,11 +670,11 @@ export function ProfileVaultView({
                         type="button"
                         onClick={() =>
                           setExportCats({
+                            subjects: true,
                             notes: true,
                             flashcards: true,
                             timelines: true,
                             planner: true,
-                            subjects: true,
                           })
                         }
                         className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline"
@@ -990,11 +686,11 @@ export function ProfileVaultView({
                         type="button"
                         onClick={() =>
                           setExportCats({
+                            subjects: false,
                             notes: false,
                             flashcards: false,
                             timelines: false,
                             planner: false,
-                            subjects: false,
                           })
                         }
                         className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:underline"
@@ -1004,7 +700,7 @@ export function ProfileVaultView({
                     </div>
                   </div>
                   <p className="mt-1 text-xs text-[var(--mute)]">
-                    Choose everything or just the sections you want to save or transfer.
+                    Download a full StudyDeck backup or readable CSV / HTML study files.
                   </p>
 
                   <div className="mt-4 space-y-2">
@@ -1022,12 +718,7 @@ export function ProfileVaultView({
                           className="mt-0.5 h-4 w-4 accent-[var(--e3)]"
                         />
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2 text-sm font-bold text-[var(--ink)]">
-                            <span>{c.label}</span>
-                            <span className="font-mono-num text-xs font-semibold text-[var(--mute)]">
-                              {snapSummary.countsByCat[c.id]} key{snapSummary.countsByCat[c.id] === 1 ? '' : 's'}
-                            </span>
-                          </div>
+                          <div className="text-sm font-bold text-[var(--ink)]">{c.label}</div>
                           <div className="text-xs text-[var(--mute)]">{c.desc}</div>
                         </div>
                       </label>
@@ -1039,8 +730,8 @@ export function ProfileVaultView({
                   <div className="flex flex-wrap gap-2.5">
                     <button
                       type="button"
-                      onClick={() => void handleDownloadJson()}
-                      className="sd-btn-pri px-4 py-2 text-xs"
+                      onClick={handleDownloadJson}
+                      className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                     >
                       <Download className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>Download JSON backup</span>
@@ -1048,7 +739,7 @@ export function ProfileVaultView({
                     <button
                       type="button"
                       onClick={() => void handleCopyJson()}
-                      className="sd-btn px-3.5 py-2 text-xs"
+                      className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
                     >
                       <Copy className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>Copy JSON</span>
@@ -1056,27 +747,27 @@ export function ProfileVaultView({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <span className="text-xs font-semibold text-[var(--mute)]">Quick readable files:</span>
+                    <span className="text-xs font-semibold text-[var(--mute)]">Readable files:</span>
                     <button
                       type="button"
-                      onClick={() => void handleDownloadFlashcardsCsv()}
-                      className="sd-btn px-2.5 py-1.5 text-xs"
+                      onClick={handleDownloadFlashcardsCsv}
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
                     >
                       <FileSpreadsheet className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
                       <span>Flashcards (.csv)</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => void handleDownloadNotesHtml()}
-                      className="sd-btn px-2.5 py-1.5 text-xs"
+                      onClick={handleDownloadNotesHtml}
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
                     >
                       <FileText className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
                       <span>Notes (.html)</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => void handleDownloadTodosCsv()}
-                      className="sd-btn px-2.5 py-1.5 text-xs"
+                      onClick={handleDownloadTodosCsv}
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
                     >
                       <FileSpreadsheet className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
                       <span>To-Do (.csv)</span>
@@ -1091,12 +782,12 @@ export function ProfileVaultView({
                 </div>
               </div>
 
-              {/* Import Card */}
+              {/* Restore JSON Backup Card */}
               <div className="sd-card flex flex-col justify-between p-6">
                 <div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                      Import Data
+                      Restore JSON Backup
                     </h2>
                     <div className="sd-seg">
                       <button
@@ -1113,26 +804,26 @@ export function ProfileVaultView({
                         onClick={() => setImportSourceTab('text')}
                         className="sd-seg-btn"
                       >
-                        Paste Text / JSON
+                        Paste JSON
                       </button>
                     </div>
                   </div>
                   <p className="mt-1 text-xs text-[var(--mute)]">
-                    Restore a StudyDeck, Revision, or Planner JSON backup, or paste formatted notes, CSV flashcards, and study text directly.
+                    Supports both new StudyDeck v2 backups and legacy Revision / Planner JSON backups.
                   </p>
 
                   {importSourceTab === 'file' ? (
                     <label className="mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-6 text-center transition-colors hover:border-[var(--e3)]">
                       <Upload className="h-5 w-5 text-[var(--e3)]" aria-hidden="true" />
                       <span className="text-sm font-bold text-[var(--ink)]">
-                        {parsedImport ? parsedImport.fileName : 'Choose .json, .txt, .md, or .csv file'}
+                        {parsedBackup ? parsedBackup.fileName : 'Choose .json backup file'}
                       </span>
                       <span className="text-xs text-[var(--mute)]">
-                        Supports StudyDeck JSON backups as well as text, Markdown, and CSV flashcards
+                        Need to import Word (.docx), Markdown, or Quizlet CSV? Click &ldquo;Import Word / Notes / CSV&rdquo; above.
                       </span>
                       <input
                         type="file"
-                        accept=".json,.txt,.md,.csv,application/json,text/plain,text/csv"
+                        accept=".json,application/json"
                         onChange={handleImportFileChange}
                         className="hidden"
                       />
@@ -1143,32 +834,28 @@ export function ProfileVaultView({
                         rows={6}
                         value={importTextRaw}
                         onChange={(e) => setImportTextRaw(e.target.value)}
-                        placeholder={
-                          'Paste a StudyDeck JSON backup, or study text/CSV:\n\n[Subject: Biology]\nTopics: Cells, Enzymes\n[Flashcards | Biology > Cells]\nDefine osmosis | Water movement across a partially permeable membrane'
-                        }
+                        placeholder="Paste StudyDeck v1 or v2 JSON backup here..."
                         className="sd-input font-mono-num text-xs leading-relaxed"
                       />
                       <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"
-                          onClick={() => parseRawImportText(importTextRaw, 'Pasted Text')}
+                          onClick={() => parseRawBackupJson(importTextRaw, 'Pasted JSON')}
                           className="sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap"
                         >
-                          Parse &amp; Preview Text
+                          Preview Backup
                         </button>
                       </div>
                     </div>
                   )}
 
-                  {parsedImport && (
+                  {parsedBackup && (
                     <div className="mt-4 space-y-3">
                       <div className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
-                        {parsedImport.textStats
-                          ? `Detected from ${parsedImport.fileName}: ${parsedImport.textStats.subjects} subjects · ${parsedImport.textStats.topics} topics · ${parsedImport.textStats.cards} cards · ${parsedImport.textStats.notes} notes · ${parsedImport.textStats.todos} to-dos`
-                          : 'Sections found in backup'}
+                        Sections found in {parsedBackup.fileName}
                       </div>
                       <div className="space-y-1.5">
-                        {ALL_CATEGORIES.filter((c) => parsedImport.available[c.id]).map((c) => (
+                        {ALL_CATEGORIES.filter((c) => parsedBackup.available[c.id]).map((c) => (
                           <label
                             key={c.id}
                             className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-xs font-semibold text-[var(--ink)]"
@@ -1186,41 +873,39 @@ export function ProfileVaultView({
                         ))}
                       </div>
 
-                      {!parsedImport.textPack && (
-                        <div className="pt-1">
-                          <label className="block text-xs font-semibold text-[var(--mute)]">
-                            Import mode
-                            <select
-                              value={importMode}
-                              onChange={(e) =>
-                                setImportMode(e.target.value === 'replace' ? 'replace' : 'merge')
-                              }
-                              className="sd-input mt-1 py-1.5 text-xs"
-                            >
-                              <option value="merge">
-                                Merge — keep existing data &amp; add missing items
-                              </option>
-                              <option value="replace">
-                                Replace — overwrite selected sections with backup
-                              </option>
-                            </select>
-                          </label>
-                        </div>
-                      )}
+                      <div className="pt-1">
+                        <label className="block text-xs font-semibold text-[var(--mute)]">
+                          Import mode
+                          <select
+                            value={importMode}
+                            onChange={(e) =>
+                              setImportMode(e.target.value === 'replace' ? 'replace' : 'merge')
+                            }
+                            className="sd-input mt-1 py-1.5 text-xs"
+                          >
+                            <option value="merge">
+                              Merge — keep existing data &amp; add missing items
+                            </option>
+                            <option value="replace">
+                              Replace — overwrite workspace with backup
+                            </option>
+                          </select>
+                        </label>
+                      </div>
 
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <button
                           type="button"
                           disabled={importing}
                           onClick={() => void handleRunImport()}
-                          className="sd-btn-pri px-4 py-2 text-xs"
+                          className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                         >
                           <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>{importing ? 'Importing...' : 'Apply selected import'}</span>
+                          <span>{importing ? 'Restoring...' : 'Apply backup'}</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() => setParsedImport(null)}
+                          onClick={() => setParsedBackup(null)}
                           className="sd-btn px-3 py-2 text-xs"
                         >
                           Cancel
@@ -1251,14 +936,14 @@ export function ProfileVaultView({
                     Workspace Tools
                   </h3>
                   <p className="text-xs text-[var(--mute)]">
-                    Jump directly to flashcards, planner preferences, or whole-website styling.
+                    Jump directly to flashcards, focus timer, or website appearance.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={onOpenRevisionCards}
-                    className="sd-btn px-3 py-1.5 text-xs"
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     <Library className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
                     <span>Flashcard Library</span>
@@ -1266,15 +951,15 @@ export function ProfileVaultView({
                   <button
                     type="button"
                     onClick={onOpenPlannerOptions}
-                    className="sd-btn px-3 py-1.5 text-xs"
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                    <span>Planner Options</span>
+                    <span>Planner &amp; Timer</span>
                   </button>
                   <button
                     type="button"
                     onClick={onOpenCustomize}
-                    className="sd-btn px-3 py-1.5 text-xs"
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     <Palette className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
                     <span>Website Styling</span>
@@ -1283,7 +968,7 @@ export function ProfileVaultView({
               </div>
             </div>
 
-            {/* Reset Workspace to Clean Empty State */}
+            {/* Reset Workspace */}
             <div className="sd-card border-[color-mix(in_srgb,var(--bad)_40%,var(--line))] p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -1291,8 +976,7 @@ export function ProfileVaultView({
                     Start Fresh (Clear Workspace Data)
                   </h3>
                   <p className="text-xs text-[var(--mute)]">
-                    Clears all subjects, flashcards, notes, timelines, tasks, and custom packs back
-                    to an empty starter workspace. Export a backup above first if you want a copy.
+                    Clears all subjects, flashcards, notes, timelines, and planner items back to an empty workspace.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1318,7 +1002,6 @@ export function ProfileVaultView({
                       try {
                         await onResetWorkspace();
                         setArmReset(false);
-                        await refreshSnapshot();
                       } finally {
                         setResettingWorkspace(false);
                       }
@@ -1362,14 +1045,14 @@ export function ProfileVaultView({
                   </h2>
                   <p className="mt-1 max-w-2xl text-sm text-[var(--mute)]">
                     {!firebaseUser
-                      ? 'Sign in with Google and protect your Revision flashcards, Geography notes, Mock Planner tasks, and private profile with client-side AES-256-GCM encryption across every device and network.'
-                      : 'Enter your sync passphrase or recovery code to decrypt your profile and synchronize changes across devices.'}
+                      ? 'Sign in with Google to protect your flashcards, structured notes, planner schedule, and private profile with client-side AES-256-GCM encryption across every device.'
+                      : 'Enter your sync passphrase or recovery code to decrypt your workspace and synchronize changes across devices.'}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={onOpenAuth}
-                  className="sd-btn-pri shrink-0 px-5 py-2.5 text-sm"
+                  className="sd-btn-pri shrink-0 px-5 py-2.5 text-sm whitespace-nowrap"
                 >
                   {!firebaseUser ? 'Sign in with Google' : 'Unlock Vault'}
                 </button>
@@ -1383,13 +1066,13 @@ export function ProfileVaultView({
                     Export &amp; Restore Backups
                   </h2>
                   <p className="mt-0.5 text-xs text-[var(--mute)]">
-                    Export all your data or specific sections (notes, flashcards, timelines, planner) without signing in.
+                    Export all your data or specific sections without signing in.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setSection('data')}
-                  className="sd-btn px-3.5 py-2 text-xs"
+                  className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
                 >
                   <Database className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Open Data &amp; Backups</span>
@@ -1399,7 +1082,6 @@ export function ProfileVaultView({
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-            {/* Left column: Encrypted Profile */}
             <section className="space-y-6 lg:col-span-7">
               <form onSubmit={handleProfileSubmit} className="sd-card p-6">
                 <div className="flex items-center justify-between gap-3">
@@ -1456,7 +1138,7 @@ export function ProfileVaultView({
                         type="text"
                         value={form.yearGroup}
                         onChange={(e) => setForm({ ...form, yearGroup: e.target.value })}
-                        placeholder="e.g. Year 11 / IGCSE"
+                        placeholder="e.g. Year 11 / GCSE"
                         className="sd-input mt-1"
                       />
                     </label>
@@ -1512,14 +1194,13 @@ export function ProfileVaultView({
                   <button
                     type="submit"
                     disabled={savingProfile}
-                    className="sd-btn-pri px-4 py-2 text-sm"
+                    className="sd-btn-pri px-4 py-2 text-sm whitespace-nowrap"
                   >
                     {savingProfile ? 'Encrypting...' : 'Save Encrypted Profile'}
                   </button>
                 </div>
               </form>
 
-              {/* Security & Key Rotation */}
               <div className="sd-card p-6">
                 <h2 className="font-display text-lg font-bold text-[var(--ink)]">
                   Vault Security &amp; Key Rotation
@@ -1565,7 +1246,7 @@ export function ProfileVaultView({
                     <button
                       type="submit"
                       disabled={busySec}
-                      className="sd-btn px-3.5 py-2 text-xs"
+                      className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
                     >
                       <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>{busySec ? 'Rotating...' : 'Rotate Passphrase'}</span>
@@ -1573,7 +1254,7 @@ export function ProfileVaultView({
                     <button
                       type="button"
                       onClick={() => void onLockVault()}
-                      className="sd-btn px-3.5 py-2 text-xs"
+                      className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
                     >
                       <Lock className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>Lock Vault on This Device</span>
@@ -1583,7 +1264,6 @@ export function ProfileVaultView({
               </div>
             </section>
 
-            {/* Right column: Cloud Sync Status, Devices, Audit Log */}
             <section className="space-y-6 lg:col-span-5">
               <div className="sd-card p-6">
                 <div className="flex items-center justify-between gap-2">
@@ -1593,7 +1273,7 @@ export function ProfileVaultView({
                   <button
                     type="button"
                     onClick={() => void onForceSync()}
-                    className="sd-btn px-3 py-1.5 text-xs"
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     <RefreshCw
                       className={`h-3.5 w-3.5 ${syncState === 'syncing' ? 'animate-spin' : ''}`}
@@ -1605,7 +1285,7 @@ export function ProfileVaultView({
 
                 <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
-                    <div className="text-xs text-[var(--mute)]">Encrypted Chunks</div>
+                    <div className="text-xs text-[var(--mute)]">Encrypted Docs</div>
                     <div className="font-mono-num mt-1 text-xl font-bold text-[var(--ink)]">
                       {chunkCount}
                     </div>
@@ -1626,7 +1306,7 @@ export function ProfileVaultView({
                     <button
                       type="button"
                       onClick={() => void onImportGuestData()}
-                      className="sd-btn-pri shrink-0 px-2.5 py-1.5 text-xs"
+                      className="sd-btn-pri shrink-0 px-2.5 py-1.5 text-xs whitespace-nowrap"
                     >
                       <Upload className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>Merge into Cloud</span>

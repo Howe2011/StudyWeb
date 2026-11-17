@@ -7,6 +7,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -14,6 +15,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { fastLocalQuizCheck, smartSemanticFallbackCheck } from './quizGrader';
 import { QuizDeckSummary, QuizPlayerState, QuizRoomState } from '../types';
 
 export interface CloudQuizCard {
@@ -43,6 +45,7 @@ export interface CloudPlayerDoc {
   pendingAnswer?: string;
   pendingSubmittedAt?: number;
   pendingQuestionIndex?: number;
+  pendingRoundId?: string;
   lastSubmissionJson?: string | null;
 }
 
@@ -51,6 +54,10 @@ const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function makeRoundId(index: number): string {
+  return `r_${index}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function generateCandidateCode(): string {
@@ -68,36 +75,6 @@ export function shuffleCards<T>(arr: T[]): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
-}
-
-export function normalizeForFastCheck(raw: string): string {
-  let cleaned = String(raw || '')
-    .toLowerCase()
-    .replace(/['’]/g, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  let prev = '';
-  while (cleaned !== prev) {
-    prev = cleaned;
-    cleaned = cleaned.replace(/^(?:the|a|an)\s+/i, '').trim();
-  }
-  return cleaned;
-}
-
-export function fastLocalQuizCheck(studentAnswer: string, officialAnswer: string): boolean {
-  const studentNorm = normalizeForFastCheck(studentAnswer);
-  if (!studentNorm) return false;
-  const officialNorm = normalizeForFastCheck(officialAnswer);
-  if (!officialNorm) return false;
-  if (studentNorm === officialNorm) return true;
-
-  const parts = officialAnswer
-    .split(/\s*[;/]\s*/)
-    .map((p) => normalizeForFastCheck(p))
-    .filter((p) => p.length >= 2);
-  return parts.length > 1 && parts.some((p) => p === studentNorm);
 }
 
 export function calculateQuizPoints(
@@ -130,15 +107,21 @@ export async function gradeAnswerViaVercelOrLocal(
     return { correct: true, source: 'local' };
   }
 
+  const controller = new AbortController();
+  const abortTimer = window.setTimeout(() => controller.abort(), 5500);
   try {
     const res = await fetch('/api/quiz/grade', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question, officialAnswer, studentAnswer: trimmed }),
+      signal: controller.signal,
     });
     const contentType = res.headers.get('content-type') || '';
     if (!res.ok || !contentType.includes('application/json')) {
-      return { correct: false, source: 'fallback' };
+      return {
+        correct: smartSemanticFallbackCheck(trimmed, officialAnswer),
+        source: 'fallback',
+      };
     }
     const data = (await res.json()) as {
       correct?: boolean;
@@ -149,7 +132,12 @@ export async function gradeAnswerViaVercelOrLocal(
       source: data.source || 'ai',
     };
   } catch {
-    return { correct: false, source: 'fallback' };
+    return {
+      correct: smartSemanticFallbackCheck(trimmed, officialAnswer),
+      source: 'fallback',
+    };
+  } finally {
+    window.clearTimeout(abortTimer);
   }
 }
 
@@ -347,6 +335,7 @@ export async function createCloudRoom(params: {
 
   const playerId = makeId('p');
   const activeSections = Array.from(new Set(questions.map((q) => q.section)));
+  const initialRoundId = makeRoundId(-1);
 
   try {
     await setDoc(doc(db, 'quizRooms', code), {
@@ -359,6 +348,7 @@ export async function createCloudRoom(params: {
       status: 'lobby',
       totalQuestions: questions.length,
       currentIndex: 0,
+      roundId: initialRoundId,
       questionStartedAt: null,
       questionEndsAt: null,
       currentQuestionJson: JSON.stringify({
@@ -385,6 +375,7 @@ export async function createCloudRoom(params: {
       pendingAnswer: '',
       pendingSubmittedAt: 0,
       pendingQuestionIndex: -1,
+      pendingRoundId: '',
       lastSubmissionJson: null,
       updatedAt: serverTimestamp(),
     });
@@ -475,6 +466,7 @@ export async function joinCloudRoom(params: {
       pendingAnswer: '',
       pendingSubmittedAt: 0,
       pendingQuestionIndex: -1,
+      pendingRoundId: '',
       lastSubmissionJson: null,
       updatedAt: serverTimestamp(),
     });
@@ -497,7 +489,10 @@ export function subscribeCloudRoom(
 
   const emit = () => {
     if (!latestRoomData) return;
-    const status = (String(latestRoomData.status || 'lobby') as QuizRoomState['status']);
+    const status = String(latestRoomData.status || 'lobby') as QuizRoomState['status'];
+    const currentIndex = Number(latestRoomData.currentIndex || 0);
+    const roundId = String(latestRoomData.roundId || `r_${currentIndex}`);
+
     let selectedSections: string[] = [];
     try {
       selectedSections = JSON.parse(String(latestRoomData.selectedSectionsJson || '[]')) as string[];
@@ -523,10 +518,12 @@ export function subscribeCloudRoom(
       currentQuestion = null;
     }
 
-    const currentIndex = Number(latestRoomData.currentIndex || 0);
     const mappedPlayers: QuizPlayerState[] = latestPlayers
       .map((p) => {
-        const forThisRound = p.pendingQuestionIndex === currentIndex;
+        const forThisRound =
+          Boolean(p.pendingRoundId)
+            ? p.pendingRoundId === roundId
+            : p.pendingQuestionIndex === currentIndex;
         const effectiveHasSubmitted = Boolean(p.hasSubmitted && forThisRound);
         const effectiveGradingStatus = forThisRound ? p.gradingStatus : null;
 
@@ -572,10 +569,11 @@ export function subscribeCloudRoom(
         deckId: String(latestRoomData.deckId || ''),
         deckTitle: String(latestRoomData.deckTitle || 'Live Quiz'),
         selectedSections,
-        timerSeconds: (Number(latestRoomData.timerSeconds || 20) as 15 | 20 | 30),
+        timerSeconds: Number(latestRoomData.timerSeconds || 20) as 15 | 20 | 30,
         status,
         totalQuestions: Number(latestRoomData.totalQuestions || 0),
-        currentIndex: Number(latestRoomData.currentIndex || 0),
+        currentIndex,
+        roundId,
         questionStartedAt:
           typeof latestRoomData.questionStartedAt === 'number'
             ? latestRoomData.questionStartedAt
@@ -628,6 +626,7 @@ export async function submitCloudAnswer(params: {
   code: string;
   playerId: string;
   questionIndex: number;
+  roundId: string;
   questionStartedAt: number | null;
   answer: string;
 }): Promise<void> {
@@ -641,6 +640,7 @@ export async function submitCloudAnswer(params: {
     pendingAnswer: cleanAnswer,
     pendingSubmittedAt: submittedAt,
     pendingQuestionIndex: params.questionIndex,
+    pendingRoundId: params.roundId,
     lastSubmissionJson: JSON.stringify({
       answer: cleanAnswer,
       correct: false,
@@ -657,50 +657,67 @@ export async function hostApplyPlayerGrade(params: {
   code: string;
   player: CloudPlayerDoc;
   questionIndex: number;
+  roundId: string;
   questionStartedAt: number | null;
   timerSeconds: number;
   correct: boolean;
   source: 'local' | 'ai' | 'fallback';
 }): Promise<void> {
-  if (params.player.pendingQuestionIndex !== params.questionIndex) {
-    return;
-  }
-  const submittedAt = params.player.pendingSubmittedAt || Date.now();
-  const elapsedMs = Math.max(0, submittedAt - (params.questionStartedAt || submittedAt));
-  const answer = params.player.pendingAnswer || '';
+  const playerRef = doc(db, 'quizRooms', params.code, 'players', params.player.id);
+  const roomRef = doc(db, 'quizRooms', params.code);
 
-  let nextStreak = 0;
-  let nextBestStreak = params.player.bestStreak;
-  let nextCorrectCount = params.player.correctCount;
-  let nextScore = params.player.score;
-  let pointsAwarded = 0;
-  let streakBonus = 0;
+  await runTransaction(db, async (tx) => {
+    const [roomSnap, playerSnap] = await Promise.all([tx.get(roomRef), tx.get(playerRef)]);
+    if (!roomSnap.exists() || !playerSnap.exists()) return;
+    const roomData = roomSnap.data() as { status?: string; roundId?: string; currentIndex?: number };
+    const latestP = playerSnap.data() as CloudPlayerDoc;
 
-  if (params.correct) {
-    nextStreak = params.player.streak + 1;
-    nextBestStreak = Math.max(nextBestStreak, nextStreak);
-    nextCorrectCount += 1;
-    const pts = calculateQuizPoints(elapsedMs, params.timerSeconds, nextStreak);
-    pointsAwarded = pts.total;
-    streakBonus = pts.streakBonus;
-    nextScore += pts.total;
-  }
+    // Only apply grade if we are still in the exact same round (during question OR final reveal wait)
+    if (
+      (roomData.roundId && roomData.roundId !== params.roundId) ||
+      latestP.pendingQuestionIndex !== params.questionIndex ||
+      (latestP.pendingRoundId && latestP.pendingRoundId !== params.roundId)
+    ) {
+      return;
+    }
 
-  await updateDoc(doc(db, 'quizRooms', params.code, 'players', params.player.id), {
-    score: nextScore,
-    streak: nextStreak,
-    bestStreak: nextBestStreak,
-    correctCount: nextCorrectCount,
-    gradingStatus: 'done',
-    lastSubmissionJson: JSON.stringify({
-      answer,
-      correct: params.correct,
-      gradingSource: params.source,
-      pointsAwarded,
-      streakBonus,
-      elapsedMs,
-    }),
-    updatedAt: serverTimestamp(),
+    const submittedAt = latestP.pendingSubmittedAt || Date.now();
+    const elapsedMs = Math.max(0, submittedAt - (params.questionStartedAt || submittedAt));
+    const answer = latestP.pendingAnswer || '';
+
+    let nextStreak = 0;
+    let nextBestStreak = latestP.bestStreak;
+    let nextCorrectCount = latestP.correctCount;
+    let nextScore = latestP.score;
+    let pointsAwarded = 0;
+    let streakBonus = 0;
+
+    if (params.correct) {
+      nextStreak = latestP.streak + 1;
+      nextBestStreak = Math.max(nextBestStreak, nextStreak);
+      nextCorrectCount += 1;
+      const pts = calculateQuizPoints(elapsedMs, params.timerSeconds, nextStreak);
+      pointsAwarded = pts.total;
+      streakBonus = pts.streakBonus;
+      nextScore += pts.total;
+    }
+
+    tx.update(playerRef, {
+      score: nextScore,
+      streak: nextStreak,
+      bestStreak: nextBestStreak,
+      correctCount: nextCorrectCount,
+      gradingStatus: 'done',
+      lastSubmissionJson: JSON.stringify({
+        answer,
+        correct: params.correct,
+        gradingSource: params.source,
+        pointsAwarded,
+        streakBonus,
+        elapsedMs,
+      }),
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
@@ -708,102 +725,150 @@ export async function hostStartCloudQuestion(params: {
   code: string;
   questions: CloudQuizCard[];
   index: number;
+  expectedRoundId?: string;
   timerSeconds: 15 | 20 | 30;
   players: CloudPlayerDoc[];
-}): Promise<void> {
-  if (params.index >= params.questions.length) {
-    const lastCard = params.questions[params.questions.length - 1];
-    await updateDoc(doc(db, 'quizRooms', params.code), {
-      status: 'finished',
-      questionStartedAt: null,
-      questionEndsAt: null,
-      ...(lastCard
-        ? {
-            currentQuestionJson: JSON.stringify({
-              id: lastCard.id,
-              question: lastCard.question,
-              section: lastCard.section,
-              officialAnswer: lastCard.answer,
-            }),
-          }
-        : {}),
+}): Promise<boolean> {
+  const roomRef = doc(db, 'quizRooms', params.code);
+  const nextRoundId = makeRoundId(params.index);
+
+  const committed = await runTransaction(db, async (tx) => {
+    const roomSnap = await tx.get(roomRef);
+    if (!roomSnap.exists()) return false;
+    const roomData = roomSnap.data() as {
+      status?: string;
+      roundId?: string;
+      currentIndex?: number;
+    };
+
+    // Guard against stale clicks / duplicate transitions:
+    // Can only start index 0 from 'lobby', or index N+1 from 'reveal' with matching roundId
+    if (params.expectedRoundId && roomData.roundId && roomData.roundId !== params.expectedRoundId) {
+      return false;
+    }
+    if (params.index === 0) {
+      if (roomData.status !== 'lobby') return false;
+    } else {
+      if (roomData.status !== 'reveal' || Number(roomData.currentIndex) !== params.index - 1) {
+        return false;
+      }
+    }
+
+    if (params.index >= params.questions.length) {
+      const lastCard = params.questions[params.questions.length - 1];
+      tx.update(roomRef, {
+        status: 'finished',
+        roundId: nextRoundId,
+        questionStartedAt: null,
+        questionEndsAt: null,
+        ...(lastCard
+          ? {
+              currentQuestionJson: JSON.stringify({
+                id: lastCard.id,
+                question: lastCard.question,
+                section: lastCard.section,
+                officialAnswer: lastCard.answer,
+              }),
+            }
+          : {}),
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    }
+
+    const card = params.questions[params.index];
+    const now = Date.now();
+    for (const p of params.players) {
+      tx.update(doc(db, 'quizRooms', params.code, 'players', p.id), {
+        hasSubmitted: false,
+        gradingStatus: null,
+        pendingAnswer: '',
+        pendingSubmittedAt: 0,
+        pendingQuestionIndex: -1,
+        pendingRoundId: '',
+        lastSubmissionJson: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    tx.update(roomRef, {
+      status: 'question',
+      currentIndex: params.index,
+      roundId: nextRoundId,
+      questionStartedAt: now,
+      questionEndsAt: now + params.timerSeconds * 1000,
+      currentQuestionJson: JSON.stringify({
+        id: card.id,
+        question: card.question,
+        section: card.section,
+      }),
       updatedAt: serverTimestamp(),
     });
-    return;
-  }
-
-  const card = params.questions[params.index];
-  const now = Date.now();
-  const batch = writeBatch(db);
-
-  for (const p of params.players) {
-    batch.update(doc(db, 'quizRooms', params.code, 'players', p.id), {
-      hasSubmitted: false,
-      gradingStatus: null,
-      pendingAnswer: '',
-      pendingSubmittedAt: 0,
-      pendingQuestionIndex: -1,
-      lastSubmissionJson: null,
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  batch.update(doc(db, 'quizRooms', params.code), {
-    status: 'question',
-    currentIndex: params.index,
-    questionStartedAt: now,
-    questionEndsAt: now + params.timerSeconds * 1000,
-    currentQuestionJson: JSON.stringify({
-      id: card.id,
-      question: card.question,
-      section: card.section,
-    }),
-    updatedAt: serverTimestamp(),
+    return true;
   });
 
-  await batch.commit();
+  return committed;
 }
 
 export async function hostRevealCloudRound(params: {
   code: string;
   questions: CloudQuizCard[];
   currentIndex: number;
+  expectedRoundId: string;
   players: CloudPlayerDoc[];
-}): Promise<void> {
+}): Promise<boolean> {
+  const roomRef = doc(db, 'quizRooms', params.code);
   const card = params.questions[params.currentIndex];
-  const batch = writeBatch(db);
 
-  for (const p of params.players) {
-    const submittedThisRound = p.hasSubmitted && p.pendingQuestionIndex === params.currentIndex;
-    if (!submittedThisRound && p.streak !== 0) {
-      batch.update(doc(db, 'quizRooms', params.code, 'players', p.id), {
-        streak: 0,
-        updatedAt: serverTimestamp(),
-      });
+  const committed = await runTransaction(db, async (tx) => {
+    const roomSnap = await tx.get(roomRef);
+    if (!roomSnap.exists()) return false;
+    const roomData = roomSnap.data() as {
+      status?: string;
+      roundId?: string;
+      currentIndex?: number;
+    };
+
+    // Transactional lock: ONLY reveal if the room is STILL in 'question' state for THIS exact roundId & currentIndex!
+    if (
+      roomData.status !== 'question' ||
+      Number(roomData.currentIndex) !== params.currentIndex ||
+      (roomData.roundId && roomData.roundId !== params.expectedRoundId)
+    ) {
+      return false;
     }
-  }
 
-  if (card) {
-    batch.update(doc(db, 'quizRooms', params.code), {
+    for (const p of params.players) {
+      const submittedThisRound =
+        p.hasSubmitted &&
+        (p.pendingRoundId ? p.pendingRoundId === params.expectedRoundId : p.pendingQuestionIndex === params.currentIndex);
+      if (!submittedThisRound && p.streak !== 0) {
+        tx.update(doc(db, 'quizRooms', params.code, 'players', p.id), {
+          streak: 0,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    tx.update(roomRef, {
       status: 'reveal',
       questionEndsAt: Date.now(),
-      currentQuestionJson: JSON.stringify({
-        id: card.id,
-        question: card.question,
-        section: card.section,
-        officialAnswer: card.answer,
-      }),
+      ...(card
+        ? {
+            currentQuestionJson: JSON.stringify({
+              id: card.id,
+              question: card.question,
+              section: card.section,
+              officialAnswer: card.answer,
+            }),
+          }
+        : {}),
       updatedAt: serverTimestamp(),
     });
-  } else {
-    batch.update(doc(db, 'quizRooms', params.code), {
-      status: 'reveal',
-      questionEndsAt: Date.now(),
-      updatedAt: serverTimestamp(),
-    });
-  }
+    return true;
+  });
 
-  await batch.commit();
+  return committed;
 }
 
 export async function hostRestartCloudRoom(params: {
@@ -826,6 +891,7 @@ export async function hostRestartCloudRoom(params: {
       pendingAnswer: '',
       pendingSubmittedAt: 0,
       pendingQuestionIndex: -1,
+      pendingRoundId: '',
       lastSubmissionJson: null,
       updatedAt: serverTimestamp(),
     });
@@ -834,6 +900,7 @@ export async function hostRestartCloudRoom(params: {
   batch.update(doc(db, 'quizRooms', params.code), {
     status: 'lobby',
     currentIndex: 0,
+    roundId: makeRoundId(-1),
     questionStartedAt: null,
     questionEndsAt: null,
     currentQuestionJson: first

@@ -6,6 +6,7 @@
 3. **PII Isolation & Client-Side Encryption**: Sensitive PII (`email`, `fullName`, `school`, `yearGroup`, `studyGoal`) is never stored in plaintext in `/users/{userId}`. It is encrypted client-side with AES-256-GCM and stored in `/users/{userId}/private/info`.
 4. **Immutability & Server Timestamps**: `createdAt` must equal `request.time` on creation and remain immutable on update; `updatedAt` must equal `request.time` on both create and update. `uid` and `ownerId` are immutable after creation.
 5. **Path ID & Payload Boundary Guards**: All document IDs match `^[a-zA-Z0-9_\-]+$` (`size <= 128`), and every string/number field enforces strict type, enum, and `.size()` bounds.
+6. **Community Shared Items & Direct Links (`/sharedItems/{itemId}`)**: Verified owners can publish `notes`, `flashcards`, or `subject` items (`payloadJson <= 450 KB`, initial `copyCount == 0`) as `public` or `unlisted`, edit/delete only their own items (unless admin), while signed-in copiers can only perform an atomic `+1` bump on `copyCount`.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads (Must Return PERMISSION_DENIED)
 1. **Unauthenticated Read/Write**: Unauthenticated user attempts `get(/users/alice)` or `set(/users/alice/syncDocs/d1, ...)`.

@@ -140,29 +140,30 @@ service cloud.firestore {
       return code is string && code.size() >= 4 && code.size() <= 8 && code.matches('^[A-Z0-9]+$');
     }
 
-    function isValidStudyPackDoc(data) {
+    function isValidSharedItemDoc(data) {
       return data.keys().hasAll([
-          'id', 'title', 'subtitle', 'category', 'examBoard', 'visibility',
-          'ownerId', 'ownerName', 'subjectCountPreview', 'topicCountPreview',
-          'cardCountPreview', 'payloadJson', 'createdAt', 'updatedAt'
+          'id', 'shareCode', 'type', 'title', 'subjectName', 'examBoard',
+          'summary', 'visibility', 'ownerId', 'ownerName', 'itemCount',
+          'copyCount', 'payloadJson', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'title', 'subtitle', 'category', 'examBoard', 'visibility',
-          'ownerId', 'ownerName', 'subjectCountPreview', 'topicCountPreview',
-          'cardCountPreview', 'payloadJson', 'createdAt', 'updatedAt'
+          'id', 'shareCode', 'type', 'title', 'subjectName', 'examBoard',
+          'summary', 'visibility', 'ownerId', 'ownerName', 'itemCount',
+          'copyCount', 'payloadJson', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
+        && data.shareCode is string && data.shareCode.size() >= 4 && data.shareCode.size() <= 16 && data.shareCode.matches('^[A-Z0-9]+$')
+        && data.type in ['notes', 'flashcards', 'subject']
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
-        && data.subtitle is string && data.subtitle.size() <= 240
-        && data.category in ['combo', 'flashcards', 'notes']
+        && data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 80
         && data.examBoard is string && data.examBoard.size() >= 1 && data.examBoard.size() <= 80
-        && data.visibility in ['public', 'private']
+        && data.summary is string && data.summary.size() <= 280
+        && data.visibility in ['public', 'unlisted']
         && isValidId(data.ownerId)
         && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 100
-        && data.subjectCountPreview is number && data.subjectCountPreview >= 0
-        && data.topicCountPreview is number && data.topicCountPreview >= 0
-        && data.cardCountPreview is number && data.cardCountPreview >= 0
-        && data.payloadJson is string && data.payloadJson.size() >= 2 && data.payloadJson.size() <= 650000
+        && data.itemCount is number && data.itemCount >= 0 && data.itemCount <= 10000
+        && data.copyCount is number && data.copyCount >= 0 && data.copyCount <= 1000000
+        && data.payloadJson is string && data.payloadJson.size() >= 2 && data.payloadJson.size() <= 450000
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -188,7 +189,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'code', 'hostUid', 'deckId', 'deckTitle', 'selectedSectionsJson',
-          'timerSeconds', 'status', 'totalQuestions', 'currentIndex',
+          'timerSeconds', 'status', 'totalQuestions', 'currentIndex', 'roundId',
           'questionStartedAt', 'questionEndsAt', 'currentQuestionJson',
           'createdAt', 'updatedAt'
         ])
@@ -201,6 +202,7 @@ service cloud.firestore {
         && data.status in ['lobby', 'question', 'reveal', 'finished']
         && data.totalQuestions is number && data.totalQuestions >= 1 && data.totalQuestions <= 1000
         && data.currentIndex is number && data.currentIndex >= -1 && data.currentIndex <= 1000
+        && (!('roundId' in data) || (data.roundId is string && data.roundId.size() <= 128))
         && (!('questionStartedAt' in data) || data.questionStartedAt == null || data.questionStartedAt is number)
         && (!('questionEndsAt' in data) || data.questionEndsAt == null || data.questionEndsAt is number)
         && data.currentQuestionJson is string && data.currentQuestionJson.size() >= 2 && data.currentQuestionJson.size() <= 50000
@@ -217,7 +219,7 @@ service cloud.firestore {
           'id', 'uid', 'nickname', 'isHost', 'score', 'streak', 'bestStreak',
           'correctCount', 'connected', 'hasSubmitted', 'gradingStatus',
           'pendingAnswer', 'pendingSubmittedAt', 'pendingQuestionIndex',
-          'lastSubmissionJson', 'updatedAt'
+          'pendingRoundId', 'lastSubmissionJson', 'updatedAt'
         ])
         && isValidId(data.id)
         && isValidId(data.uid)
@@ -233,6 +235,7 @@ service cloud.firestore {
         && (!('pendingAnswer' in data) || (data.pendingAnswer is string && data.pendingAnswer.size() <= 1000))
         && (!('pendingSubmittedAt' in data) || data.pendingSubmittedAt is number)
         && (!('pendingQuestionIndex' in data) || data.pendingQuestionIndex is number)
+        && (!('pendingRoundId' in data) || (data.pendingRoundId is string && data.pendingRoundId.size() <= 128))
         && (!('lastSubmissionJson' in data) || data.lastSubmissionJson == null || (data.lastSubmissionJson is string && data.lastSubmissionJson.size() <= 10000))
         && data.updatedAt is timestamp;
     }
@@ -383,33 +386,42 @@ service cloud.firestore {
       allow delete: if isValidId(userId) && isAdmin() && userId != request.auth.uid;
     }
 
-    match /studyPacks/{packId} {
-      allow get: if isValidId(packId) && (
+    match /sharedItems/{itemId} {
+      allow get: if isValidId(itemId) && (
         resource == null ||
-        existing().visibility == 'public' ||
+        existing().visibility in ['public', 'unlisted'] ||
         (isSignedIn() && existing().ownerId == request.auth.uid) ||
         isAdmin()
       );
-      allow list: if existing().visibility == 'public' || (isSignedIn() && existing().ownerId == request.auth.uid) || isAdmin();
+      allow list: if existing().visibility in ['public', 'unlisted'] || (isSignedIn() && existing().ownerId == request.auth.uid) || isAdmin();
 
-      allow create: if isValidId(packId)
+      allow create: if isValidId(itemId)
         && isVerified()
-        && isValidStudyPackDoc(incoming())
-        && incoming().id == packId
+        && isValidSharedItemDoc(incoming())
+        && incoming().id == itemId
         && incoming().ownerId == request.auth.uid
+        && incoming().copyCount == 0
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
-      allow update: if isValidId(packId)
-        && isVerified()
-        && (existing().ownerId == request.auth.uid || isAdmin())
-        && isValidStudyPackDoc(incoming())
-        && incoming().id == existing().id
-        && incoming().ownerId == existing().ownerId
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time;
+      allow update: if isValidId(itemId) && (
+        (
+          isVerified()
+          && (existing().ownerId == request.auth.uid || isAdmin())
+          && isValidSharedItemDoc(incoming())
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+        ) || (
+          isSignedIn()
+          && incoming().diff(existing()).affectedKeys().hasOnly(['copyCount'])
+          && incoming().copyCount is number
+          && incoming().copyCount == existing().copyCount + 1
+        )
+      );
 
-      allow delete: if isValidId(packId) && isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow delete: if isValidId(itemId) && isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
     }
 
     match /quizDecks/{deckId} {

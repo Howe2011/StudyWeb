@@ -4,9 +4,9 @@ import {
   CalendarDays,
   CheckSquare,
   Gamepad2,
+  Globe,
   Home,
   Layers,
-  Package,
   PanelLeftClose,
   PanelLeftOpen,
   TrendingUp,
@@ -17,99 +17,41 @@ import { WorkspaceTab } from '../types';
 
 interface SidebarProps {
   activeTab: WorkspaceTab;
-  revisionMode: string;
-  plannerTab: string;
   collapsed: boolean;
   mobileOpen: boolean;
   onToggleCollapse: () => void;
   onCloseMobile: () => void;
-  onSelectRevisionMode: (mode: string) => void;
-  onSelectPlannerTab: (tab: string) => void;
-  onSelectWorkspace: (tab: WorkspaceTab) => void;
+  onSelectTab: (tab: WorkspaceTab) => void;
 }
+
+const NAV_ITEMS: Array<{
+  id: WorkspaceTab;
+  label: string;
+  icon: typeof Home;
+}> = [
+  { id: 'home', label: 'Home', icon: Home },
+  { id: 'subjects', label: 'Subjects', icon: BookMarked },
+  { id: 'notes', label: 'Study Notes', icon: BookOpen },
+  { id: 'flashcards', label: 'Flashcards', icon: Layers },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'planner', label: 'Planner', icon: CheckSquare },
+  { id: 'community', label: 'Community Share', icon: Globe },
+  { id: 'quiz', label: 'Live Quiz', icon: Gamepad2 },
+  { id: 'progress', label: 'Progress', icon: TrendingUp },
+];
 
 export function Sidebar({
   activeTab,
-  revisionMode,
-  plannerTab,
   collapsed,
   mobileOpen,
   onToggleCollapse,
   onCloseMobile,
-  onSelectRevisionMode,
-  onSelectPlannerTab,
-  onSelectWorkspace,
+  onSelectTab,
 }: SidebarProps) {
-  const handleAction = (fn: () => void) => {
-    fn();
+  const handleSelect = (tab: WorkspaceTab) => {
+    onSelectTab(tab);
     onCloseMobile();
   };
-
-  const navItems = [
-    {
-      id: 'home',
-      label: 'Home',
-      icon: Home,
-      active: activeTab === 'planner' && plannerTab === 'today',
-      onClick: () => onSelectPlannerTab('today'),
-    },
-    {
-      id: 'todo',
-      label: 'To-do list',
-      icon: CheckSquare,
-      active: activeTab === 'planner' && plannerTab === 'todo',
-      onClick: () => onSelectPlannerTab('todo'),
-    },
-    {
-      id: 'calendar',
-      label: 'Calendar',
-      icon: CalendarDays,
-      active: activeTab === 'planner' && plannerTab === 'calendar',
-      onClick: () => onSelectPlannerTab('calendar'),
-    },
-    {
-      id: 'subjects',
-      label: 'Subjects',
-      icon: BookMarked,
-      active: activeTab === 'planner' && plannerTab === 'subjects',
-      onClick: () => onSelectPlannerTab('subjects'),
-    },
-    {
-      id: 'study',
-      label: 'Study & Notes',
-      icon: BookOpen,
-      active: activeTab === 'revision' && revisionMode !== 'cards',
-      onClick: () => onSelectRevisionMode('study'),
-    },
-    {
-      id: 'cards',
-      label: 'Flashcards',
-      icon: Layers,
-      active: activeTab === 'revision' && revisionMode === 'cards',
-      onClick: () => onSelectRevisionMode('cards'),
-    },
-    {
-      id: 'packs',
-      label: 'Study Packs',
-      icon: Package,
-      active: activeTab === 'packs',
-      onClick: () => onSelectWorkspace('packs'),
-    },
-    {
-      id: 'quiz',
-      label: 'Live Quiz',
-      icon: Gamepad2,
-      active: activeTab === 'quiz',
-      onClick: () => onSelectWorkspace('quiz'),
-    },
-    {
-      id: 'progress',
-      label: 'Progress',
-      icon: TrendingUp,
-      active: activeTab === 'planner' && plannerTab === 'progress',
-      onClick: () => onSelectPlannerTab('progress'),
-    },
-  ];
 
   const navContent = (isMobileDrawer: boolean) => {
     const compact = collapsed && !isMobileDrawer;
@@ -124,7 +66,7 @@ export function Sidebar({
           {!compact && (
             <button
               type="button"
-              onClick={() => handleAction(() => onSelectPlannerTab('today'))}
+              onClick={() => handleSelect('home')}
               className="font-display cursor-pointer text-lg font-extrabold tracking-tight text-[var(--ink)] whitespace-nowrap"
             >
               StudyDeck
@@ -156,7 +98,7 @@ export function Sidebar({
           )}
         </div>
 
-        {/* Main 5 Navigation Items */}
+        {/* Navigation Links */}
         <nav
           aria-label="Workspace navigation"
           className={`flex min-h-0 flex-1 flex-col justify-between overflow-y-auto py-3 ${
@@ -164,15 +106,16 @@ export function Sidebar({
           }`}
         >
           <div className="space-y-1">
-            {navItems.map((item) => {
+            {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
+              const isActive = activeTab === item.id;
               return (
                 <button
                   key={item.id}
                   type="button"
                   title={item.label}
-                  aria-current={item.active ? 'page' : undefined}
-                  onClick={() => handleAction(item.onClick)}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={() => handleSelect(item.id)}
                   className={`sd-nav-item ${compact ? 'justify-center px-0' : ''}`}
                 >
                   <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -182,13 +125,13 @@ export function Sidebar({
             })}
           </div>
 
-          {/* Single Bottom Account & Data Button */}
+          {/* Account & Data */}
           <div className="border-t border-[var(--line)] pt-3">
             <button
               type="button"
               title="Account & Data"
               aria-current={activeTab === 'vault' || activeTab === 'admin' ? 'page' : undefined}
-              onClick={() => handleAction(() => onSelectWorkspace('vault'))}
+              onClick={() => handleSelect('vault')}
               className={`sd-nav-item ${compact ? 'justify-center px-0' : ''}`}
             >
               <UserCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -202,7 +145,6 @@ export function Sidebar({
 
   return (
     <>
-      {/* Desktop persistent Quizlet-style left sidebar */}
       <aside
         aria-label="StudyDeck sidebar"
         className={`hidden shrink-0 border-r border-[var(--line)] lg:block ${
@@ -212,7 +154,6 @@ export function Sidebar({
         {navContent(false)}
       </aside>
 
-      {/* Mobile slide-over drawer */}
       {mobileOpen && (
         <div
           className="fixed inset-0 z-50 flex lg:hidden"

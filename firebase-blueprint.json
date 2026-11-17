@@ -358,30 +358,31 @@
         "createdAt"
       ]
     },
-    "StudyPackDoc": {
-      "title": "StudyPackDoc",
-      "description": "Shared public or personal private Study Pack containing subjects, topics, flashcards, notes, and to-dos.",
+    "SharedStudyItemDoc": {
+      "title": "SharedStudyItemDoc",
+      "description": "Shared Notes, Flashcard Deck, or Full Subject published publicly or unlisted via 6-character share code.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "shareCode": { "type": "string", "minLength": 4, "maxLength": 16, "pattern": "^[A-Z0-9]+$" },
+        "type": { "type": "string", "enum": ["notes", "flashcards", "subject"] },
         "title": { "type": "string", "minLength": 1, "maxLength": 140 },
-        "subtitle": { "type": "string", "minLength": 0, "maxLength": 240 },
-        "category": { "type": "string", "enum": ["combo", "flashcards", "notes"] },
+        "subjectName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "examBoard": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "visibility": { "type": "string", "enum": ["public", "private"] },
+        "summary": { "type": "string", "minLength": 0, "maxLength": 280 },
+        "visibility": { "type": "string", "enum": ["public", "unlisted"] },
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "ownerName": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "subjectCountPreview": { "type": "number" },
-        "topicCountPreview": { "type": "number" },
-        "cardCountPreview": { "type": "number" },
-        "payloadJson": { "type": "string", "minLength": 2, "maxLength": 650000 },
+        "itemCount": { "type": "number" },
+        "copyCount": { "type": "number" },
+        "payloadJson": { "type": "string", "minLength": 2, "maxLength": 450000 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id", "title", "subtitle", "category", "examBoard", "visibility",
-        "ownerId", "ownerName", "subjectCountPreview", "topicCountPreview",
-        "cardCountPreview", "payloadJson", "createdAt", "updatedAt"
+        "id", "shareCode", "type", "title", "subjectName", "examBoard", "summary",
+        "visibility", "ownerId", "ownerName", "itemCount", "copyCount", "payloadJson",
+        "createdAt", "updatedAt"
       ]
     },
     "QuizDeckDoc": {
@@ -404,7 +405,7 @@
     },
     "QuizRoomDoc": {
       "title": "QuizRoomDoc",
-      "description": "Real-time Kahoot-style Live Quiz room synchronized over Firestore.",
+      "description": "Real-time Live Quiz room synchronized over Firestore with monotonic round locking.",
       "type": "object",
       "properties": {
         "code": { "type": "string", "minLength": 4, "maxLength": 8 },
@@ -416,6 +417,7 @@
         "status": { "type": "string", "enum": ["lobby", "question", "reveal", "finished"] },
         "totalQuestions": { "type": "number" },
         "currentIndex": { "type": "number" },
+        "roundId": { "type": "string", "maxLength": 128 },
         "questionStartedAt": { "type": "number" },
         "questionEndsAt": { "type": "number" },
         "currentQuestionJson": { "type": "string", "minLength": 2, "maxLength": 50000 },
@@ -447,6 +449,7 @@
         "pendingAnswer": { "type": "string", "maxLength": 1000 },
         "pendingSubmittedAt": { "type": "number" },
         "pendingQuestionIndex": { "type": "number" },
+        "pendingRoundId": { "type": "string", "maxLength": 128 },
         "lastSubmissionJson": { "type": "string", "maxLength": 10000 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -473,7 +476,7 @@
       "schema": {
         "$ref": "#/entities/EncryptedSyncDoc"
       },
-      "description": "End-to-end encrypted data chunks for Revision and Planner apps."
+      "description": "End-to-end encrypted workspace and legacy data chunks."
     },
     "/users/{userId}/devices/{deviceId}": {
       "schema": {
@@ -493,11 +496,11 @@
       },
       "description": "Trusted admin role registry used for RBAC enforcement."
     },
-    "/studyPacks/{packId}": {
+    "/sharedItems/{itemId}": {
       "schema": {
-        "$ref": "#/entities/StudyPackDoc"
+        "$ref": "#/entities/SharedStudyItemDoc"
       },
-      "description": "Shared public and private custom Study Packs."
+      "description": "Community & direct share items (Notes, Flashcard Decks, Full Subjects) with 6-character share codes."
     },
     "/quizDecks/{deckId}": {
       "schema": {

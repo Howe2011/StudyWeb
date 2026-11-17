@@ -13,13 +13,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db, firebaseProjectId, handleFirestoreError, OperationType } from '../firebase';
-import {
-  deleteLocalPackFile,
-  getPackFileName,
-  sanitizePackId,
-  saveLocalPackFile,
-} from './packFileStore';
+import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   decryptText,
   deriveKeyFromPassphrase,
@@ -36,17 +30,15 @@ import {
   AppModule,
   DecryptedProfile,
   EncryptedSyncDocRecord,
-  StudyPack,
-  StudyPackCategory,
-  StudyPackPlannerPayload,
-  StudyPackRevisionPayload,
   UserAccountDoc,
   UserActivityDoc,
   UserDeviceDoc,
   UserRole,
+  WorkspaceData,
 } from '../types';
 
 const CHUNK_SIZE = 200000;
+export const WORKSPACE_V2_CHUNK_KEY = 'workspace-v2';
 export const BOOTSTRAP_ADMIN_EMAIL = 'howezhou2011@gmail.com';
 
 const pushedChecksums = new Map<string, string>();
@@ -127,7 +119,7 @@ export async function createUserAccountWithVault(params: {
     fullName: safeName,
     school: '',
     yearGroup: '',
-    examBoard: 'Edexcel / Cambridge',
+    examBoard: 'GCSE / Edexcel',
     targetGrades: '',
     studyNotes: '',
   };
@@ -359,7 +351,6 @@ export async function pushEncryptedSyncEntry(params: {
   const prevCount = knownChunkCounts.get(compositeKey) || 0;
   knownChunkCounts.set(compositeKey, totalChunks);
 
-  // Clean up any stale chunks beyond totalChunks
   if (prevCount > totalChunks) {
     try {
       const batch = writeBatch(db);
@@ -375,12 +366,29 @@ export async function pushEncryptedSyncEntry(params: {
   }
 }
 
+export async function syncWorkspaceToCloud(params: {
+  uid: string;
+  dek: CryptoKey;
+  keyVersion: number;
+  workspace: WorkspaceData;
+}): Promise<void> {
+  await pushEncryptedSyncEntry({
+    uid: params.uid,
+    dek: params.dek,
+    keyVersion: params.keyVersion,
+    app: 'revision',
+    chunkKey: WORKSPACE_V2_CHUNK_KEY,
+    value: JSON.stringify(params.workspace),
+  });
+}
+
 export function subscribeEncryptedSyncDocs(
   uid: string,
   dek: CryptoKey,
   onSyncUpdate: (payload: {
     revision: Record<string, string>;
     planner: Record<string, string>;
+    workspaceV2Json: string | null;
     chunkCount: number;
     fromRemoteDevice: boolean;
   }) => void,
@@ -429,6 +437,7 @@ export function subscribeEncryptedSyncDocs(
 
       const revision: Record<string, string> = {};
       const planner: Record<string, string> = {};
+      let workspaceV2Json: string | null = null;
       let anyFromRemote = false;
 
       for (const [gk, grp] of groups.entries()) {
@@ -455,8 +464,13 @@ export function subscribeEncryptedSyncDocs(
         }
         knownChunkCounts.set(gk, grp.totalChunks);
         pushedChecksums.set(gk, grp.checksum);
-        if (grp.app === 'revision') revision[grp.chunkKey] = assembled;
-        else planner[grp.chunkKey] = assembled;
+        if (grp.app === 'revision' && grp.chunkKey === WORKSPACE_V2_CHUNK_KEY) {
+          workspaceV2Json = assembled;
+        } else if (grp.app === 'revision') {
+          revision[grp.chunkKey] = assembled;
+        } else {
+          planner[grp.chunkKey] = assembled;
+        }
       }
 
       if (currentSeq !== seq) return;
@@ -465,6 +479,7 @@ export function subscribeEncryptedSyncDocs(
       onSyncUpdate({
         revision,
         planner,
+        workspaceV2Json,
         chunkCount: snapshot.size,
         fromRemoteDevice: fromRemote,
       });
@@ -666,227 +681,3 @@ export async function ensureBootstrapAdminRole(
   }
   return account;
 }
-
-interface CloudStudyPackRecord {
-  id: string;
-  title: string;
-  subtitle: string;
-  category: StudyPackCategory;
-  examBoard: string;
-  visibility: 'public' | 'private';
-  ownerId: string;
-  ownerName: string;
-  subjectCountPreview: number;
-  topicCountPreview: number;
-  cardCountPreview: number;
-  payloadJson: string;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-
-export async function saveStudyPackToCloud(
-  pack: StudyPack,
-  uid: string,
-  ownerName: string
-): Promise<void> {
-  const safeId = sanitizePackId(pack.id);
-  const path = `studyPacks/${safeId}`;
-  const fileName = getPackFileName(safeId);
-  const payloadJson = JSON.stringify({
-    app: 'studydeck-pack',
-    v: 1,
-    fileName,
-    tags: pack.tags || [],
-    highlights: pack.highlights || [],
-    revision: pack.revision || {},
-    planner: pack.planner || {},
-  });
-  if (payloadJson.length > 650000) {
-    throw new Error('This Study Pack exceeds the 650 KB cloud sharing limit.');
-  }
-  const ref = doc(db, 'studyPacks', safeId);
-  const visibility: 'public' | 'private' = pack.visibility === 'public' ? 'public' : 'private';
-  const cleanTitle = ((pack.title || '').trim() || 'Untitled Study Pack').slice(0, 140);
-  const cleanSubtitle = (pack.subtitle || '').trim().slice(0, 240);
-  const cleanBoard = ((pack.examBoard || '').trim() || 'Custom Study Pack').slice(0, 80);
-  const cleanOwner = ((ownerName || pack.ownerName || '').trim() || 'StudyDeck User').slice(0, 100);
-  const cleanCategory: StudyPackCategory =
-    pack.category === 'flashcards' || pack.category === 'notes' ? pack.category : 'combo';
-
-  const normalizedPack: StudyPack = {
-    ...pack,
-    id: safeId,
-    title: cleanTitle,
-    subtitle: cleanSubtitle,
-    category: cleanCategory,
-    examBoard: cleanBoard,
-    visibility,
-    ownerId: uid,
-    ownerName: cleanOwner,
-    author: cleanOwner,
-  };
-
-  saveLocalPackFile(normalizedPack);
-
-  const updateFields = {
-    title: cleanTitle,
-    subtitle: cleanSubtitle,
-    category: cleanCategory,
-    examBoard: cleanBoard,
-    visibility,
-    ownerName: cleanOwner,
-    subjectCountPreview: Math.max(0, Number(pack.subjectCountPreview || 0) || 0),
-    topicCountPreview: Math.max(0, Number(pack.topicCountPreview || 0) || 0),
-    cardCountPreview: Math.max(0, Number(pack.cardCountPreview || 0) || 0),
-    payloadJson,
-    updatedAt: serverTimestamp(),
-  };
-
-  try {
-    await setDoc(ref, {
-      id: safeId,
-      ownerId: uid,
-      ...updateFields,
-      createdAt: serverTimestamp(),
-    });
-  } catch (createErr) {
-    try {
-      await updateDoc(ref, updateFields);
-    } catch (updateErr) {
-      if (visibility === 'private') {
-        console.warn('Private pack saved locally; Firestore sync skipped:', updateErr || createErr);
-        return;
-      }
-      const detail =
-        createErr instanceof Error
-          ? createErr.message
-          : updateErr instanceof Error
-            ? updateErr.message
-            : String(createErr);
-      throw new Error(
-        `Could not publish "${fileName}" to Firestore in Firebase project "${firebaseProjectId}". Publish firestore.rules in Firebase Console → Firestore Database → Rules (free Spark plan) or add the exported .json file to public/study-packs/ on Vercel. (${detail})`,
-      );
-    }
-  }
-}
-
-export async function savePrivatePackFile(
-  pack: StudyPack,
-  uid?: string,
-  ownerName?: string
-): Promise<void> {
-  const safeId = sanitizePackId(pack.id);
-  const normalized: StudyPack = {
-    ...pack,
-    id: safeId,
-    visibility: 'private',
-    ownerId: pack.ownerId || uid,
-    ownerName: pack.ownerName || ownerName,
-  };
-  saveLocalPackFile(normalized);
-  if (uid) {
-    await saveStudyPackToCloud(normalized, uid, ownerName || normalized.ownerName || 'StudyDeck User');
-  }
-}
-
-export async function deleteStudyPackFromCloud(packId: string): Promise<void> {
-  const safeId = sanitizePackId(packId);
-  deleteLocalPackFile(safeId);
-  const path = `studyPacks/${safeId}`;
-  try {
-    await deleteDoc(doc(db, 'studyPacks', safeId));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!/not-found/i.test(msg)) {
-      handleFirestoreError(err, OperationType.DELETE, path);
-    }
-  }
-}
-
-function parseCloudPackRecord(rec: CloudStudyPackRecord): StudyPack | null {
-  try {
-    const parsed = JSON.parse(rec.payloadJson) as {
-      tags?: string[];
-      highlights?: string[];
-      revision?: StudyPackRevisionPayload;
-      planner?: StudyPackPlannerPayload;
-    };
-    return {
-      id: rec.id,
-      title: rec.title,
-      subtitle: rec.subtitle,
-      category: rec.category,
-      examBoard: rec.examBoard,
-      visibility: rec.visibility,
-      ownerId: rec.ownerId,
-      ownerName: rec.ownerName,
-      author: rec.ownerName,
-      isCustom: true,
-      createdAt:
-        rec.createdAt instanceof Timestamp
-          ? rec.createdAt.toDate().toISOString()
-          : new Date().toISOString(),
-      subjectCountPreview: rec.subjectCountPreview,
-      topicCountPreview: rec.topicCountPreview,
-      cardCountPreview: rec.cardCountPreview,
-      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-      highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
-      revision: parsed.revision || {},
-      planner: parsed.planner || {},
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function subscribePublicStudyPacks(
-  onPacks: (packs: StudyPack[]) => void,
-  onError?: (err: unknown) => void
-): () => void {
-  const path = 'studyPacks';
-  const q = query(collection(db, 'studyPacks'), where('visibility', '==', 'public'));
-  return onSnapshot(
-    q,
-    (snap) => {
-      const list = snap.docs
-        .map((d) => parseCloudPackRecord(d.data() as CloudStudyPackRecord))
-        .filter((x): x is StudyPack => Boolean(x))
-        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-      onPacks(list);
-    },
-    (err) => {
-      try {
-        handleFirestoreError(err, OperationType.LIST, path);
-      } catch (wrapped) {
-        if (onError) onError(wrapped);
-      }
-    }
-  );
-}
-
-export function subscribeUserStudyPacks(
-  uid: string,
-  onPacks: (packs: StudyPack[]) => void,
-  onError?: (err: unknown) => void
-): () => void {
-  const path = `studyPacks(ownerId=${uid})`;
-  const q = query(collection(db, 'studyPacks'), where('ownerId', '==', uid));
-  return onSnapshot(
-    q,
-    (snap) => {
-      const list = snap.docs
-        .map((d) => parseCloudPackRecord(d.data() as CloudStudyPackRecord))
-        .filter((x): x is StudyPack => Boolean(x))
-        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-      onPacks(list);
-    },
-    (err) => {
-      try {
-        handleFirestoreError(err, OperationType.LIST, path);
-      } catch (wrapped) {
-        if (onError) onError(wrapped);
-      }
-    }
-  );
-}
-

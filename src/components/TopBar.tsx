@@ -15,6 +15,7 @@ import {
   Sun,
   Timer,
   Unlock,
+  Upload,
   User as UserIcon,
 } from 'lucide-react';
 import { getDeviceInfo } from '../lib/device';
@@ -22,6 +23,7 @@ import { BOOTSTRAP_ADMIN_EMAIL } from '../lib/syncService';
 import {
   DecryptedProfile,
   LiveTimerState,
+  PlannerSubTab,
   UserAccountDoc,
   UserDeviceDoc,
   WorkspaceTab,
@@ -31,12 +33,11 @@ export type { WorkspaceTab };
 
 interface TopBarProps {
   activeTab: WorkspaceTab;
-  revisionMode: string;
-  revisionSubj: string;
-  revisionSubjName?: string;
-  plannerTab: string;
-  onSelectTab: (tab: WorkspaceTab) => void;
+  plannerSubTab?: PlannerSubTab;
+  selectedSubjectName?: string;
+  onSelectTab: (tab: WorkspaceTab, opts?: { plannerTab?: PlannerSubTab }) => void;
   onOpenMobileSidebar: () => void;
+  onOpenImport?: () => void;
   firebaseUser: User | null;
   account: UserAccountDoc | null;
   profile: DecryptedProfile | null;
@@ -55,18 +56,24 @@ interface TopBarProps {
   onSignOut: () => Promise<void>;
 }
 
-const REV_MODE_LABELS: Record<string, string> = {
-  study: 'Study & Notes',
-  cards: 'Flashcards',
+const TAB_LABELS: Record<WorkspaceTab, string> = {
+  home: 'Home',
+  subjects: 'Subjects',
+  notes: 'Study Notes',
+  flashcards: 'Flashcards',
+  calendar: 'Calendar',
+  planner: 'Planner',
+  community: 'Community Share',
+  quiz: 'Live Quiz',
+  progress: 'Progress',
+  vault: 'Account & Data',
+  admin: 'Admin',
 };
 
-const PLANNER_TAB_LABELS: Record<string, string> = {
-  today: 'Home',
-  todo: 'To-do list',
-  calendar: 'Calendar',
-  subjects: 'Subjects',
-  progress: 'Progress',
-  set: 'Planner & To-do Options',
+const PLANNER_SUBTAB_LABELS: Record<PlannerSubTab, string> = {
+  calendar: 'To-Do List',
+  todo: 'To-Do List',
+  timer: 'Focus Timer',
 };
 
 function getInitials(name: string | null | undefined, email: string | null | undefined): string {
@@ -80,12 +87,11 @@ function getInitials(name: string | null | undefined, email: string | null | und
 
 export function TopBar({
   activeTab,
-  revisionMode,
-  revisionSubj,
-  revisionSubjName,
-  plannerTab,
+  plannerSubTab = 'calendar',
+  selectedSubjectName,
   onSelectTab,
   onOpenMobileSidebar,
+  onOpenImport,
   firebaseUser,
   account,
   profile,
@@ -130,17 +136,11 @@ export function TopBar({
   }, [menuOpen]);
 
   const contextTitle =
-    activeTab === 'revision'
-      ? `${REV_MODE_LABELS[revisionMode] || 'Study & Notes'} · ${
-          revisionSubjName || (revisionSubj === 'g' ? 'Geography' : 'History')
-        }`
+    (activeTab === 'notes' || activeTab === 'flashcards') && selectedSubjectName
+      ? `${TAB_LABELS[activeTab]} · ${selectedSubjectName}`
       : activeTab === 'planner'
-      ? PLANNER_TAB_LABELS[plannerTab] || 'Home'
-      : activeTab === 'packs'
-      ? 'Study Packs'
-      : activeTab === 'quiz'
-      ? 'Live Quiz'
-      : 'Account & Data';
+      ? `${TAB_LABELS.planner} · ${PLANNER_SUBTAB_LABELS[plannerSubTab]}`
+      : TAB_LABELS[activeTab] || 'Home';
 
   const displayName =
     profile?.fullName?.trim() ||
@@ -185,17 +185,29 @@ export function TopBar({
         </span>
       </div>
 
-      {/* Right: Timer, Theme Toggle, Customize, and Google Profile Avatar Menu */}
+      {/* Right: Timer, Quick Import, Theme Toggle, Customize, and Google Profile Avatar Menu */}
       <div className="flex shrink-0 items-center gap-2">
-        {liveTimer.active && activeTab !== 'planner' && (
+        {liveTimer.active && !(activeTab === 'planner' && plannerSubTab === 'timer') && (
           <button
             type="button"
-            onClick={() => onSelectTab('planner')}
+            onClick={() => onSelectTab('planner', { plannerTab: 'timer' })}
             title={`Active ${liveTimer.mode} session: ${liveTimer.subject}`}
             className="sd-btn font-mono-num hidden px-2.5 py-1.5 text-xs whitespace-nowrap text-[var(--e3)] sm:inline-flex"
           >
             <Timer className="h-3.5 w-3.5" aria-hidden="true" />
             <span>{liveTimer.text}</span>
+          </button>
+        )}
+
+        {onOpenImport && (
+          <button
+            type="button"
+            onClick={onOpenImport}
+            title="Import notes or flashcards"
+            className="sd-btn hidden h-9 px-2.5 text-xs whitespace-nowrap md:inline-flex"
+          >
+            <Upload className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+            <span>Import</span>
           </button>
         )}
 
@@ -267,7 +279,6 @@ export function TopBar({
               aria-label="Account details"
               className="sd-card absolute right-0 top-[calc(100%+8px)] z-50 w-80 overflow-hidden sm:w-96"
             >
-              {/* Top Profile Banner */}
               <div className="flex items-center gap-3 border-b border-[var(--line)] bg-[var(--bg)] p-4">
                 {photoUrl ? (
                   <img
@@ -313,13 +324,12 @@ export function TopBar({
                 </div>
               </div>
 
-              {/* Account & Encrypted Profile Info */}
               <div className="space-y-3 p-4 text-xs">
                 {firebaseUser ? (
                   <>
                     <div className="grid grid-cols-2 gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
                       <div>
-                        <div className="text-[var(--mute)]">Encrypted chunks</div>
+                        <div className="text-[var(--mute)]">Encrypted docs</div>
                         <div className="font-mono-num mt-0.5 text-sm font-bold text-[var(--ink)]">
                           {chunkCount}
                         </div>
@@ -353,11 +363,10 @@ export function TopBar({
                   </>
                 ) : (
                   <p className="leading-relaxed text-[var(--mute)]">
-                    Sign in with Google to sync your flashcards, Geography notes, and Mock Planner across phones, tablets, and desktops with AES-256-GCM encryption.
+                    Sign in with Google to sync your flashcards, structured notes, and revision planner across devices with AES-256-GCM encryption.
                   </p>
                 )}
 
-                {/* Actions */}
                 <div className="space-y-2 border-t border-[var(--line)] pt-3">
                   {!firebaseUser ? (
                     <button

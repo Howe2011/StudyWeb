@@ -231,18 +231,21 @@ export function LiveQuizView({
   const [muted, setMuted] = useState(false);
 
   const [backendMode, setBackendMode] = useState<'server' | 'cloud'>('server');
+  const [hostActionBusy, setHostActionBusy] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const clockOffsetRef = useRef<number>(0);
   const lastSoundStatusRef = useRef<string>('');
-  const lastRoundIndexRef = useRef<number>(-1);
+  const lastRoundKeyRef = useRef<string>('');
+  const localDeadlineRef = useRef<{ key: string; endsAt: number }>({ key: '', endsAt: 0 });
   const reconnectAttemptedRef = useRef(false);
   const cloudUnsubRef = useRef<(() => void) | null>(null);
   const cloudQuestionsRef = useRef<CloudQuizCard[]>([]);
   const cloudPlayersRef = useRef<CloudPlayerDoc[]>([]);
   const cloudGradingLocksRef = useRef<Set<string>>(new Set());
-  const cloudRevealingIndexRef = useRef<number | null>(null);
+  const cloudRevealingRoundRef = useRef<string | null>(null);
   const cloudRoundIndexRef = useRef<number>(-1);
+  const cloudRoundIdRef = useRef<string>('');
   const cloudRoundStatusRef = useRef<string>('lobby');
   const hostActionPendingRef = useRef<boolean>(false);
 
@@ -331,7 +334,7 @@ export function LiveQuizView({
         cloudQuestionsRef.current = hostQuestions;
       }
       cloudGradingLocksRef.current.clear();
-      cloudRevealingIndexRef.current = null;
+      cloudRevealingRoundRef.current = null;
       setPlayerId(pId);
       setWsConnected(true);
       setErrorMsg(null);
@@ -355,30 +358,28 @@ export function LiveQuizView({
         code,
         pId,
         (nextRoom, rawPlayers) => {
+          const roundId = nextRoom.roundId || `r_${nextRoom.currentIndex}`;
           cloudPlayersRef.current = rawPlayers;
           cloudRoundIndexRef.current = nextRoom.currentIndex;
+          cloudRoundIdRef.current = roundId;
           cloudRoundStatusRef.current = nextRoom.status;
           clockOffsetRef.current = 0;
           setRoom(nextRoom);
 
-          // Host-authoritative grading on submit & auto-reveal when everyone is done for THIS question
+          // Host-authoritative grading on submit & auto-reveal when everyone is done for THIS roundId
           if (cloudQuestionsRef.current.length > 0 && nextRoom.status === 'question') {
-            if (
-              cloudRevealingIndexRef.current !== null &&
-              cloudRevealingIndexRef.current !== nextRoom.currentIndex
-            ) {
-              cloudRevealingIndexRef.current = null;
+            if (cloudRevealingRoundRef.current && cloudRevealingRoundRef.current !== roundId) {
+              cloudRevealingRoundRef.current = null;
             }
             const qIdx = nextRoom.currentIndex;
             const card = cloudQuestionsRef.current[qIdx];
             if (card) {
               for (const p of rawPlayers) {
-                if (
-                  p.hasSubmitted &&
-                  p.gradingStatus === 'grading' &&
-                  p.pendingQuestionIndex === qIdx
-                ) {
-                  const lockKey = `${qIdx}:${p.id}`;
+                const submittedForRound = p.pendingRoundId
+                  ? p.pendingRoundId === roundId
+                  : p.pendingQuestionIndex === qIdx;
+                if (p.hasSubmitted && p.gradingStatus === 'grading' && submittedForRound) {
+                  const lockKey = `${roundId}:${p.id}`;
                   if (!cloudGradingLocksRef.current.has(lockKey)) {
                     cloudGradingLocksRef.current.add(lockKey);
                     void (async () => {
@@ -387,13 +388,14 @@ export function LiveQuizView({
                         card.answer,
                         p.pendingAnswer || ''
                       );
-                      if (cloudRoundIndexRef.current !== qIdx) {
+                      if (cloudRoundIdRef.current !== roundId) {
                         return;
                       }
                       await hostApplyPlayerGrade({
                         code: nextRoom.code,
                         player: p,
                         questionIndex: qIdx,
+                        roundId,
                         questionStartedAt: nextRoom.questionStartedAt,
                         timerSeconds: nextRoom.timerSeconds,
                         correct: outcome.correct,
@@ -410,23 +412,24 @@ export function LiveQuizView({
             const connected = rawPlayers.filter((p) => p.connected);
             const allDone =
               connected.length > 0 &&
-              connected.every(
-                (p) =>
-                  p.hasSubmitted &&
-                  p.gradingStatus === 'done' &&
-                  p.pendingQuestionIndex === qIdx
-              );
-            if (allDone && cloudRevealingIndexRef.current !== qIdx) {
-              cloudRevealingIndexRef.current = qIdx;
+              connected.every((p) => {
+                const forRound = p.pendingRoundId
+                  ? p.pendingRoundId === roundId
+                  : p.pendingQuestionIndex === qIdx;
+                return p.hasSubmitted && p.gradingStatus === 'done' && forRound;
+              });
+            if (allDone && cloudRevealingRoundRef.current !== roundId) {
+              cloudRevealingRoundRef.current = roundId;
               void hostRevealCloudRound({
                 code: nextRoom.code,
                 questions: cloudQuestionsRef.current,
                 currentIndex: qIdx,
+                expectedRoundId: roundId,
                 players: rawPlayers,
               });
             }
           } else if (nextRoom.status !== 'question') {
-            cloudRevealingIndexRef.current = null;
+            cloudRevealingRoundRef.current = null;
           }
         },
         () => {
@@ -596,20 +599,21 @@ export function LiveQuizView({
     };
   }, []);
 
-  // Clear answer input when advancing to a new question + trigger audio cue on reveal/finish
+  // Clear answer input when advancing to a new round + trigger audio cue on reveal/finish
   useEffect(() => {
     if (!room) {
-      lastRoundIndexRef.current = -1;
+      lastRoundKeyRef.current = '';
       lastSoundStatusRef.current = '';
       return;
     }
 
-    if (room.currentIndex !== lastRoundIndexRef.current) {
-      lastRoundIndexRef.current = room.currentIndex;
+    const roundKey = `${room.code}:${room.roundId || room.currentIndex}`;
+    if (roundKey !== lastRoundKeyRef.current) {
+      lastRoundKeyRef.current = roundKey;
       setAnswerInput('');
     }
 
-    const stateKey = `${room.status}:${room.currentIndex}`;
+    const stateKey = `${room.status}:${room.roundId || room.currentIndex}`;
     if (stateKey !== lastSoundStatusRef.current) {
       lastSoundStatusRef.current = stateKey;
       if (room.status === 'reveal' && playerId) {
@@ -623,22 +627,38 @@ export function LiveQuizView({
     }
   }, [room, playerId, muted]);
 
-  // Smooth server-synced countdown timer
+  // Clock-skew resilient countdown timer anchored per round
   useEffect(() => {
     if (!room || room.status !== 'question' || !room.questionEndsAt) {
       setTimeLeftMs(0);
       return;
     }
+
+    const anchorKey = `${room.code}:${room.roundId || room.currentIndex}:question`;
+    const timerMs = room.timerSeconds * 1000;
+    if (localDeadlineRef.current.key !== anchorKey) {
+      const estimatedNow = Date.now() + clockOffsetRef.current;
+      const rawRemaining = room.questionEndsAt - estimatedNow;
+      // If cross-device clock skew makes rawRemaining negative or way past timerMs, anchor cleanly to full timerMs from receipt
+      const safeRemaining =
+        rawRemaining > timerMs + 2500 || rawRemaining < 500
+          ? timerMs
+          : Math.min(timerMs, Math.max(1000, rawRemaining));
+      localDeadlineRef.current = {
+        key: anchorKey,
+        endsAt: Date.now() + safeRemaining,
+      };
+    }
+
     const update = () => {
-      const estimatedServerNow = Date.now() + clockOffsetRef.current;
-      setTimeLeftMs(Math.max(0, (room.questionEndsAt || 0) - estimatedServerNow));
+      setTimeLeftMs(Math.max(0, localDeadlineRef.current.endsAt - Date.now()));
     };
     update();
     const id = window.setInterval(update, 100);
     return () => window.clearInterval(id);
-  }, [room]);
+  }, [room?.code, room?.status, room?.currentIndex, room?.roundId, room?.questionEndsAt, room?.timerSeconds]);
 
-  // Host countdown auto-reveal timer when running in Cloud Mode
+  // Host countdown auto-reveal timer when running in Cloud Mode (anchored by roundId, waits up to 6s for in-flight grades)
   useEffect(() => {
     if (
       backendMode !== 'cloud' ||
@@ -652,47 +672,83 @@ export function LiveQuizView({
 
     const roomCode = room.code;
     const qIdx = room.currentIndex;
-    const msRemaining = Math.max(0, room.questionEndsAt - Date.now());
-    let innerTimer: number | null = null;
+    const expectedRoundId = room.roundId || `r_${qIdx}`;
+    const timerMs = room.timerSeconds * 1000;
+    const rawRemaining = room.questionEndsAt - Date.now();
+    const msRemaining =
+      rawRemaining > timerMs + 2500 || rawRemaining < 1000
+        ? timerMs
+        : Math.min(timerMs, rawRemaining);
+
+    let cancelled = false;
+    let pollInterval: number | null = null;
 
     const timer = window.setTimeout(() => {
       if (
-        cloudRevealingIndexRef.current === qIdx ||
-        cloudRoundIndexRef.current !== qIdx ||
+        cancelled ||
+        cloudRevealingRoundRef.current === expectedRoundId ||
+        cloudRoundIdRef.current !== expectedRoundId ||
         cloudRoundStatusRef.current !== 'question'
       ) {
         return;
       }
-      cloudRevealingIndexRef.current = qIdx;
-      const hasPendingGrades = cloudPlayersRef.current.some(
-        (p) =>
-          p.hasSubmitted &&
-          p.pendingQuestionIndex === qIdx &&
-          p.gradingStatus === 'grading'
-      );
-      innerTimer = window.setTimeout(
-        () => {
-          if (
-            cloudRoundIndexRef.current !== qIdx ||
-            cloudRoundStatusRef.current !== 'question'
-          ) {
-            return;
+      cloudRevealingRoundRef.current = expectedRoundId;
+
+      const waitStarted = Date.now();
+      const attemptReveal = () => {
+        if (
+          cancelled ||
+          cloudRoundIdRef.current !== expectedRoundId ||
+          cloudRoundStatusRef.current !== 'question'
+        ) {
+          if (pollInterval !== null) {
+            window.clearInterval(pollInterval);
+            pollInterval = null;
+          }
+          return;
+        }
+
+        const hasPendingGrades = cloudPlayersRef.current.some((p) => {
+          const forRound = p.pendingRoundId
+            ? p.pendingRoundId === expectedRoundId
+            : p.pendingQuestionIndex === qIdx;
+          return p.hasSubmitted && forRound && p.gradingStatus === 'grading';
+        });
+
+        if (!hasPendingGrades || Date.now() - waitStarted >= 6000) {
+          if (pollInterval !== null) {
+            window.clearInterval(pollInterval);
+            pollInterval = null;
           }
           void hostRevealCloudRound({
             code: roomCode,
             questions: cloudQuestionsRef.current,
             currentIndex: qIdx,
+            expectedRoundId,
             players: cloudPlayersRef.current,
           });
-        },
-        hasPendingGrades ? 1400 : 0
-      );
+        }
+      };
+
+      const hasPendingAtExpiry = cloudPlayersRef.current.some((p) => {
+        const forRound = p.pendingRoundId
+          ? p.pendingRoundId === expectedRoundId
+          : p.pendingQuestionIndex === qIdx;
+        return p.hasSubmitted && forRound && p.gradingStatus === 'grading';
+      });
+
+      if (!hasPendingAtExpiry) {
+        attemptReveal();
+      } else {
+        pollInterval = window.setInterval(attemptReveal, 200);
+      }
     }, msRemaining);
 
     return () => {
+      cancelled = true;
       window.clearTimeout(timer);
-      if (innerTimer !== null) {
-        window.clearTimeout(innerTimer);
+      if (pollInterval !== null) {
+        window.clearInterval(pollInterval);
       }
     };
   }, [
@@ -700,7 +756,9 @@ export function LiveQuizView({
     room?.code,
     room?.status,
     room?.currentIndex,
+    room?.roundId,
     room?.questionEndsAt,
+    room?.timerSeconds,
   ]);
 
   const sendWs = useCallback(
@@ -718,52 +776,62 @@ export function LiveQuizView({
 
   const sendHostAction = useCallback(
     async (action: 'start' | 'reveal' | 'next' | 'restart') => {
-      if (backendMode === 'server') {
-        await sendWs({ type: `quiz:${action}` });
-        return;
-      }
       if (!room || hostActionPendingRef.current) return;
       hostActionPendingRef.current = true;
+      setHostActionBusy(true);
       setErrorMsg(null);
+      const currentRoundId = room.roundId || `r_${room.currentIndex}`;
       try {
+        if (backendMode === 'server') {
+          await sendWs({ type: `quiz:${action}`, roundId: room.roundId });
+          window.setTimeout(() => {
+            hostActionPendingRef.current = false;
+            setHostActionBusy(false);
+          }, 350);
+          return;
+        }
         if (action === 'start') {
-          cloudRevealingIndexRef.current = null;
+          cloudRevealingRoundRef.current = null;
           await hostStartCloudQuestion({
             code: room.code,
             questions: cloudQuestionsRef.current,
             index: 0,
+            expectedRoundId: currentRoundId,
             timerSeconds: room.timerSeconds,
             players: cloudPlayersRef.current,
           });
         } else if (action === 'reveal') {
-          cloudRevealingIndexRef.current = room.currentIndex;
+          cloudRevealingRoundRef.current = currentRoundId;
           await hostRevealCloudRound({
             code: room.code,
             questions: cloudQuestionsRef.current,
             currentIndex: room.currentIndex,
+            expectedRoundId: currentRoundId,
             players: cloudPlayersRef.current,
           });
         } else if (action === 'next') {
           if (room.status === 'question') {
-            cloudRevealingIndexRef.current = room.currentIndex;
+            cloudRevealingRoundRef.current = currentRoundId;
             await hostRevealCloudRound({
               code: room.code,
               questions: cloudQuestionsRef.current,
               currentIndex: room.currentIndex,
+              expectedRoundId: currentRoundId,
               players: cloudPlayersRef.current,
             });
           } else if (room.status === 'reveal') {
-            cloudRevealingIndexRef.current = null;
+            cloudRevealingRoundRef.current = null;
             await hostStartCloudQuestion({
               code: room.code,
               questions: cloudQuestionsRef.current,
               index: room.currentIndex + 1,
+              expectedRoundId: currentRoundId,
               timerSeconds: room.timerSeconds,
               players: cloudPlayersRef.current,
             });
           }
         } else if (action === 'restart') {
-          cloudRevealingIndexRef.current = null;
+          cloudRevealingRoundRef.current = null;
           const reshuffled = await hostRestartCloudRoom({
             code: room.code,
             questions: cloudQuestionsRef.current,
@@ -771,10 +839,12 @@ export function LiveQuizView({
           });
           cloudQuestionsRef.current = reshuffled;
         }
-      } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : 'Failed to update Cloud quiz room.');
-      } finally {
         hostActionPendingRef.current = false;
+        setHostActionBusy(false);
+      } catch (err) {
+        hostActionPendingRef.current = false;
+        setHostActionBusy(false);
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to update Cloud quiz room.');
       }
     },
     [backendMode, room, sendWs]
@@ -1228,6 +1298,7 @@ export function LiveQuizView({
         code: room.code,
         playerId,
         questionIndex: room.currentIndex,
+        roundId: room.roundId || `r_${room.currentIndex}`,
         questionStartedAt: room.questionStartedAt,
         answer: answerInput,
       });
@@ -1321,8 +1392,9 @@ export function LiveQuizView({
               {isHost && room.status === 'lobby' && (
                 <button
                   type="button"
+                  disabled={hostActionBusy}
                   onClick={() => void sendHostAction('start')}
-                  className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
+                  className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap disabled:opacity-60"
                 >
                   <Play className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Start Game ({room.totalQuestions} Qs)</span>
@@ -1331,8 +1403,9 @@ export function LiveQuizView({
               {isHost && room.status === 'question' && (
                 <button
                   type="button"
+                  disabled={hostActionBusy}
                   onClick={() => void sendHostAction('reveal')}
-                  className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                  className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap disabled:opacity-60"
                 >
                   <Zap className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
                   <span>Reveal Now</span>
@@ -1341,8 +1414,9 @@ export function LiveQuizView({
               {isHost && room.status === 'reveal' && (
                 <button
                   type="button"
+                  disabled={hostActionBusy}
                   onClick={() => void sendHostAction('next')}
-                  className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
+                  className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap disabled:opacity-60"
                 >
                   <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>
@@ -1355,8 +1429,9 @@ export function LiveQuizView({
               {isHost && room.status === 'finished' && (
                 <button
                   type="button"
+                  disabled={hostActionBusy}
                   onClick={() => void sendHostAction('restart')}
-                  className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
+                  className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap disabled:opacity-60"
                 >
                   <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Play Again</span>
@@ -1462,8 +1537,9 @@ export function LiveQuizView({
                   <div className="pt-1">
                     <button
                       type="button"
+                      disabled={hostActionBusy}
                       onClick={() => void sendHostAction('start')}
-                      className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap"
+                      className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap disabled:opacity-60"
                     >
                       <Play className="h-4 w-4" aria-hidden="true" />
                       <span>Start Live Quiz Now</span>
@@ -1576,7 +1652,7 @@ export function LiveQuizView({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs text-[var(--mute)]">
                         Exact answers pass in 0ms; close phrasings &amp; dates are checked
-                        immediately by Gemini Flash-Lite.
+                        immediately by Smart + Gemini Flash-Lite Grading.
                       </span>
                       <button
                         type="submit"
@@ -1651,8 +1727,9 @@ export function LiveQuizView({
                   {isHost && (
                     <button
                       type="button"
+                      disabled={hostActionBusy}
                       onClick={() => void sendHostAction('next')}
-                      className="sd-btn-pri px-4 py-1.5 text-xs whitespace-nowrap"
+                      className="sd-btn-pri px-4 py-1.5 text-xs whitespace-nowrap disabled:opacity-60"
                     >
                       <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>
@@ -1842,8 +1919,9 @@ export function LiveQuizView({
                   {isHost && (
                     <button
                       type="button"
+                      disabled={hostActionBusy}
                       onClick={() => void sendHostAction('restart')}
-                      className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap"
+                      className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap disabled:opacity-60"
                     >
                       <RotateCcw className="h-4 w-4" aria-hidden="true" />
                       <span>Play Again</span>
@@ -1907,7 +1985,7 @@ export function LiveQuizView({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--e3)]">
               <Gamepad2 className="h-4 w-4" aria-hidden="true" />
-              <span>Multiplayer Flashcard Arena · Gemini 2.5 Flash-Lite Grading</span>
+              <span>Multiplayer Flashcard Arena · Smart + Gemini Flash-Lite Grading</span>
             </div>
             <h1 className="font-display mt-1 text-2xl font-extrabold tracking-tight text-[var(--ink)]">
               Live Quiz
@@ -2124,8 +2202,7 @@ export function LiveQuizView({
 
                 {validSnapshotCards.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
-                    No current flashcards found in StudyDeck yet. Add cards in Flashcards or apply
-                    a Study Pack first.
+                    No current flashcards found in StudyDeck yet. Add cards in Flashcards, use Universal Import, or copy a shared deck from Community.
                   </div>
                 ) : showCurrentImporter ? (
                   <div className="space-y-3 border-t border-[var(--line)] pt-3">
@@ -2380,7 +2457,7 @@ export function LiveQuizView({
               validSnapshotCards.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-6 text-center text-sm text-[var(--mute)]">
                   You don&apos;t have any current flashcards in StudyDeck yet. Add cards in
-                  Flashcards, apply a Study Pack, or import a CSV deck.
+                  Flashcards, copy from Community, use Universal Import, or import a CSV deck.
                   <div className="mt-3 flex flex-wrap justify-center gap-2">
                     <button
                       type="button"
@@ -2755,7 +2832,7 @@ export function LiveQuizView({
                   <div className="flex items-center gap-2 text-xs text-[var(--mute)]">
                     <Sparkles className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
                     <span>
-                      AI semantic grading (Gemini 2.5 Flash-Lite) runs live on submit only during
+                      Smart local + Gemini Flash-Lite semantic grading runs live on submit only during
                       matches.
                     </span>
                   </div>
