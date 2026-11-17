@@ -34,14 +34,18 @@ export const DEFAULT_HOME_WIDGETS: HomeWidgetPrefs = {
 };
 
 export const DEFAULT_HOME_LAYOUT: HomeWidgetLayoutItem[] = [
-  { id: 'dueCards', cols: 7, h: null },
-  { id: 'timer', cols: 5, h: null },
-  { id: 'schedule', cols: 6, h: null },
+  { id: 'todayOverview', cols: 12, h: null },
+  { id: 'todayTasks', cols: 8, h: null },
+  { id: 'timer', cols: 4, h: null },
+  { id: 'dueCards', cols: 6, h: null },
   { id: 'todos', cols: 6, h: null },
-  { id: 'mastery', cols: 12, h: null },
+  { id: 'examCountdowns', cols: 6, h: null },
+  { id: 'schedule', cols: 6, h: null },
 ];
 
 const VALID_HOME_WIDGET_IDS = new Set<HomeWidgetId>([
+  'todayOverview',
+  'todayTasks',
   'dueCards',
   'timer',
   'schedule',
@@ -52,6 +56,19 @@ const VALID_HOME_WIDGET_IDS = new Set<HomeWidgetId>([
   'scratchpad',
   'flashcardBreakdown',
   'liveQuiz',
+  'studyGuide',
+  'progOverview',
+  'progWeek',
+  'progHeatmap',
+  'progPace',
+  'progTodo',
+  'progNumbers',
+  'pastPapers',
+  'sessionLog',
+  'progHours',
+  'weakTopics',
+  'miniCalendar',
+  'communityNotes',
 ]);
 
 export function homeWidgetsFromLayout(layout: HomeWidgetLayoutItem[]): HomeWidgetPrefs {
@@ -123,6 +140,9 @@ export function createEmptyWorkspace(): WorkspaceData {
     lastStudyDate: '',
     dailyGoalMinutes: 60,
     scratchpad: '',
+    studyLog: [],
+    paperScores: [],
+    customCountdowns: [],
     homeWidgets: { ...DEFAULT_HOME_WIDGETS },
     homeLayout: DEFAULT_HOME_LAYOUT.map((w) => ({ ...w })),
     updatedAt: new Date().toISOString(),
@@ -174,6 +194,16 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
     lastStudyDate: typeof r.lastStudyDate === 'string' ? r.lastStudyDate : '',
     dailyGoalMinutes: Math.max(15, Math.min(480, Number(r.dailyGoalMinutes) || 60)),
     scratchpad: typeof r.scratchpad === 'string' ? r.scratchpad : '',
+    studyLog: Array.isArray(r.studyLog) ? r.studyLog : [],
+    paperScores: Array.isArray(r.paperScores) ? r.paperScores : [],
+    customCountdowns: Array.isArray(r.customCountdowns) ? r.customCountdowns : [],
+    dailyStudyTasks:
+      r.dailyStudyTasks &&
+      typeof r.dailyStudyTasks === 'object' &&
+      typeof r.dailyStudyTasks.date === 'string' &&
+      Array.isArray(r.dailyStudyTasks.items)
+        ? r.dailyStudyTasks
+        : undefined,
     homeWidgets: Array.isArray(r.homeLayout)
       ? homeWidgetsFromLayout(homeLayout)
       : mergedLegacyWidgets,
@@ -1010,9 +1040,15 @@ export function autoGenerateStudySchedule(
   return [...keepBlocks, ...generated];
 }
 
-export function addLoggedStudyMinutes(ws: WorkspaceData, minutes: number): WorkspaceData {
+export function addLoggedStudyMinutes(
+  ws: WorkspaceData,
+  minutes: number,
+  opts?: { subjectId?: string; kind?: 'timer' | 'pomo' | 'manual' | 'recall'; note?: string }
+): WorkspaceData {
   if (minutes <= 0) return ws;
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const time = now.toTimeString().slice(0, 5);
   const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString().slice(0, 10);
   let nextStreak = ws.studyStreakDays || 0;
   if (ws.lastStudyDate === today) {
@@ -1022,11 +1058,24 @@ export function addLoggedStudyMinutes(ws: WorkspaceData, minutes: number): Works
   } else {
     nextStreak = 1;
   }
+  const existingLog = Array.isArray(ws.studyLog) ? ws.studyLog : [];
   return {
     ...ws,
     studyMinutesLogged: ws.studyMinutesLogged + minutes,
     studyStreakDays: nextStreak,
     lastStudyDate: today,
+    studyLog: [
+      ...existingLog,
+      {
+        id: makeId('log'),
+        date: today,
+        time,
+        mins: Math.round(minutes),
+        subjectId: opts?.subjectId,
+        kind: opts?.kind || 'timer',
+        note: opts?.note,
+      },
+    ],
     updatedAt: new Date().toISOString(),
   };
 }

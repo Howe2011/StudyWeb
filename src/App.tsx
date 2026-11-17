@@ -795,6 +795,7 @@ export default function App() {
         plannerTab?: PlannerSubTab;
         openQuickAdd?: boolean;
         communityTypeFilter?: CommunityTypeFilter;
+        shareCode?: string;
       }
     ) => {
       if (opts?.subjectId) setSelectedSubjectId(opts.subjectId);
@@ -802,6 +803,7 @@ export default function App() {
       else if (tab === 'notes' && !opts?.topicId) setSelectedTopicId(null);
 
       if (opts?.communityTypeFilter) setCommunityTypeFilter(opts.communityTypeFilter);
+      if (opts?.shareCode) setInitialShareCode(opts.shareCode.trim().toUpperCase());
 
       if (opts?.plannerTab) {
         if (opts.plannerTab === 'calendar') {

@@ -1,5 +1,10 @@
 import { ChangeEvent, useMemo, useState } from 'react';
-import { BookOpen, Check, FileText, Layers, Upload, X } from 'lucide-react';
+import { BookOpen, Check, Download, FileText, Layers, Upload, X } from 'lucide-react';
+import {
+  downloadFlashcardsCsvTemplate,
+  downloadNotesMarkdownTemplate,
+  downloadWorkspaceBackupTemplate,
+} from '../lib/backupTemplates';
 import { createEmptyStructuredNote } from '../lib/noteFormat';
 import { parseDocxFile, parseUniversalStudyImport } from '../lib/smartImporter';
 import { SUBJECT_COLOR_SWATCHES } from '../lib/subjectCatalog';
@@ -286,6 +291,36 @@ export function UniversalImportModal({
                   Load Example
                 </button>
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-xs">
+              <span className="font-semibold text-[var(--mute)]">Download template file:</span>
+              <button
+                type="button"
+                onClick={downloadFlashcardsCsvTemplate}
+                className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+              >
+                <Download className="h-3 w-3" aria-hidden="true" />
+                <span>Flashcards (.csv)</span>
+              </button>
+              <span className="text-[var(--line)]">·</span>
+              <button
+                type="button"
+                onClick={downloadNotesMarkdownTemplate}
+                className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+              >
+                <Download className="h-3 w-3" aria-hidden="true" />
+                <span>Notes (.md)</span>
+              </button>
+              <span className="text-[var(--line)]">·</span>
+              <button
+                type="button"
+                onClick={downloadWorkspaceBackupTemplate}
+                className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e2)] hover:underline whitespace-nowrap"
+              >
+                <Download className="h-3 w-3" aria-hidden="true" />
+                <span>Full Backup (.json)</span>
+              </button>
             </div>
 
             <textarea

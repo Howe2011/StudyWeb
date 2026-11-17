@@ -21,6 +21,11 @@ import {
   Upload,
 } from 'lucide-react';
 import { AdminPanel } from './AdminPanel';
+import {
+  downloadFlashcardsCsvTemplate,
+  downloadNotesMarkdownTemplate,
+  downloadWorkspaceBackupTemplate,
+} from '../lib/backupTemplates';
 import { getDeviceInfo, setCustomDeviceName } from '../lib/device';
 import { isNoteEmpty, structuredNoteToHtml } from '../lib/noteFormat';
 import { BOOTSTRAP_ADMIN_EMAIL } from '../lib/syncService';
@@ -848,6 +853,41 @@ export function ProfileVaultView({
                       </div>
                     </div>
                   )}
+
+                  <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
+                    <div className="text-xs font-bold text-[var(--ink)]">
+                      Downloadable Import &amp; Backup Templates
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-[var(--mute)]">
+                      Start from a clean template file, fill in your subjects, flashcards, or notes offline, then upload it back anytime.
+                    </p>
+                    <div className="mt-2.5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={downloadWorkspaceBackupTemplate}
+                        className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                      >
+                        <Download className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                        <span>Backup Template (.json)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={downloadFlashcardsCsvTemplate}
+                        className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                      >
+                        <FileSpreadsheet className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
+                        <span>Flashcards Template (.csv)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={downloadNotesMarkdownTemplate}
+                        className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                      >
+                        <FileText className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                        <span>Notes Template (.md)</span>
+                      </button>
+                    </div>
+                  </div>
 
                   {parsedBackup && (
                     <div className="mt-4 space-y-3">

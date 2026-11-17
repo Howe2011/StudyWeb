@@ -234,6 +234,8 @@ export interface HomeWidgetPrefs {
 }
 
 export type HomeWidgetId =
+  | 'todayOverview'
+  | 'todayTasks'
   | 'dueCards'
   | 'timer'
   | 'schedule'
@@ -243,12 +245,58 @@ export type HomeWidgetId =
   | 'examCountdowns'
   | 'scratchpad'
   | 'flashcardBreakdown'
-  | 'liveQuiz';
+  | 'liveQuiz'
+  | 'studyGuide'
+  | 'progOverview'
+  | 'progWeek'
+  | 'progHeatmap'
+  | 'progPace'
+  | 'progTodo'
+  | 'progNumbers'
+  | 'pastPapers'
+  | 'sessionLog'
+  | 'progHours'
+  | 'weakTopics'
+  | 'miniCalendar'
+  | 'communityNotes';
 
 export interface HomeWidgetLayoutItem {
   id: HomeWidgetId;
   cols: number; // 3..12 on 12-column desktop grid
   h?: number | null; // Optional custom height in px
+}
+
+export interface StudyLogEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  time?: string; // HH:mm
+  mins: number;
+  subjectId?: string;
+  kind?: 'timer' | 'pomo' | 'manual' | 'recall';
+  note?: string;
+}
+
+export interface PastPaperScore {
+  id: string;
+  subjectId?: string;
+  paper: string;
+  mark: number;
+  total: number;
+  date: string;
+}
+
+export interface CustomCountdownItem {
+  id: string;
+  title: string;
+  date: string;
+}
+
+export interface DailyStudyTaskItem {
+  id: string;
+  subjectId: string;
+  topicId?: string;
+  kind: 'recall' | 'paper';
+  done: number; // 0=pending, 1=weak, 2=alright, 3=mastered, 4=done
 }
 
 export interface WorkspaceData {
@@ -264,6 +312,13 @@ export interface WorkspaceData {
   lastStudyDate: string;
   dailyGoalMinutes?: number;
   scratchpad?: string;
+  studyLog?: StudyLogEntry[];
+  paperScores?: PastPaperScore[];
+  customCountdowns?: CustomCountdownItem[];
+  dailyStudyTasks?: {
+    date: string;
+    items: DailyStudyTaskItem[];
+  };
   homeWidgets: HomeWidgetPrefs;
   homeLayout?: HomeWidgetLayoutItem[];
   updatedAt: string;
