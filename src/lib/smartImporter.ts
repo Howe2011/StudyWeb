@@ -1,6 +1,31 @@
-import { isNoteEmpty, parseTextIntoStructuredNote } from './noteFormat';
+import {
+  AutoFormatOptions,
+  extractTimelineEventsFromNote,
+  isNoteEmpty,
+  parseTextIntoStructuredNote,
+} from './noteFormat';
 import { convertLegacyEntriesToWorkspace, normalizeWorkspace } from './workspaceStore';
-import { StructuredNoteData, WorkspaceData } from '../types';
+import { StructuredNoteData, TimelineEventItem, WorkspaceData } from '../types';
+
+export type QuizletDelimiterMode =
+  | 'auto'
+  | 'tab'
+  | 'alternating'
+  | 'blank-line'
+  | 'cloze'
+  | 'semicolon'
+  | 'pipe';
+
+export interface SmartImportEntityStats {
+  headings: number;
+  subheadings: number;
+  bullets: number;
+  subBullets: number;
+  tables: number;
+  boldTerms: number;
+  timelineEvents: number;
+  cards: number;
+}
 
 export interface SmartImportPreview {
   sourceLabel: string;
@@ -8,6 +33,8 @@ export interface SmartImportPreview {
   mode: 'notes-and-cards' | 'flashcards-only';
   note: StructuredNoteData;
   cards: Array<{ q: string; a: string; sectionName: string }>;
+  timelineEvents: TimelineEventItem[];
+  entityStats: SmartImportEntityStats;
   legacyHtml?: string;
 }
 
@@ -31,7 +58,9 @@ export interface ParsedBulkTimelineNode {
   date: string;
   title: string;
   detail: string;
+  significance?: string;
   era?: string;
+  keyEvent?: boolean;
 }
 
 function escapeHtml(s: string): string {
@@ -171,8 +200,9 @@ export async function parseDocxFile(
     if (node.localName === 'p') {
       const pPr = child(node, 'pPr');
       const pStyle = attr(child(pPr, 'pStyle'), 'val') || '';
-      const hasNum =
-        Boolean(child(pPr, 'numPr')) || /list|bullet|number/i.test(pStyle);
+      const numPr = child(pPr, 'numPr');
+      const ilvlVal = Number(attr(child(numPr, 'ilvl'), 'val') || 0);
+      const hasNum = Boolean(numPr) || /list|bullet|number/i.test(pStyle);
 
       let lineHtml = '';
       let lineText = '';
@@ -237,7 +267,8 @@ export async function parseDocxFile(
         textLines.push(`## ${cleanTxt}`);
         htmlParts.push(`<h2>${lineHtml}</h2>`);
       } else if (hasNum) {
-        textLines.push(cleanMd.startsWith('-') ? cleanMd : `- ${cleanMd}`);
+        const prefix = ilvlVal >= 1 ? '  - ' : '- ';
+        textLines.push(cleanMd.startsWith('-') ? `${ilvlVal >= 1 ? '  ' : ''}${cleanMd}` : `${prefix}${cleanMd}`);
         htmlParts.push(`<p>• ${lineHtml}</p>`);
       } else {
         textLines.push(cleanMd);
@@ -299,54 +330,142 @@ export async function parseDocxFile(
 }
 
 /**
- * Zero-AI smart importer: turns Quizlet TSV, Anki/CSV, Q:/A:, Markdown, Word tables, or plain class notes
- * into Save My Exams-style structured notes AND optional active-recall flashcards in 0ms.
+ * Dedicated parser for Quizlet Exports, Gizmo decks/cloze deletions, and alternating term-definition copies.
  */
-export function parseUniversalStudyImport(
+export function parseQuizletOrGizmoCards(
   rawText: string,
-  opts?: { sourceLabel?: string; legacyHtml?: string }
-): SmartImportPreview {
-  const cleanText = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
-  const lines = cleanText.split('\n');
+  mode: QuizletDelimiterMode = 'auto',
+  defaultSection = 'Imported Deck'
+): Array<{ q: string; a: string; sectionName: string }> {
+  const clean = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
+  if (!clean) return [];
+
   const cards: Array<{ q: string; a: string; sectionName: string }> = [];
+  const seen = new Set<string>();
 
-  // 1. Scan explicitly for Q:/A: blocks, Quizlet tab-separated, pipe, ::, or pure CSV flashcard rows
-  // NOTE: Skip Markdown pipe tables (lines starting AND ending with `|` or `| --- |`) so tables stay in structured notes!
-  let pendingQ = '';
-  let detectedPureFlashcards = 0;
+  const pushCard = (q: string, a: string, sec = defaultSection) => {
+    const cq = q.replace(/\*\*/g, '').trim();
+    const ca = a.replace(/\*\*/g, '').trim();
+    if (!cq || !ca) return;
+    const key = `${cq.toLowerCase()}::${ca.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    cards.push({ q: cq, a: ca, sectionName: sec.trim() || defaultSection });
+  };
 
-  for (let idx = 0; idx < lines.length; idx++) {
-    const t = lines[idx].trim();
-    if (!t) continue;
-
-    // Skip Markdown table rows and separators
-    if (/^\|.+\|$/.test(t)) {
-      continue;
+  // Explicit Blank-Line Separated Pairs: "Term\nDefinition\n\nTerm 2\nDefinition 2"
+  if (mode === 'blank-line') {
+    const blocks = clean.split(/\n\s*\n+/).map((b) =>
+      b
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+    );
+    for (const blk of blocks) {
+      if (blk.length >= 2) {
+        pushCard(blk[0], blk.slice(1).join(' '));
+      }
     }
+    return cards;
+  }
 
-    // Skip CSV header
-    if (idx === 0 && /^(?:question|q|term|front)\s*[,|\t]\s*(?:answer|a|definition|back)/i.test(t)) {
+  // Explicit Alternating Lines: Line 1 = Question, Line 2 = Answer
+  if (mode === 'alternating') {
+    const lines = clean.split('\n').map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i + 1 < lines.length; i += 2) {
+      pushCard(lines[i], lines[i + 1]);
+    }
+    return cards;
+  }
+
+  // Explicit Gizmo Cloze Mode: {{answer}} or ==answer==
+  if (mode === 'cloze') {
+    for (const rawLine of clean.split('\n')) {
+      const line = rawLine.replace(/^(?:[-*•]\s*|\d+[.)]\s*)/, '').trim();
+      if (!line) continue;
+      const re = /\{\{([^}]+)\}\}|==([^=]+)==/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(line)) !== null) {
+        const ans = (m[1] || m[2] || '').trim();
+        const q = line
+          .replace(m[0], '[____]')
+          .replace(/\{\{([^}]+)\}\}/g, '$1')
+          .replace(/==([^=]+)==/g, '$1')
+          .trim();
+        if (q && ans) pushCard(q, ans, 'Gizmo Cloze');
+      }
+    }
+    return cards;
+  }
+
+  // Explicit Delimiters (tab, semicolon, pipe)
+  if (mode === 'tab' || mode === 'semicolon' || mode === 'pipe') {
+    const sep = mode === 'tab' ? '\t' : mode === 'semicolon' ? ';' : '|';
+    for (const rawLine of clean.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || /^\|.+\|$/.test(line)) continue;
+      const parts = line.split(sep).map((x) => x.trim());
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        pushCard(parts[0], parts[1], parts[2] || defaultSection);
+      }
+    }
+    return cards;
+  }
+
+  // Auto-detect mode
+  const blocks = clean.split(/\n\s*\n+/).map((b) =>
+    b
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+  );
+  const looksLikeBlankLinePairs =
+    blocks.length >= 2 &&
+    blocks.every((b) => b.length === 2 && !b[0].includes('\t') && !b[0].includes('::') && !/^Q:/i.test(b[0]));
+
+  if (looksLikeBlankLinePairs) {
+    for (const b of blocks) {
+      pushCard(b[0], b[1]);
+    }
+    return cards;
+  }
+
+  let pendingQ = '';
+  for (const rawLine of clean.split('\n')) {
+    const t = rawLine.trim();
+    if (!t || /^\|.+\|$/.test(t)) continue;
+
+    // Cloze line inside auto mode
+    if (/\{\{[^}]+\}\}|==[^=]+==/.test(t)) {
+      const noBullet = t.replace(/^(?:[-*•]\s*|\d+[.)]\s*)/, '').trim();
+      const re = /\{\{([^}]+)\}\}|==([^=]+)==/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(noBullet)) !== null) {
+        const ans = (m[1] || m[2] || '').trim();
+        const q = noBullet
+          .replace(m[0], '[____]')
+          .replace(/\{\{([^}]+)\}\}/g, '$1')
+          .replace(/==([^=]+)==/g, '$1')
+          .trim();
+        if (q && ans) pushCard(q, ans, 'Gizmo Cloze');
+      }
       continue;
     }
 
     const qaInline = t.match(/^Q:\s*(.+?)\s*(?:\||::|->)\s*A:\s*(.+)$/i);
     if (qaInline) {
-      cards.push({ q: qaInline[1].trim(), a: qaInline[2].trim(), sectionName: 'Imported Deck' });
-      detectedPureFlashcards++;
+      pushCard(qaInline[1], qaInline[2]);
       pendingQ = '';
       continue;
     }
-
     const qOnly = t.match(/^Q:\s*(.+)$/i);
     if (qOnly) {
       pendingQ = qOnly[1].trim();
       continue;
     }
-
     const aOnly = t.match(/^A:\s*(.+)$/i);
     if (aOnly && pendingQ) {
-      cards.push({ q: pendingQ, a: aOnly[1].trim(), sectionName: 'Imported Deck' });
-      detectedPureFlashcards++;
+      pushCard(pendingQ, aOnly[1]);
       pendingQ = '';
       continue;
     }
@@ -354,40 +473,162 @@ export function parseUniversalStudyImport(
     if (t.includes('\t')) {
       const parts = t.split('\t').map((x) => x.trim()).filter(Boolean);
       if (parts.length >= 2) {
-        cards.push({
-          q: parts[0],
-          a: parts[1],
-          sectionName: parts[2] || 'Imported Deck',
-        });
-        detectedPureFlashcards++;
+        pushCard(parts[0], parts[1], parts[2] || defaultSection);
         continue;
       }
     }
 
-    if (t.includes('|') || t.includes('::')) {
-      const parts = (t.includes('|') ? t.split('|') : t.split('::')).map((x) => x.trim());
+    if (t.includes('::') || t.includes('->') || t.includes('|')) {
+      const sep = t.includes('::') ? '::' : t.includes('->') ? '->' : '|';
+      const parts = t.split(sep).map((x) => x.trim());
       if (parts.length >= 2 && parts[0] && parts[1]) {
-        cards.push({
-          q: parts[0],
-          a: parts[1],
-          sectionName: parts[2] || 'Imported Deck',
-        });
-        detectedPureFlashcards++;
+        pushCard(parts[0], parts[1], parts[2] || defaultSection);
         continue;
       }
     }
 
-    if (/\.csv$/i.test(opts?.sourceLabel || '') || (t.startsWith('"') && t.includes('","'))) {
-      const csvRow = parseCsvLine(t);
-      if (csvRow) {
-        cards.push({ q: csvRow[0], a: csvRow[1], sectionName: csvRow[2] });
+    const dashPair = t.match(/^([^–—-]{2,80})\s+[–—-]\s+(.{2,})$/);
+    if (dashPair && !/^\d{3,4}$/.test(dashPair[1].trim())) {
+      pushCard(dashPair[1], dashPair[2]);
+    }
+  }
+
+  return cards;
+}
+
+/**
+ * Zero-AI smart importer: turns Quizlet, Gizmo, Web URLs, PDFs, Word docs, Markdown, or plain class notes
+ * into cleanly structured notes, timeline nodes, and active-recall flashcards in 0ms.
+ */
+export function parseUniversalStudyImport(
+  rawText: string,
+  opts?: {
+    sourceLabel?: string;
+    legacyHtml?: string;
+    formatOptions?: AutoFormatOptions;
+    deckDelimiter?: QuizletDelimiterMode;
+    preExtractedCards?: Array<{ q: string; a: string; sectionName: string }>;
+  }
+): SmartImportPreview {
+  const cleanText = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
+  const lines = cleanText.split('\n');
+  const cards: Array<{ q: string; a: string; sectionName: string }> = [];
+  let detectedPureFlashcards = 0;
+
+  if (opts?.preExtractedCards?.length) {
+    for (const c of opts.preExtractedCards) {
+      if (c.q.trim() && c.a.trim()) {
+        cards.push(c);
         detectedPureFlashcards++;
       }
     }
   }
 
-  // 2. Structure the text into Save My Exams sections (and extract Term: Definition pairs)
-  const { note, extractedCards } = parseTextIntoStructuredNote(cleanText);
+  // If explicit Quizlet/Gizmo delimiter mode chosen (alternating / blank-line / semicolon / etc.)
+  if (opts?.deckDelimiter && opts.deckDelimiter !== 'auto') {
+    const deckCards = parseQuizletOrGizmoCards(cleanText, opts.deckDelimiter, 'Imported Deck');
+    const seen = new Set(cards.map((c) => c.q.toLowerCase()));
+    for (const c of deckCards) {
+      if (!seen.has(c.q.toLowerCase())) {
+        cards.push(c);
+        seen.add(c.q.toLowerCase());
+        detectedPureFlashcards++;
+      }
+    }
+  } else {
+    // 1. Scan explicitly for Q:/A: blocks, Quizlet tab-separated, pipe, ::, Gizmo cloze, or pure CSV flashcard rows
+    let pendingQ = '';
+    for (let idx = 0; idx < lines.length; idx++) {
+      const t = lines[idx].trim();
+      if (!t) continue;
+
+      if (/^\|.+\|$/.test(t)) {
+        continue;
+      }
+
+      if (idx === 0 && /^(?:question|q|term|front)\s*[,|\t]\s*(?:answer|a|definition|back)/i.test(t)) {
+        continue;
+      }
+
+      const qaInline = t.match(/^Q:\s*(.+?)\s*(?:\||::|->)\s*A:\s*(.+)$/i);
+      if (qaInline) {
+        cards.push({ q: qaInline[1].trim(), a: qaInline[2].trim(), sectionName: 'Imported Deck' });
+        detectedPureFlashcards++;
+        pendingQ = '';
+        continue;
+      }
+
+      const qOnly = t.match(/^Q:\s*(.+)$/i);
+      if (qOnly) {
+        pendingQ = qOnly[1].trim();
+        continue;
+      }
+
+      const aOnly = t.match(/^A:\s*(.+)$/i);
+      if (aOnly && pendingQ) {
+        cards.push({ q: pendingQ, a: aOnly[1].trim(), sectionName: 'Imported Deck' });
+        detectedPureFlashcards++;
+        pendingQ = '';
+        continue;
+      }
+
+      if (t.includes('\t')) {
+        const parts = t.split('\t').map((x) => x.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          cards.push({
+            q: parts[0],
+            a: parts[1],
+            sectionName: parts[2] || 'Imported Deck',
+          });
+          detectedPureFlashcards++;
+          continue;
+        }
+      }
+
+      if (t.includes('|') || t.includes('::')) {
+        const parts = (t.includes('|') ? t.split('|') : t.split('::')).map((x) => x.trim());
+        if (parts.length >= 2 && parts[0] && parts[1]) {
+          cards.push({
+            q: parts[0],
+            a: parts[1],
+            sectionName: parts[2] || 'Imported Deck',
+          });
+          detectedPureFlashcards++;
+          continue;
+        }
+      }
+
+      if (/\.csv$/i.test(opts?.sourceLabel || '') || (t.startsWith('"') && t.includes('","'))) {
+        const csvRow = parseCsvLine(t);
+        if (csvRow) {
+          cards.push({ q: csvRow[0], a: csvRow[1], sectionName: csvRow[2] });
+          detectedPureFlashcards++;
+        }
+      }
+    }
+
+    // Check blank-line Quizlet copy-paste pairs if no explicit delimiter matched
+    if (cards.length === 0) {
+      const blocks = cleanText.split(/\n\s*\n+/).map((b) =>
+        b
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean)
+      );
+      if (
+        blocks.length >= 2 &&
+        blocks.every((b) => b.length === 2 && !b[0].startsWith('#') && !b[0].startsWith('-'))
+      ) {
+        for (const b of blocks) {
+          cards.push({ q: b[0], a: b[1], sectionName: 'Imported Deck' });
+          detectedPureFlashcards += 2;
+        }
+      }
+    }
+  }
+
+  // 2. Structure the text into cleanly formatted study sections according to user's chosen preset & options
+  const { note, extractedCards } = parseTextIntoStructuredNote(cleanText, opts?.formatOptions);
   if (opts?.legacyHtml && /<table[\s>]/i.test(opts.legacyHtml)) {
     note.legacyHtml = opts.legacyHtml;
   }
@@ -404,12 +645,41 @@ export function parseUniversalStudyImport(
   const baseFileName = (opts?.sourceLabel || '').replace(/\.[^.]+$/, '').trim();
   const suggestedTitle =
     firstHeading ||
-    (baseFileName && !/pasted|text/i.test(baseFileName) ? baseFileName : '') ||
+    (baseFileName && !/pasted|text|quizlet|gizmo/i.test(baseFileName) ? baseFileName : '') ||
     'Imported Study Topic';
 
   const nonEmptyLines = lines.filter((l) => l.trim().length > 0).length;
   const isPureFlashcards =
-    cards.length > 0 && detectedPureFlashcards >= Math.max(1, Math.floor(nonEmptyLines * 0.7));
+    Boolean(opts?.preExtractedCards?.length) ||
+    (opts?.deckDelimiter !== undefined && opts.deckDelimiter !== 'auto' && cards.length > 0) ||
+    (cards.length > 0 && detectedPureFlashcards >= Math.max(1, Math.floor(nonEmptyLines * 0.65)));
+
+  const timelineEvents = isPureFlashcards
+    ? []
+    : extractTimelineEventsFromNote(note, cleanText);
+
+  let subheadings = 0;
+  let bullets = 0;
+  let subBullets = 0;
+  let tables = 0;
+  let inTable = false;
+  for (const sec of note.sections) {
+    for (const pt of sec.points) {
+      const t = pt.trim();
+      if (/^\|.+\|$/.test(t)) {
+        if (!inTable) {
+          tables++;
+          inTable = true;
+        }
+        continue;
+      }
+      inTable = false;
+      if (t.startsWith('### ')) subheadings++;
+      else if (t.startsWith('↳ ')) subBullets++;
+      else if (!t.startsWith('¶ ')) bullets++;
+    }
+    inTable = false;
+  }
 
   return {
     sourceLabel: opts?.sourceLabel || 'Pasted Notes',
@@ -417,6 +687,17 @@ export function parseUniversalStudyImport(
     mode: isPureFlashcards ? 'flashcards-only' : 'notes-and-cards',
     note,
     cards,
+    timelineEvents,
+    entityStats: {
+      headings: note.sections.length,
+      subheadings,
+      bullets,
+      subBullets,
+      tables,
+      boldTerms: note.keyTerms.length,
+      timelineEvents: timelineEvents.length,
+      cards: cards.length,
+    },
     legacyHtml: opts?.legacyHtml,
   };
 }
@@ -530,17 +811,18 @@ export function parseBulkTimelineNodes(rawText: string): ParsedBulkTimelineNode[
       const pushObj = (item: Record<string, unknown>, fallbackTitle?: string) => {
         const date = String(item.date ?? item.d ?? '').trim();
         const title = String(item.title ?? item.e ?? item.t ?? fallbackTitle ?? '').trim();
-        const detail = [item.detail, item.x, item.w]
-          .map((v) => String(v || '').trim())
-          .filter(Boolean)
-          .join(' — ');
+        const detail = String(item.detail ?? item.x ?? '').trim();
+        const significance = String(item.significance ?? item.w ?? '').trim() || undefined;
         const era = String(item.era ?? '').trim() || undefined;
+        const keyEvent = Boolean(item.keyEvent ?? item.key);
         if (title || detail) {
           results.push({
             date: date || 'Undated',
             title: title || 'Historical Event',
             detail,
+            significance,
             era,
+            keyEvent: keyEvent || undefined,
           });
         }
       };
@@ -583,7 +865,7 @@ export function parseBulkTimelineNodes(rawText: string): ParsedBulkTimelineNode[
     if (!line) continue;
     if (/^(?:date|year)\s*[\t|,]\s*(?:title|event)/i.test(line)) continue;
 
-    // Pipe or Tab separated: Date | Title | Detail | Era
+    // Pipe or Tab separated: Date | Title | Detail | Era  OR  Date | Title | Detail | Significance | Era
     if (line.includes('\t') || line.includes('|')) {
       const parts = (line.includes('\t') ? line.split('\t') : line.split('|')).map((p) =>
         p.trim()
@@ -593,7 +875,8 @@ export function parseBulkTimelineNodes(rawText: string): ParsedBulkTimelineNode[
           date: parts[0] || 'Undated',
           title: parts[1] || parts[0],
           detail: parts[2] || '',
-          era: parts[3] || undefined,
+          significance: parts.length >= 5 ? parts[3] || undefined : undefined,
+          era: parts.length >= 5 ? parts[4] || undefined : parts[3] || undefined,
         });
         continue;
       }

@@ -4,6 +4,12 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { fastLocalQuizCheck, smartSemanticFallbackCheck } from '../src/lib/quizGrader.ts';
 import { getDeckById, type StoredQuizCard } from './quizDb.ts';
 
+import {
+  createGeminiClient,
+  parseUserAiConfig,
+  type UserAiConfig,
+} from './aiRouter.ts';
+
 const GRADING_MODEL_CANDIDATES = [
   'gemini-3.1-flash-lite',
   'gemini-4-hydrogen',
@@ -18,18 +24,56 @@ function loadGenAiModule(): Promise<typeof import('@google/genai')> {
   return genAiModulePromise;
 }
 
-async function getAiClient(): Promise<GoogleGenAI | null> {
+async function getSiteAiClient(): Promise<GoogleGenAI | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || !apiKey.trim()) return null;
-  const { GoogleGenAI: GenAIClass } = await loadGenAiModule();
-  return new GenAIClass({
-    apiKey: apiKey.trim(),
-    httpOptions: {
+  return createGeminiClient(apiKey);
+}
+
+async function gradeViaOpenAiCompatible(
+  config: UserAiConfig,
+  systemInstruction: string,
+  userContent: string
+): Promise<string> {
+  const isGrok = config.provider === 'grok';
+  const baseUrl = (
+    isGrok ? 'https://api.x.ai/v1' : config.baseUrl || 'https://api.openai.com/v1'
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  const model =
+    (config.model || (isGrok ? 'grok-3-mini' : 'gpt-4o-mini')).trim() ||
+    (isGrok ? 'grok-3-mini' : 'gpt-4o-mini');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
       headers: {
-        'User-Agent': 'aistudio-build',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
       },
-    },
-  });
+      body: JSON.stringify({
+        model,
+        response_format: { type: 'json_object' },
+        max_tokens: isGrok ? 512 : 180,
+        messages: [
+          { role: 'system', content: systemInstruction },
+          { role: 'user', content: userContent },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`OpenAI-compatible grading HTTP ${res.status}`);
+    }
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return (data.choices?.[0]?.message?.content || '').trim();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function generateGradingContent(
@@ -39,15 +83,21 @@ async function generateGradingContent(
     systemInstruction: string;
     maxOutputTokens?: number;
     responseSchema: Record<string, unknown>;
+    preferredModel?: string;
   }
 ) {
-  const candidates = cachedWorkingModel
+  const baseList: string[] = params.preferredModel
+    ? [
+        params.preferredModel,
+        ...GRADING_MODEL_CANDIDATES.filter((m) => m !== params.preferredModel),
+      ]
+    : cachedWorkingModel
     ? [cachedWorkingModel, ...GRADING_MODEL_CANDIDATES.filter((m) => m !== cachedWorkingModel)]
     : [...GRADING_MODEL_CANDIDATES];
 
   const { ThinkingLevel } = await loadGenAiModule();
   let lastErr: unknown = null;
-  for (const model of candidates) {
+  for (const model of baseList) {
     const thinkingLevel = model === 'gemini-4-hydrogen' ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL;
     try {
       const response = await Promise.race([
@@ -69,7 +119,9 @@ async function generateGradingContent(
       if (!response.text || !response.text.trim()) {
         throw new Error(`Empty response from ${model}`);
       }
-      cachedWorkingModel = model;
+      if (!params.preferredModel) {
+        cachedWorkingModel = model;
+      }
       return { response, model };
     } catch (err) {
       lastErr = err;
@@ -83,6 +135,7 @@ export interface GradeOutcome {
   source: 'local' | 'ai' | 'fallback';
   latencyMs: number;
   model?: string;
+  usedByok?: boolean;
   error?: string;
 }
 
@@ -92,7 +145,8 @@ const GRADING_SYSTEM_INSTRUCTION =
 export async function gradeSingleAnswer(
   question: string,
   officialAnswer: string,
-  studentAnswer: string
+  studentAnswer: string,
+  userAiConfig?: UserAiConfig | null
 ): Promise<GradeOutcome> {
   const started = Date.now();
   const trimmed = String(studentAnswer || '').trim();
@@ -104,7 +158,80 @@ export async function gradeSingleAnswer(
     return { correct: true, source: 'local', latencyMs: 0 };
   }
 
-  const ai = await getAiClient();
+  const promptContent = `Question: ${question}\nOfficial Answer: ${officialAnswer}\nStudent Answer: ${trimmed}`;
+
+  // If user brought their own API key, grade exclusively with their API
+  if (userAiConfig?.apiKey) {
+    try {
+      if (userAiConfig.provider === 'grok' || userAiConfig.provider === 'openai-compatible') {
+        const rawText = await gradeViaOpenAiCompatible(
+          userAiConfig,
+          GRADING_SYSTEM_INSTRUCTION,
+          promptContent
+        );
+        let isCorrect = false;
+        try {
+          const parsed = JSON.parse(rawText) as { correct?: boolean };
+          isCorrect = Boolean(parsed?.correct);
+        } catch {
+          isCorrect = /"correct"\s*:\s*true/i.test(rawText);
+        }
+        return {
+          correct: isCorrect,
+          source: 'ai',
+          latencyMs: Date.now() - started,
+          model:
+            userAiConfig.model ||
+            (userAiConfig.provider === 'grok' ? 'grok-3-mini' : 'gpt-4o-mini'),
+          usedByok: true,
+        };
+      }
+
+      const byokAi = createGeminiClient(userAiConfig.apiKey);
+      const { Type } = await loadGenAiModule();
+      const { response, model } = await generateGradingContent(byokAi, {
+        contents: promptContent,
+        systemInstruction: GRADING_SYSTEM_INSTRUCTION,
+        maxOutputTokens: 24,
+        preferredModel: userAiConfig.model,
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            correct: { type: Type.BOOLEAN },
+          },
+          required: ['correct'],
+        },
+      });
+      const rawText = (response.text || '').trim();
+      let isCorrect = false;
+      try {
+        const parsed = JSON.parse(rawText) as { correct?: boolean };
+        isCorrect = Boolean(parsed?.correct);
+      } catch {
+        isCorrect = /"correct"\s*:\s*true/i.test(rawText);
+      }
+      return {
+        correct: isCorrect,
+        source: 'ai',
+        latencyMs: Date.now() - started,
+        model,
+        usedByok: true,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('BYOK quiz grading fallback used:', msg);
+      return {
+        correct: smartSemanticFallbackCheck(trimmed, officialAnswer),
+        source: 'fallback',
+        latencyMs: Date.now() - started,
+        usedByok: true,
+        error: msg.slice(0, 220),
+      };
+    }
+  }
+
+  // Website API is strictly used ONLY for Live Quiz marking when user has no personal API key
+  const ai = await getSiteAiClient();
   if (!ai) {
     return {
       correct: smartSemanticFallbackCheck(trimmed, officialAnswer),
@@ -117,7 +244,7 @@ export async function gradeSingleAnswer(
   try {
     const { Type } = await loadGenAiModule();
     const { response, model } = await generateGradingContent(ai, {
-      contents: `Question: ${question}\nOfficial Answer: ${officialAnswer}\nStudent Answer: ${trimmed}`,
+      contents: promptContent,
       systemInstruction: GRADING_SYSTEM_INSTRUCTION,
       maxOutputTokens: 24,
       responseSchema: {
@@ -143,6 +270,7 @@ export async function gradeSingleAnswer(
       source: 'ai',
       latencyMs: Date.now() - started,
       model,
+      usedByok: false,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -151,6 +279,7 @@ export async function gradeSingleAnswer(
       correct: smartSemanticFallbackCheck(trimmed, officialAnswer),
       source: 'fallback',
       latencyMs: Date.now() - started,
+      usedByok: false,
       error: msg.slice(0, 220),
     };
   }
@@ -167,9 +296,13 @@ export interface BatchGradeResult {
   id: string;
   correct: boolean;
   source: 'local' | 'ai' | 'fallback';
+  usedByok?: boolean;
 }
 
-export async function gradeBatchAnswers(items: BatchGradeItem[]): Promise<BatchGradeResult[]> {
+export async function gradeBatchAnswers(
+  items: BatchGradeItem[],
+  userAiConfig?: UserAiConfig | null
+): Promise<BatchGradeResult[]> {
   const results = new Map<string, BatchGradeResult>();
   const needsAi: BatchGradeItem[] = [];
 
@@ -184,49 +317,29 @@ export async function gradeBatchAnswers(items: BatchGradeItem[]): Promise<BatchG
   }
 
   if (needsAi.length > 0) {
-    const ai = await getAiClient();
-    if (!ai) {
-      for (const item of needsAi) {
-        results.set(item.id, {
-          id: item.id,
-          correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
-          source: 'fallback',
-        });
-      }
-    } else {
+    const promptLines = needsAi
+      .map(
+        (it, idx) =>
+          `${idx + 1}. [id=${it.id}] Q: ${it.question} | Official: ${it.officialAnswer} | Student: ${it.studentAnswer}`
+      )
+      .join('\n');
+
+    if (
+      userAiConfig?.apiKey &&
+      (userAiConfig.provider === 'grok' || userAiConfig.provider === 'openai-compatible')
+    ) {
       try {
-        const { Type } = await loadGenAiModule();
-        const promptLines = needsAi
-          .map(
-            (it, idx) =>
-              `${idx + 1}. [id=${it.id}] Q: ${it.question} | Official: ${it.officialAnswer} | Student: ${it.studentAnswer}`
-          )
-          .join('\n');
-
-        const { response } = await generateGradingContent(ai, {
-          contents: promptLines,
-          systemInstruction:
-            'Grade each numbered student flashcard answer generously by core factual meaning against the official answer (accepting abbreviations and month+year dates like "Nov 1918" for "9 November 1918"). Return strict JSON array of {id, correct}.',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                correct: { type: Type.BOOLEAN },
-              },
-              required: ['id', 'correct'],
-            },
-          },
-        });
-
-        const parsed = JSON.parse((response.text || '[]').trim()) as Array<{
-          id: string;
-          correct: boolean;
-        }>;
+        const rawText = await gradeViaOpenAiCompatible(
+          userAiConfig,
+          'Return strict JSON {"results":[{"id":"...","correct":true}]}. Grade each numbered student flashcard answer generously by core factual meaning against the official answer.',
+          promptLines
+        );
+        const parsed = JSON.parse(rawText || '{}') as {
+          results?: Array<{ id: string; correct: boolean }>;
+        };
         const aiMap = new Map<string, boolean>();
-        if (Array.isArray(parsed)) {
-          parsed.forEach((row) => {
+        if (Array.isArray(parsed?.results)) {
+          parsed.results.forEach((row) => {
             if (row && typeof row.id === 'string') {
               aiMap.set(row.id, Boolean(row.correct));
             }
@@ -237,16 +350,85 @@ export async function gradeBatchAnswers(items: BatchGradeItem[]): Promise<BatchG
             id: item.id,
             correct: aiMap.get(item.id) ?? false,
             source: 'ai',
+            usedByok: true,
           });
         }
       } catch (err) {
-        console.error('Gemini batch grading fallback used:', err);
+        console.error('BYOK OpenAI-compatible batch grading fallback:', err);
+        for (const item of needsAi) {
+          results.set(item.id, {
+            id: item.id,
+            correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
+            source: 'fallback',
+            usedByok: true,
+          });
+        }
+      }
+    } else {
+      const usingByok = Boolean(userAiConfig?.apiKey);
+      const ai = userAiConfig?.apiKey
+        ? createGeminiClient(userAiConfig.apiKey)
+        : await getSiteAiClient();
+
+      if (!ai) {
         for (const item of needsAi) {
           results.set(item.id, {
             id: item.id,
             correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
             source: 'fallback',
           });
+        }
+      } else {
+        try {
+          const { Type } = await loadGenAiModule();
+          const { response } = await generateGradingContent(ai, {
+            contents: promptLines,
+            systemInstruction:
+              'Grade each numbered student flashcard answer generously by core factual meaning against the official answer (accepting abbreviations and month+year dates like "Nov 1918" for "9 November 1918"). Return strict JSON array of {id, correct}.',
+            preferredModel: userAiConfig?.model,
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  correct: { type: Type.BOOLEAN },
+                },
+                required: ['id', 'correct'],
+              },
+            },
+          });
+
+          const parsed = JSON.parse((response.text || '[]').trim()) as Array<{
+            id: string;
+            correct: boolean;
+          }>;
+          const aiMap = new Map<string, boolean>();
+          if (Array.isArray(parsed)) {
+            parsed.forEach((row) => {
+              if (row && typeof row.id === 'string') {
+                aiMap.set(row.id, Boolean(row.correct));
+              }
+            });
+          }
+          for (const item of needsAi) {
+            results.set(item.id, {
+              id: item.id,
+              correct: aiMap.get(item.id) ?? false,
+              source: 'ai',
+              usedByok: usingByok,
+            });
+          }
+        } catch (err) {
+          console.error('Gemini batch grading fallback used:', err);
+          for (const item of needsAi) {
+            results.set(item.id, {
+              id: item.id,
+              correct: smartSemanticFallbackCheck(item.studentAnswer, item.officialAnswer),
+              source: 'fallback',
+              usedByok: usingByok,
+            });
+          }
         }
       }
     }
@@ -303,6 +485,7 @@ interface QuizRoom {
   roundTimer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   pendingGrades: Map<string, Promise<void>>;
+  hostAiConfig?: UserAiConfig | null;
 }
 
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -694,6 +877,8 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           answers: new Map(),
         };
 
+        const hostAiConfig = parseUserAiConfig(msg.byok);
+
         const room: QuizRoom = {
           code,
           deckId: resolvedDeckId,
@@ -710,6 +895,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           roundTimer: null,
           cleanupTimer: null,
           pendingGrades: new Map(),
+          hostAiConfig,
         };
 
         rooms.set(code, room);
@@ -977,9 +1163,17 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
         player.answers.set(lockedRoundId, rec);
         broadcastRoomState(room);
 
+        const playerAiConfig = parseUserAiConfig(msg.byok);
+        const effectiveAiConfig = playerAiConfig || room.hostAiConfig || null;
+
         const gradeKey = `${lockedRoundId}:${player.id}`;
         const gradePromise = (async () => {
-          const outcome = await gradeSingleAnswer(card.question, card.answer, answerText);
+          const outcome = await gradeSingleAnswer(
+            card.question,
+            card.answer,
+            answerText,
+            effectiveAiConfig
+          );
           if (
             room.roundId === lockedRoundId &&
             (room.status === 'question' || room.status === 'reveal')

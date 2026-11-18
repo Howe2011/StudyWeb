@@ -1,17 +1,25 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  ArrowLeftRight,
   CheckCircle2,
+  CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  Download,
   Edit3,
   Eye,
   Flag,
   Gamepad2,
   Layers,
   MoreHorizontal,
+  Play,
   Plus,
   RotateCcw,
+  Search,
   Share2,
   Shuffle,
+  Square,
   Trash2,
   Upload,
   X,
@@ -210,6 +218,15 @@ export function FlashcardsView({
   const [editSectionName, setEditSectionName] = useState<string>('');
 
   // Manage / Add form state
+  const [manageSubTab, setManageSubTab] = useState<'browse' | 'add'>('browse');
+  const [manageLayout, setManageLayout] = useState<'grouped' | 'flat'>('grouped');
+  const [manageSort, setManageSort] = useState<'orig' | 'box-asc' | 'box-desc' | 'due' | 'az'>('orig');
+  const [manageSectionFilter, setManageSectionFilter] = useState<string>('ALL');
+  const [collapsedManageGroups, setCollapsedManageGroups] = useState<Set<string>>(new Set());
+  const [selectedManageIds, setSelectedManageIds] = useState<Set<string>>(new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState<boolean>(false);
+  const [renamingSectionKey, setRenamingSectionKey] = useState<string | null>(null);
+  const [renameSectionDraft, setRenameSectionDraft] = useState<string>('');
   const [newTopicId, setNewTopicId] = useState<string>('');
   const [newTopicCustomName, setNewTopicCustomName] = useState<string>('');
   const [newQ, setNewQ] = useState('');
@@ -218,9 +235,10 @@ export function FlashcardsView({
   const [quickBatchRaw, setQuickBatchRaw] = useState('');
   const [manageSearch, setManageSearch] = useState('');
   const [manageTopicFilter, setManageTopicFilter] = useState<string>('ALL');
-  const [manageFilter, setManageFilter] = useState<'all' | 'weak' | 'flagged' | 'mastered'>('all');
+  const [manageFilter, setManageFilter] = useState<'all' | 'due' | 'weak' | 'mid' | 'flagged' | 'mastered'>('all');
   const [moveTargetTopicId, setMoveTargetTopicId] = useState<string>('');
   const [moveNewTopicName, setMoveNewTopicName] = useState<string>('');
+  const [moveTargetSection, setMoveTargetSection] = useState<string>('');
   const [moveFeedback, setMoveFeedback] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -257,6 +275,9 @@ export function FlashcardsView({
   useEffect(() => {
     setSelectedTopicFilter('ALL');
     setManageTopicFilter('ALL');
+    setManageSectionFilter('ALL');
+    setSelectedManageIds(new Set());
+    setConfirmBulkDelete(false);
     setMoveFeedback(null);
   }, [selectedSubjectId]);
 
@@ -809,16 +830,39 @@ export function FlashcardsView({
       updatedAt: new Date().toISOString(),
     }));
     setQueue((prev) => prev.filter((id) => id !== cardId));
+    setSelectedManageIds((prev) => {
+      if (!prev.has(cardId)) return prev;
+      const next = new Set(prev);
+      next.delete(cardId);
+      return next;
+    });
   };
+
+  const manageAvailableSections = useMemo(() => {
+    const set = new Set<string>();
+    subjectCards.forEach((c) => {
+      if (manageTopicFilter === '__unassigned__' && topicById.has(c.topicId)) return;
+      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unassigned__' && c.topicId !== manageTopicFilter) {
+        return;
+      }
+      set.add((c.sectionName || 'Core Deck').trim() || 'Core Deck');
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [subjectCards, manageTopicFilter, topicById]);
 
   const manageFilteredCards = useMemo(() => {
     const q = manageSearch.trim().toLowerCase();
-    return subjectCards.filter((c) => {
+    const now = Date.now();
+    const list = subjectCards.filter((c) => {
       if (manageTopicFilter === '__unassigned__' && topicById.has(c.topicId)) return false;
       if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unassigned__' && c.topicId !== manageTopicFilter) {
         return false;
       }
+      const sec = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+      if (manageSectionFilter !== 'ALL' && sec !== manageSectionFilter) return false;
+      if (manageFilter === 'due' && c.dueAt > now) return false;
       if (manageFilter === 'weak' && c.box > 2) return false;
+      if (manageFilter === 'mid' && c.box !== 3) return false;
       if (manageFilter === 'flagged' && !c.flagged) return false;
       if (manageFilter === 'mastered' && c.box < 4) return false;
       if (q) {
@@ -829,18 +873,120 @@ export function FlashcardsView({
       }
       return true;
     });
-  }, [subjectCards, manageSearch, manageTopicFilter, manageFilter, topicById]);
 
-  const handleMoveFilteredToTopic = () => {
-    if (manageFilteredCards.length === 0) return;
+    const sorted = [...list];
+    if (manageSort === 'box-asc') {
+      sorted.sort((a, b) => a.box - b.box || a.dueAt - b.dueAt);
+    } else if (manageSort === 'box-desc') {
+      sorted.sort((a, b) => b.box - a.box || b.dueAt - a.dueAt);
+    } else if (manageSort === 'due') {
+      sorted.sort((a, b) => a.dueAt - b.dueAt || a.box - b.box);
+    } else if (manageSort === 'az') {
+      sorted.sort((a, b) => a.q.localeCompare(b.q));
+    } else {
+      sorted.sort((a, b) => {
+        const ta = topicById.get(a.topicId)?.name || 'General';
+        const tb = topicById.get(b.topicId)?.name || 'General';
+        return ta.localeCompare(tb) || a.sectionName.localeCompare(b.sectionName);
+      });
+    }
+    return sorted;
+  }, [
+    subjectCards,
+    manageSearch,
+    manageTopicFilter,
+    manageSectionFilter,
+    manageFilter,
+    manageSort,
+    topicById,
+  ]);
+
+  const manageGroupedTree = useMemo(() => {
+    const topicMap = new Map<
+      string,
+      {
+        topicId: string;
+        topicName: string;
+        subjectName: string;
+        color: string;
+        totalCards: number;
+        dueCards: number;
+        sections: Map<
+          string,
+          {
+            key: string;
+            sectionName: string;
+            topicId: string;
+            subjectId: string;
+            cards: StudyFlashcard[];
+          }
+        >;
+      }
+    >();
+    const now = Date.now();
+    for (const c of manageFilteredCards) {
+      const s = subjById.get(c.subjectId);
+      const t = topicById.get(c.topicId);
+      const tId = t ? t.id : '__unassigned__';
+      const tName = t ? t.name : 'General / Unassigned';
+      const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+      const secKey = `${c.subjectId}:::${tId}:::${secName}`;
+
+      let tGroup = topicMap.get(tId);
+      if (!tGroup) {
+        tGroup = {
+          topicId: tId,
+          topicName: tName,
+          subjectName: s?.name || 'General',
+          color: s?.color || '#2F5F8A',
+          totalCards: 0,
+          dueCards: 0,
+          sections: new Map(),
+        };
+        topicMap.set(tId, tGroup);
+      }
+      tGroup.totalCards += 1;
+      if (c.dueAt <= now) tGroup.dueCards += 1;
+
+      let secBucket = tGroup.sections.get(secKey);
+      if (!secBucket) {
+        secBucket = {
+          key: secKey,
+          sectionName: secName,
+          topicId: tId,
+          subjectId: c.subjectId,
+          cards: [],
+        };
+        tGroup.sections.set(secKey, secBucket);
+      }
+      secBucket.cards.push(c);
+    }
+
+    return Array.from(topicMap.values()).map((tg) => ({
+      ...tg,
+      sectionList: Array.from(tg.sections.values()),
+    }));
+  }, [manageFilteredCards, subjById, topicById]);
+
+  const targetBulkCardIds = useMemo(() => {
+    if (selectedManageIds.size > 0) {
+      return manageFilteredCards.filter((c) => selectedManageIds.has(c.id)).map((c) => c.id);
+    }
+    return manageFilteredCards.map((c) => c.id);
+  }, [selectedManageIds, manageFilteredCards]);
+
+  const handleMoveTargetCardsToTopic = () => {
+    if (targetBulkCardIds.length === 0) return;
     if (moveTargetTopicId === '__new__' && !moveNewTopicName.trim()) return;
-    const idsToMove = new Set(manageFilteredCards.map((c) => c.id));
+    const idsToMove = new Set(targetBulkCardIds);
+    const firstCard = manageFilteredCards.find((c) => idsToMove.has(c.id));
     const fallbackSubjId =
       selectedSubjectId && selectedSubjectId !== 'ALL'
         ? selectedSubjectId
-        : manageFilteredCards[0]?.subjectId || workspace.subjects[0]?.id || makeId('subj');
+        : firstCard?.subjectId || workspace.subjects[0]?.id || makeId('subj');
 
     let destTopicLabel = '';
+    const cleanNewSec = moveTargetSection.trim();
     onUpdateWorkspace((prev) => {
       const resolved = resolveOrCreateTargetTopic(
         prev,
@@ -855,16 +1001,105 @@ export function FlashcardsView({
         topics: resolved.nextTopics,
         flashcards: prev.flashcards.map((c) =>
           idsToMove.has(c.id)
-            ? { ...c, subjectId: resolved.subjId, topicId: resolved.topicId }
+            ? {
+                ...c,
+                subjectId: resolved.subjId,
+                topicId: resolved.topicId,
+                ...(cleanNewSec ? { sectionName: cleanNewSec } : {}),
+              }
             : c
         ),
         updatedAt: new Date().toISOString(),
       };
     });
     setMoveFeedback(
-      `Moved ${idsToMove.size} card${idsToMove.size === 1 ? '' : 's'} into "${destTopicLabel || 'selected topic'}".`
+      `Moved ${idsToMove.size} card${idsToMove.size === 1 ? '' : 's'} into "${destTopicLabel || 'selected topic'}"${cleanNewSec ? ` · ${cleanNewSec}` : ''}.`
     );
+    setSelectedManageIds(new Set());
     if (moveTargetTopicId === '__new__') setMoveNewTopicName('');
+    if (cleanNewSec) setMoveTargetSection('');
+  };
+
+  const handleBulkBoxUpdate = (action: 'reset' | 'master' | 'flag' | 'unflag' | 'swap') => {
+    if (targetBulkCardIds.length === 0) return;
+    const ids = new Set(targetBulkCardIds);
+    const now = Date.now();
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: prev.flashcards.map((c) => {
+        if (!ids.has(c.id)) return c;
+        if (action === 'reset') return { ...c, box: 1, dueAt: now };
+        if (action === 'master') {
+          return { ...c, box: 5, dueAt: now + 16 * 86400000, lastReviewedAt: now };
+        }
+        if (action === 'flag') return { ...c, flagged: true };
+        if (action === 'unflag') return { ...c, flagged: false };
+        return { ...c, q: c.a, a: c.q };
+      }),
+      updatedAt: new Date().toISOString(),
+    }));
+    const verb =
+      action === 'reset'
+        ? 'Reset to Box 1 (due now)'
+        : action === 'master'
+        ? 'Marked mastered (Box 5)'
+        : action === 'flag'
+        ? 'Flagged'
+        : action === 'unflag'
+        ? 'Unflagged'
+        : 'Swapped Front ↔ Back on';
+    setMoveFeedback(`${verb} ${ids.size} card${ids.size === 1 ? '' : 's'}.`);
+  };
+
+  const handleBulkDeleteSelected = () => {
+    if (selectedManageIds.size === 0) return;
+    const ids = new Set(selectedManageIds);
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: prev.flashcards.filter((c) => !ids.has(c.id)),
+      updatedAt: new Date().toISOString(),
+    }));
+    setQueue((prev) => prev.filter((id) => !ids.has(id)));
+    setSelectedManageIds(new Set());
+    setConfirmBulkDelete(false);
+    setMoveFeedback(`Deleted ${ids.size} selected card${ids.size === 1 ? '' : 's'}.`);
+  };
+
+  const handleRenameSection = (cardIds: string[], nextName: string) => {
+    const clean = nextName.trim();
+    if (!clean || cardIds.length === 0) {
+      setRenamingSectionKey(null);
+      return;
+    }
+    const idSet = new Set(cardIds);
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: prev.flashcards.map((c) =>
+        idSet.has(c.id) ? { ...c, sectionName: clean } : c
+      ),
+      updatedAt: new Date().toISOString(),
+    }));
+    setRenamingSectionKey(null);
+    setRenameSectionDraft('');
+    setMoveFeedback(`Renamed section to "${clean}" (${cardIds.length} cards).`);
+  };
+
+  const handleExportVisibleTsv = () => {
+    if (manageFilteredCards.length === 0) return;
+    const rows = manageFilteredCards.map((c) => {
+      const clean = (s: string) => s.replace(/\t|\r?\n/g, ' ').trim();
+      return `${clean(c.q)}\t${clean(c.a)}\t${clean(c.sectionName || 'Core Deck')}`;
+    });
+    const blob = new Blob([rows.join('\n')], { type: 'text/tab-separated-values;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `studydeck-cards-${new Date().toISOString().slice(0, 10)}.tsv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setMoveFeedback(`Exported ${manageFilteredCards.length} cards as TSV.`);
   };
 
   const clozeParts = useMemo(() => {
@@ -1906,288 +2141,801 @@ export function FlashcardsView({
           </div>
         )}
 
-        {/* BROWSE & MANAGE SCREEN */}
-        {screen === 'manage' && (
-          <div className="space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-4">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setScreen('setup')}
-                  className="sd-btn h-9 w-9 rounded-full p-0"
-                  aria-label="Back to deck setup"
-                >
-                  <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-                </button>
-                <div>
-                  <h1 className="font-display text-xl font-extrabold text-[var(--ink)] sm:text-2xl">
-                    Browse &amp; Manage Cards
-                  </h1>
-                  <p className="text-xs text-[var(--mute)]">
-                    Add single cards, quick-paste lines from Quizlet, or edit &amp; flag existing cards.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={onOpenImport}
-                className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
+        {/* BROWSE & MANAGE SCREEN (Original Tree Browser + Multi-Select + Quick Add) */}
+        {screen === 'manage' && (() => {
+          const allVisibleSelected =
+            manageFilteredCards.length > 0 &&
+            manageFilteredCards.every((c) => selectedManageIds.has(c.id));
+          const nowMsManage = Date.now();
+          const activeSelCount = selectedManageIds.size;
+
+          const renderManageCardRow = (card: StudyFlashcard, showTopicAndSection = true) => {
+            const topicName = topicById.get(card.topicId)?.name || 'General';
+            const checked = selectedManageIds.has(card.id);
+            const isDue = card.dueAt <= nowMsManage;
+            const daysUntilDue = Math.max(1, Math.ceil((card.dueAt - nowMsManage) / 86400000));
+
+            return (
+              <div
+                key={card.id}
+                className={`flex flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm transition-colors ${
+                  checked ? 'bg-[color-mix(in_srgb,var(--e3)_7%,var(--card))]' : ''
+                }`}
               >
-                <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Full Importer</span>
-              </button>
-            </div>
-
-            <div className="grid gap-5 lg:grid-cols-2">
-              <form onSubmit={handleAddSingleCard} className="sd-card space-y-3 p-5">
-                <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                  Add Single Card
-                </h2>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <label className="block text-xs font-semibold text-[var(--mute)]">
-                    Topic
-                    <select
-                      value={newTopicId}
-                      onChange={(e) => setNewTopicId(e.target.value)}
-                      className="sd-input mt-1 text-xs"
-                    >
-                      {subjectTopicsList.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                      <option value="__new__">+ New Topic…</option>
-                    </select>
-                  </label>
-                  <label className="block text-xs font-semibold text-[var(--mute)]">
-                    Section / Sub-deck
-                    <input
-                      type="text"
-                      value={newSec}
-                      onChange={(e) => setNewSec(e.target.value)}
-                      placeholder="e.g. Wall Street Crash"
-                      className="sd-input mt-1 text-xs"
-                    />
-                  </label>
-                </div>
-                {newTopicId === '__new__' && (
-                  <label className="block text-xs font-semibold text-[var(--mute)]">
-                    New Topic Name *
-                    <input
-                      type="text"
-                      required
-                      value={newTopicCustomName}
-                      onChange={(e) => setNewTopicCustomName(e.target.value)}
-                      placeholder="e.g. USA 1919–1941"
-                      className="sd-input mt-1 text-xs"
-                    />
-                  </label>
-                )}
-                <label className="block text-xs font-semibold text-[var(--mute)]">
-                  Question / Front *
-                  <input
-                    type="text"
-                    required
-                    value={newQ}
-                    onChange={(e) => setNewQ(e.target.value)}
-                    placeholder="Define osmosis"
-                    className="sd-input mt-1 text-sm"
-                  />
-                </label>
-                <label className="block text-xs font-semibold text-[var(--mute)]">
-                  Answer / Back *
-                  <textarea
-                    rows={2}
-                    required
-                    value={newA}
-                    onChange={(e) => setNewA(e.target.value)}
-                    placeholder="Net movement of water molecules..."
-                    className="sd-input mt-1 text-sm"
-                  />
-                </label>
-                <button type="submit" className="sd-btn-pri px-4 py-2 text-xs">
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Add Card</span>
-                </button>
-              </form>
-
-              <form onSubmit={handleQuickBatchPaste} className="sd-card space-y-3 p-5">
-                <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                  Quick Batch Add (Quizlet / Pipe / Tab)
-                </h2>
-                <p className="text-xs text-[var(--mute)]">
-                  Saves into your selected Topic &amp; Section on the left. Paste one card per line
-                  separated by <code>|</code>, <code>::</code>, or Tab.
-                </p>
-                <textarea
-                  rows={6}
-                  value={quickBatchRaw}
-                  onChange={(e) => setQuickBatchRaw(e.target.value)}
-                  placeholder={
-                    'Mitochondria | Site of aerobic respiration\nRibosome | Site of protein synthesis'
-                  }
-                  className="sd-input font-mono-num text-xs"
-                />
-                <button type="submit" className="sd-btn px-4 py-2 text-xs">
-                  Add All Lines
-                </button>
-              </form>
-            </div>
-
-            <div className="sd-card overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-5 py-3.5">
-                <span className="font-display text-base font-bold text-[var(--ink)]">
-                  All Matching Cards ({manageFilteredCards.length})
-                </span>
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    aria-label="Filter by topic"
-                    value={manageTopicFilter}
-                    onChange={(e) => setManageTopicFilter(e.target.value)}
-                    className="sd-input w-auto max-w-[190px] py-1 text-xs"
-                  >
-                    <option value="ALL">All Topics</option>
-                    {subjectTopicsList.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                    <option value="__unassigned__">General / Unassigned</option>
-                  </select>
-                  <input
-                    type="text"
-                    value={manageSearch}
-                    onChange={(e) => setManageSearch(e.target.value)}
-                    placeholder="Search cards or section…"
-                    className="sd-input w-44 py-1 text-xs"
-                  />
-                  <select
-                    aria-label="Filter cards"
-                    value={manageFilter}
-                    onChange={(e) =>
-                      setManageFilter(e.target.value as 'all' | 'weak' | 'flagged' | 'mastered')
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedManageIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(card.id)) next.delete(card.id);
+                        else next.add(card.id);
+                        return next;
+                      })
                     }
-                    className="sd-input w-auto py-1 text-xs"
+                    aria-label={checked ? 'Deselect card' : 'Select card'}
+                    className="mt-0.5 shrink-0 cursor-pointer text-[var(--mute)] hover:text-[var(--e3)]"
                   >
-                    <option value="all">All</option>
-                    <option value="weak">Learning (Box 1–2)</option>
-                    <option value="flagged">Flagged</option>
-                    <option value="mastered">Mastered (Box 4–5)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Split / Reassign Matching Cards to a Topic */}
-              {manageFilteredCards.length > 0 && (
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-5 py-2.5 text-xs">
-                  <span className="font-semibold text-[var(--mute)]">
-                    Split / move these {manageFilteredCards.length} matching card
-                    {manageFilteredCards.length === 1 ? '' : 's'} into topic:
-                  </span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      aria-label="Destination topic"
-                      value={moveTargetTopicId}
-                      onChange={(e) => setMoveTargetTopicId(e.target.value)}
-                      className="sd-input w-auto max-w-[200px] py-1 text-xs"
-                    >
-                      {subjectTopicsList.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                      <option value="__new__">+ New Topic…</option>
-                    </select>
-                    {moveTargetTopicId === '__new__' && (
-                      <input
-                        type="text"
-                        value={moveNewTopicName}
-                        onChange={(e) => setMoveNewTopicName(e.target.value)}
-                        placeholder="New topic name…"
-                        className="sd-input w-40 py-1 text-xs"
-                      />
+                    {checked ? (
+                      <CheckSquare className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                    ) : (
+                      <Square className="h-4 w-4" aria-hidden="true" />
                     )}
-                    <button
-                      type="button"
-                      disabled={moveTargetTopicId === '__new__' && !moveNewTopicName.trim()}
-                      onClick={handleMoveFilteredToTopic}
-                      className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
-                    >
-                      Move Matching Cards
-                    </button>
+                  </button>
+
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="font-semibold text-[var(--ink)]">{card.q}</div>
+                    <div className="text-xs leading-relaxed text-[var(--mute)]">{card.a}</div>
+                    <div className="font-mono-num flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--mute)]">
+                      {showTopicAndSection && (
+                        <>
+                          <span className="font-semibold text-[var(--e3)]">{topicName}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{card.sectionName}</span>
+                          <span aria-hidden="true">·</span>
+                        </>
+                      )}
+                      <span
+                        className={
+                          card.box >= 4
+                            ? 'font-semibold text-[var(--ok)]'
+                            : card.box <= 2
+                            ? 'font-semibold text-[var(--e2)]'
+                            : ''
+                        }
+                      >
+                        Box {card.box}/5
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{isDue ? 'Due now' : `Due in ${daysUntilDue}d`}</span>
+                      {card.flagged && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-semibold text-[var(--e2)]">Flagged</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              )}
+
+                <div className="flex shrink-0 items-center gap-1">
+                  {card.box > 1 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateWorkspace((prev) => ({
+                          ...prev,
+                          flashcards: prev.flashcards.map((c) =>
+                            c.id === card.id ? { ...c, box: 1, dueAt: Date.now() } : c
+                          ),
+                          updatedAt: new Date().toISOString(),
+                        }))
+                      }
+                      title="Reset progress to Box 1 (due now)"
+                      aria-label="Reset progress to Box 1"
+                      className="sd-btn h-8 w-8 p-0 text-[var(--mute)] hover:text-[var(--ink)]"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleFlagCard(card.id)}
+                    aria-label="Toggle flag"
+                    title="Flag card"
+                    className={`sd-btn h-8 w-8 p-0 ${
+                      card.flagged ? 'border-[var(--e2)] text-[var(--e2)]' : 'text-[var(--mute)]'
+                    }`}
+                  >
+                    <Flag className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditModalCardId(card.id);
+                      setEditQ(card.q);
+                      setEditA(card.a);
+                      setEditTopicId(card.topicId);
+                      setEditSectionName(card.sectionName);
+                    }}
+                    aria-label="Edit card"
+                    title="Edit card"
+                    className="sd-btn h-8 w-8 p-0"
+                  >
+                    <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteCard(card.id)}
+                    aria-label="Delete card"
+                    title="Delete card"
+                    className="sd-btn h-8 w-8 p-0 text-[var(--bad)]"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            );
+          };
+
+          return (
+            <div className="space-y-4">
+              {/* Top Manage Header */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-4">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setScreen('setup')}
+                    className="sd-btn h-9 w-9 rounded-full p-0"
+                    aria-label="Back to deck setup"
+                  >
+                    <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <div>
+                    <h1 className="font-display text-xl font-extrabold text-[var(--ink)] sm:text-2xl">
+                      Card Browser &amp; Manager
+                    </h1>
+                    <p className="text-xs text-[var(--mute)]">
+                      Organize cards by Topic &amp; Section, multi-select to split or reset progress, or batch-paste new cards.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="sd-seg" role="tablist" aria-label="Manage mode">
+                    <button
+                      type="button"
+                      aria-pressed={manageSubTab === 'browse'}
+                      onClick={() => setManageSubTab('browse')}
+                      className="sd-seg-btn"
+                    >
+                      Browse ({subjectCards.length})
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={manageSubTab === 'add'}
+                      onClick={() => setManageSubTab('add')}
+                      className="sd-seg-btn"
+                    >
+                      + Add Cards
+                    </button>
+                  </div>
+
+                  {manageFilteredCards.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleExportVisibleTsv}
+                      className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                    >
+                      <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Export TSV</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={onOpenImport}
+                    className="sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap"
+                  >
+                    <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Full Importer</span>
+                  </button>
+                </div>
+              </div>
 
               {moveFeedback && (
                 <div
                   role="status"
-                  className="border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] px-5 py-2 text-xs font-semibold text-[var(--ink)]"
+                  className="flex items-center justify-between gap-2 rounded-xl border border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] px-4 py-2.5 text-xs font-semibold text-[var(--ink)]"
                 >
-                  {moveFeedback}
+                  <span>{moveFeedback}</span>
+                  <button
+                    type="button"
+                    onClick={() => setMoveFeedback(null)}
+                    aria-label="Dismiss message"
+                    className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)]"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
                 </div>
               )}
 
-              <div className="divide-y divide-[var(--line)]">
-                {manageFilteredCards.map((card) => {
-                  const topicName = topicById.get(card.topicId)?.name || 'General';
-                  return (
-                    <div
-                      key={card.id}
-                      className="flex flex-wrap items-start justify-between gap-3 p-4 text-sm"
-                    >
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="font-semibold text-[var(--ink)]">{card.q}</div>
-                        <div className="text-xs text-[var(--mute)]">{card.a}</div>
-                        <div className="font-mono-num text-[11px] text-[var(--mute)]">
-                          <span className="font-semibold text-[var(--e3)]">{topicName}</span> ·{' '}
-                          {card.sectionName} · Box {card.box}/5
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => toggleFlagCard(card.id)}
-                          aria-label="Toggle flag"
-                          className={`sd-btn h-8 w-8 p-0 ${card.flagged ? 'text-[var(--e2)]' : ''}`}
+              {/* ADD CARDS TAB */}
+              {manageSubTab === 'add' && (
+                <div className="grid gap-5 lg:grid-cols-2">
+                  <form onSubmit={handleAddSingleCard} className="sd-card space-y-3 p-5">
+                    <h2 className="font-display text-lg font-bold text-[var(--ink)]">
+                      Add Single Card
+                    </h2>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className="block text-xs font-semibold text-[var(--mute)]">
+                        Topic
+                        <select
+                          value={newTopicId}
+                          onChange={(e) => setNewTopicId(e.target.value)}
+                          className="sd-input mt-1 text-xs"
                         >
-                          <Flag className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
+                          {subjectTopicsList.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                          <option value="__new__">+ New Topic…</option>
+                        </select>
+                      </label>
+                      <label className="block text-xs font-semibold text-[var(--mute)]">
+                        Section / Sub-deck
+                        <input
+                          type="text"
+                          value={newSec}
+                          onChange={(e) => setNewSec(e.target.value)}
+                          placeholder="e.g. Wall Street Crash"
+                          className="sd-input mt-1 text-xs"
+                        />
+                      </label>
+                    </div>
+                    {newTopicId === '__new__' && (
+                      <label className="block text-xs font-semibold text-[var(--mute)]">
+                        New Topic Name *
+                        <input
+                          type="text"
+                          required
+                          value={newTopicCustomName}
+                          onChange={(e) => setNewTopicCustomName(e.target.value)}
+                          placeholder="e.g. USA 1919–1941"
+                          className="sd-input mt-1 text-xs"
+                        />
+                      </label>
+                    )}
+                    <label className="block text-xs font-semibold text-[var(--mute)]">
+                      Question / Front *
+                      <input
+                        type="text"
+                        required
+                        value={newQ}
+                        onChange={(e) => setNewQ(e.target.value)}
+                        placeholder="Define osmosis"
+                        className="sd-input mt-1 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs font-semibold text-[var(--mute)]">
+                      Answer / Back *
+                      <textarea
+                        rows={3}
+                        required
+                        value={newA}
+                        onChange={(e) => setNewA(e.target.value)}
+                        placeholder="Net movement of water molecules..."
+                        className="sd-input mt-1 text-sm"
+                      />
+                    </label>
+                    <button type="submit" className="sd-btn-pri px-4 py-2 text-xs">
+                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Add Card</span>
+                    </button>
+                  </form>
+
+                  <form onSubmit={handleQuickBatchPaste} className="sd-card space-y-3 p-5">
+                    <h2 className="font-display text-lg font-bold text-[var(--ink)]">
+                      Quick Batch Add (Quizlet / Pipe / Tab)
+                    </h2>
+                    <p className="text-xs text-[var(--mute)]">
+                      Saves into your selected Topic &amp; Section on the left. Paste one card per line
+                      separated by <code>|</code>, <code>::</code>, or Tab.
+                    </p>
+                    <textarea
+                      rows={7}
+                      value={quickBatchRaw}
+                      onChange={(e) => setQuickBatchRaw(e.target.value)}
+                      placeholder={
+                        'Mitochondria | Site of aerobic respiration\nRibosome | Site of protein synthesis'
+                      }
+                      className="sd-input font-mono-num text-xs"
+                    />
+                    <button type="submit" className="sd-btn-pri px-4 py-2 text-xs">
+                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Add All Lines</span>
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* BROWSE & ORGANIZE TAB */}
+              {manageSubTab === 'browse' && (
+                <div className="space-y-4">
+                  {/* Filters, Sort & View Controls */}
+                  <div className="sd-card space-y-3 p-4">
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                      <select
+                        aria-label="Filter by subject"
+                        value={selectedSubjectId || 'ALL'}
+                        onChange={(e) => onSelectSubjectId(e.target.value)}
+                        className="sd-input py-1.5 text-xs font-semibold"
+                      >
+                        <option value="ALL">All Subjects ({workspace.flashcards.length})</option>
+                        {workspace.subjects.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        aria-label="Filter by topic"
+                        value={manageTopicFilter}
+                        onChange={(e) => {
+                          setManageTopicFilter(e.target.value);
+                          setManageSectionFilter('ALL');
+                        }}
+                        className="sd-input py-1.5 text-xs font-semibold"
+                      >
+                        <option value="ALL">All Topics</option>
+                        {subjectTopicsList.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                          </option>
+                        ))}
+                        <option value="__unassigned__">General / Unassigned</option>
+                      </select>
+
+                      <select
+                        aria-label="Filter by section"
+                        value={manageSectionFilter}
+                        onChange={(e) => setManageSectionFilter(e.target.value)}
+                        className="sd-input py-1.5 text-xs"
+                      >
+                        <option value="ALL">All Sections ({manageAvailableSections.length})</option>
+                        {manageAvailableSections.map((sec) => (
+                          <option key={sec} value={sec}>
+                            {sec}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        aria-label="Filter by card status"
+                        value={manageFilter}
+                        onChange={(e) =>
+                          setManageFilter(
+                            e.target.value as 'all' | 'due' | 'weak' | 'mid' | 'flagged' | 'mastered'
+                          )
+                        }
+                        className="sd-input py-1.5 text-xs"
+                      >
+                        <option value="all">All Statuses</option>
+                        <option value="due">Due Now</option>
+                        <option value="weak">Learning (Box 1–2)</option>
+                        <option value="mid">Reviewing (Box 3)</option>
+                        <option value="mastered">Mastered (Box 4–5)</option>
+                        <option value="flagged">Flagged Only</option>
+                      </select>
+
+                      <select
+                        aria-label="Sort cards"
+                        value={manageSort}
+                        onChange={(e) =>
+                          setManageSort(
+                            e.target.value as 'orig' | 'box-asc' | 'box-desc' | 'due' | 'az'
+                          )
+                        }
+                        className="sd-input py-1.5 text-xs"
+                      >
+                        <option value="orig">Sort: Topic &amp; Section</option>
+                        <option value="box-asc">Sort: Weakest first (Box ↑)</option>
+                        <option value="box-desc">Sort: Strongest first (Box ↓)</option>
+                        <option value="due">Sort: Due soonest</option>
+                        <option value="az">Sort: A → Z</option>
+                      </select>
+
+                      <div className="relative">
+                        <Search
+                          className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                          aria-hidden="true"
+                        />
+                        <input
+                          type="text"
+                          value={manageSearch}
+                          onChange={(e) => setManageSearch(e.target.value)}
+                          placeholder="Search cards…"
+                          className="sd-input py-1.5 pl-8 text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-2.5 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() => {
-                            setEditModalCardId(card.id);
-                            setEditQ(card.q);
-                            setEditA(card.a);
-                            setEditTopicId(card.topicId);
-                            setEditSectionName(card.sectionName);
+                            if (allVisibleSelected) {
+                              setSelectedManageIds(new Set());
+                            } else {
+                              setSelectedManageIds(new Set(manageFilteredCards.map((c) => c.id)));
+                            }
                           }}
-                          aria-label="Edit card"
-                          className="sd-btn h-8 w-8 p-0"
+                          className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
                         >
-                          <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                          {allVisibleSelected ? 'Clear Selection' : `Select All (${manageFilteredCards.length})`}
                         </button>
+                        {activeSelCount > 0 && !allVisibleSelected && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedManageIds(new Set())}
+                            className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:text-[var(--ink)]"
+                          >
+                            Deselect ({activeSelCount})
+                          </button>
+                        )}
+                        <span className="font-mono-num text-[var(--mute)]">
+                          Showing {manageFilteredCards.length} of {subjectCards.length}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {manageLayout === 'grouped' && manageGroupedTree.length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setCollapsedManageGroups(new Set())}
+                              className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline"
+                            >
+                              Expand all
+                            </button>
+                            <span className="text-[var(--line)]">·</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const allKeys = new Set<string>();
+                                manageGroupedTree.forEach((tg) =>
+                                  tg.sectionList.forEach((sec) => allKeys.add(sec.key))
+                                );
+                                setCollapsedManageGroups(allKeys);
+                              }}
+                              className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:text-[var(--ink)]"
+                            >
+                              Collapse all
+                            </button>
+                          </>
+                        )}
+                        <div className="sd-seg" role="group" aria-label="Browser layout">
+                          <button
+                            type="button"
+                            aria-pressed={manageLayout === 'grouped'}
+                            onClick={() => setManageLayout('grouped')}
+                            className="sd-seg-btn px-2.5 py-0.5 text-xs"
+                          >
+                            Grouped
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={manageLayout === 'flat'}
+                            onClick={() => setManageLayout('flat')}
+                            className="sd-seg-btn px-2.5 py-0.5 text-xs"
+                          >
+                            Flat List
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Multi-Select / Split & Bulk Actions Toolbar */}
+                  {manageFilteredCards.length > 0 && (
+                    <div className="sd-card space-y-2.5 bg-[color-mix(in_srgb,var(--e3)_4%,var(--card))] p-3.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-[var(--ink)]">
+                          {activeSelCount > 0
+                            ? `${activeSelCount} selected card${activeSelCount === 1 ? '' : 's'}`
+                            : `Bulk action on all ${manageFilteredCards.length} matching card${manageFilteredCards.length === 1 ? '' : 's'}`}
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleBulkBoxUpdate('reset')}
+                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                          >
+                            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                            <span>Reset to Box 1</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBulkBoxUpdate('master')}
+                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                          >
+                            <CheckCircle2 className="h-3 w-3 text-[var(--ok)]" aria-hidden="true" />
+                            <span>Mark Mastered</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBulkBoxUpdate('flag')}
+                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                          >
+                            <Flag className="h-3 w-3 text-[var(--e2)]" aria-hidden="true" />
+                            <span>Flag</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBulkBoxUpdate('swap')}
+                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                          >
+                            <ArrowLeftRight className="h-3 w-3" aria-hidden="true" />
+                            <span>Swap Q↔A</span>
+                          </button>
+                          {activeSelCount > 0 && (
+                            confirmBulkDelete ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={handleBulkDeleteSelected}
+                                  className="sd-btn border-[var(--bad)] bg-[var(--bad)] px-2.5 py-1 text-[11px] text-white whitespace-nowrap"
+                                >
+                                  Confirm Delete ({activeSelCount})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmBulkDelete(false)}
+                                  className="sd-btn px-2 py-1 text-[11px]"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmBulkDelete(true)}
+                                className="sd-btn border-[var(--bad)] px-2.5 py-1 text-[11px] text-[var(--bad)] whitespace-nowrap"
+                              >
+                                <Trash2 className="h-3 w-3" aria-hidden="true" />
+                                <span>Delete ({activeSelCount})</span>
+                              </button>
+                            )
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2.5">
+                        <span className="font-semibold text-[var(--mute)]">
+                          Split / move into topic:
+                        </span>
+                        <select
+                          aria-label="Destination topic"
+                          value={moveTargetTopicId}
+                          onChange={(e) => setMoveTargetTopicId(e.target.value)}
+                          className="sd-input w-auto max-w-[200px] py-1 text-xs"
+                        >
+                          {subjectTopicsList.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                          <option value="__new__">+ New Topic…</option>
+                        </select>
+                        {moveTargetTopicId === '__new__' && (
+                          <input
+                            type="text"
+                            value={moveNewTopicName}
+                            onChange={(e) => setMoveNewTopicName(e.target.value)}
+                            placeholder="New topic name…"
+                            className="sd-input w-40 py-1 text-xs"
+                          />
+                        )}
+                        <input
+                          type="text"
+                          value={moveTargetSection}
+                          onChange={(e) => setMoveTargetSection(e.target.value)}
+                          placeholder="Section (optional)…"
+                          className="sd-input w-40 py-1 text-xs"
+                        />
                         <button
                           type="button"
-                          onClick={() => deleteCard(card.id)}
-                          aria-label="Delete card"
-                          className="sd-btn h-8 w-8 p-0 text-[var(--bad)]"
+                          disabled={moveTargetTopicId === '__new__' && !moveNewTopicName.trim()}
+                          onClick={handleMoveTargetCardsToTopic}
+                          className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
                         >
-                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          Move {activeSelCount > 0 ? activeSelCount : targetBulkCardIds.length} Card
+                          {targetBulkCardIds.length === 1 ? '' : 's'}
                         </button>
                       </div>
                     </div>
-                  );
-                })}
-                {manageFilteredCards.length === 0 && (
-                  <div className="p-6 text-center text-xs text-[var(--mute)]">
-                    No cards match this filter.
-                  </div>
-                )}
-              </div>
+                  )}
+
+                  {/* GROUPED TREE VIEW (Subject -> Topic -> Collapsible Sections) */}
+                  {manageFilteredCards.length === 0 ? (
+                    <div className="sd-card p-8 text-center text-xs text-[var(--mute)]">
+                      No cards match your current filter. Try clearing search or switching to + Add Cards.
+                    </div>
+                  ) : manageLayout === 'grouped' ? (
+                    <div className="space-y-4">
+                      {manageGroupedTree.map((tg) => (
+                        <div key={tg.topicId} className="sd-card overflow-hidden">
+                          {/* Topic Group Header */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-5 py-3">
+                            <div className="flex items-center gap-2.5">
+                              <span
+                                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                style={{ backgroundColor: tg.color }}
+                                aria-hidden="true"
+                              />
+                              <span className="font-display text-base font-bold text-[var(--ink)]">
+                                {tg.topicName}
+                              </span>
+                              <span className="font-mono-num text-xs text-[var(--mute)]">
+                                · {tg.subjectName} · {tg.totalCards} cards · {tg.dueCards} due
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Sections Inside Topic */}
+                          <div className="divide-y divide-[var(--line)]">
+                            {tg.sectionList.map((sec) => {
+                              const isCollapsed = collapsedManageGroups.has(sec.key);
+                              const secCardIds = sec.cards.map((c) => c.id);
+                              const secAllSelected =
+                                secCardIds.length > 0 &&
+                                secCardIds.every((id) => selectedManageIds.has(id));
+                              const masteredCnt = sec.cards.filter((c) => c.box >= 4).length;
+                              const masteryPct = Math.round(
+                                (masteredCnt / Math.max(1, sec.cards.length)) * 100
+                              );
+                              const isRenaming = renamingSectionKey === sec.key;
+
+                              return (
+                                <div key={sec.key}>
+                                  <div className="flex flex-wrap items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--bg)_45%,var(--card))] px-4 py-2.5">
+                                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setCollapsedManageGroups((prev) => {
+                                            const next = new Set(prev);
+                                            if (next.has(sec.key)) next.delete(sec.key);
+                                            else next.add(sec.key);
+                                            return next;
+                                          })
+                                        }
+                                        className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left"
+                                      >
+                                        {isCollapsed ? (
+                                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
+                                        ) : (
+                                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
+                                        )}
+                                        {!isRenaming && (
+                                          <span className="truncate text-sm font-bold text-[var(--ink)]">
+                                            {sec.sectionName}
+                                          </span>
+                                        )}
+                                      </button>
+
+                                      {isRenaming ? (
+                                        <form
+                                          onSubmit={(e) => {
+                                            e.preventDefault();
+                                            handleRenameSection(secCardIds, renameSectionDraft);
+                                          }}
+                                          className="flex items-center gap-1.5"
+                                        >
+                                          <input
+                                            type="text"
+                                            autoFocus
+                                            value={renameSectionDraft}
+                                            onChange={(e) => setRenameSectionDraft(e.target.value)}
+                                            className="sd-input w-48 py-1 text-xs font-bold"
+                                          />
+                                          <button type="submit" className="sd-btn-pri px-2.5 py-1 text-[11px]">
+                                            Save
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setRenamingSectionKey(null)}
+                                            className="sd-btn px-2 py-1 text-[11px]"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </form>
+                                      ) : (
+                                        <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
+                                          {sec.cards.length} cards · {masteryPct}% mastered
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => launchSession(sec.cards)}
+                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                      >
+                                        <Play className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                                        <span>Study</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (tg.topicId !== '__unassigned__') {
+                                            setNewTopicId(tg.topicId);
+                                          }
+                                          setNewSec(sec.sectionName);
+                                          setManageSubTab('add');
+                                        }}
+                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                      >
+                                        <Plus className="h-3 w-3" aria-hidden="true" />
+                                        <span>Add</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setRenamingSectionKey(sec.key);
+                                          setRenameSectionDraft(sec.sectionName);
+                                        }}
+                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                      >
+                                        Rename
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setSelectedManageIds((prev) => {
+                                            const next = new Set(prev);
+                                            if (secAllSelected) {
+                                              secCardIds.forEach((id) => next.delete(id));
+                                            } else {
+                                              secCardIds.forEach((id) => next.add(id));
+                                            }
+                                            return next;
+                                          })
+                                        }
+                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                      >
+                                        {secAllSelected ? 'Unselect' : 'Select'}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {!isCollapsed && (
+                                    <div className="divide-y divide-[var(--line)]">
+                                      {sec.cards.map((card) => renderManageCardRow(card, false))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* FLAT LIST VIEW */
+                    <div className="sd-card divide-y divide-[var(--line)] overflow-hidden">
+                      {manageFilteredCards.map((card) => renderManageCardRow(card, true))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* Inline Edit Card Modal (works during Play OR Manage without losing session state) */}

@@ -18,6 +18,8 @@ import {
   gradeBatchAnswers,
   gradeSingleAnswer,
 } from './server/quizEngine.ts';
+import { parseUserAiConfig, registerAiRoutes } from './server/aiRouter.ts';
+import { registerWebImportRoutes } from './server/webImport.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +54,9 @@ app.use(express.json({ limit: '4mb' }));
 
 // Initialize built-in SQLite database at startup
 getQuizDb();
+
+registerWebImportRoutes(app);
+registerAiRoutes(app);
 
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
@@ -158,6 +163,7 @@ app.post('/api/quiz/grade', async (req: Request, res: Response) => {
       question?: string;
       officialAnswer?: string;
       studentAnswer?: string;
+      byok?: unknown;
     };
     const question = String(body.question || '').trim();
     const officialAnswer = String(body.officialAnswer || '').trim();
@@ -166,7 +172,8 @@ app.post('/api/quiz/grade', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'question and officialAnswer are required.' });
       return;
     }
-    const outcome = await gradeSingleAnswer(question, officialAnswer, studentAnswer);
+    const userAiConfig = parseUserAiConfig(body.byok, req.headers);
+    const outcome = await gradeSingleAnswer(question, officialAnswer, studentAnswer, userAiConfig);
     res.json(outcome);
   } catch (err) {
     res.status(500).json({
@@ -184,6 +191,7 @@ app.post('/api/quiz/grade-batch', async (req: Request, res: Response) => {
         officialAnswer?: string;
         studentAnswer?: string;
       }>;
+      byok?: unknown;
     };
     const items = Array.isArray(body.items)
       ? body.items.map((it, idx) => ({
@@ -198,7 +206,8 @@ app.post('/api/quiz/grade-batch', async (req: Request, res: Response) => {
       res.json({ results: [] });
       return;
     }
-    const results = await gradeBatchAnswers(items);
+    const userAiConfig = parseUserAiConfig(body.byok, req.headers);
+    const results = await gradeBatchAnswers(items, userAiConfig);
     res.json({ results });
   } catch (err) {
     res.status(500).json({

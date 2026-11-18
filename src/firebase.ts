@@ -30,6 +30,17 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+export const GOOGLE_DOCS_SCOPES = [
+  'https://www.googleapis.com/auth/documents.readonly',
+  'https://www.googleapis.com/auth/drive.metadata.readonly',
+] as const;
+
+export const googleDocsProvider = new GoogleAuthProvider();
+for (const scope of GOOGLE_DOCS_SCOPES) {
+  googleDocsProvider.addScope(scope);
+}
+googleDocsProvider.setCustomParameters({ prompt: 'select_account' });
+
 async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));

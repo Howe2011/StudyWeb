@@ -1,4 +1,4 @@
-import { ChangeEvent, useMemo, useState } from 'react';
+import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BookOpen,
   Calendar,
@@ -6,30 +6,70 @@ import {
   Database,
   Download,
   FileText,
+  Globe,
+  Indent,
+  KeyRound,
   Layers,
+  Link2,
+  Loader2,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  Star,
+  Tag,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
+import { useByokConfig } from '../lib/byokStore';
 import {
   downloadFlashcardsCsvTemplate,
   downloadNotesMarkdownTemplate,
   downloadWorkspaceBackupTemplate,
 } from '../lib/backupTemplates';
-import { createEmptyStructuredNote } from '../lib/noteFormat';
+import {
+  clearGoogleDocsAccessToken,
+  fetchGoogleDocById,
+  getGoogleDocsAccessToken,
+  GoogleDocListItem,
+  initGoogleDocsAuth,
+  listGoogleDocsFiles,
+  signInWithGoogleDocs,
+} from '../lib/googleDocsImport';
+import {
+  AutoFormatOptions,
+  createEmptyStructuredNote,
+  makeNoteId,
+  NoteFormatPreset,
+} from '../lib/noteFormat';
+import { parsePdfFile } from '../lib/pdfImporter';
 import {
   parseBackupJsonToWorkspace,
   parseDocxFile,
   parseUniversalStudyImport,
+  QuizletDelimiterMode,
 } from '../lib/smartImporter';
 import { SUBJECT_COLOR_SWATCHES } from '../lib/subjectCatalog';
 import { makeId, mergeWorkspaces, normalizeWorkspace } from '../lib/workspaceStore';
-import { StudyFlashcard, StudySubject, StudyTopic, WorkspaceData } from '../types';
+import {
+  KeyTermPair,
+  NoteSectionBlock,
+  StudyFlashcard,
+  StudySubject,
+  StudyTopic,
+  TimelineEventItem,
+  WorkspaceData,
+} from '../types';
 
 interface UniversalImportModalProps {
   open: boolean;
   onClose: () => void;
   workspace: WorkspaceData;
   defaultSubjectId?: string;
+  onOpenApiKeySettings?: () => void;
   onApplyImport: (
     updater: (prev: WorkspaceData) => WorkspaceData,
     summaryMsg: string,
@@ -38,43 +78,151 @@ interface UniversalImportModalProps {
   ) => void;
 }
 
-const SAMPLE_SNIPPET = `# Osmosis & Active Transport
-Summary: How substances move across partially permeable cell membranes.
+type ImportSourceTab = 'paste' | 'quizlet' | 'web' | 'file' | 'gdocs';
+type PreviewEditorTab = 'notes' | 'timeline' | 'cards';
 
-## Key Processes
-- **Osmosis**: Net movement of water molecules from a region of higher water potential to lower water potential across a partially permeable membrane.
-- **Active Transport**: Movement of particles against a concentration gradient using ATP energy from respiration.
-- Diffusion is passive and requires no energy from respiration.
+interface EditableCardDraft {
+  id: string;
+  q: string;
+  a: string;
+  sectionName: string;
+}
 
-| Process | Gradient Direction | Requires ATP? |
+const SAMPLE_SNIPPET = `# Weimar Republic & Early Challenges (1918–1923)
+Summary: How Germany transitioned from imperial rule to a fragile democracy facing economic and political crises.
+
+## Political Collapse & Birth of Democracy
+- **November Revolution** caused Kaiser Wilhelm II to abdicate on 9 November 1918.
+  - Friedrich Ebert signed the Armistice on 11 November 1918, ending WWI fighting.
+- **Treaty of Versailles** refers to the 1919 peace settlement forcing Germany to pay £6.6 billion in reparations and lose 13% of its territory.
+- 1919 — Weimar Constitution adopted: Introduced proportional representation and Article 48 emergency powers.
+
+## Economic Crisis & Hyperinflation
+- Jan 1923 — French & Belgian troops invaded the Ruhr after Germany defaulted on reparations, triggering passive resistance.
+- By November 1923, hyperinflation made the German mark worthless — a loaf of bread cost 200 billion marks.
+
+| Crisis Event | Date | Impact on Weimar |
 | --- | --- | --- |
-| Diffusion | High to low | No |
-| Osmosis | High water potential to low | No |
-| Active Transport | Low to high | Yes |
+| Spartacist Uprising | Jan 1919 | Crushed by Freikorps; deepened left-wing distrust |
+| Kapp Putsch | Mar 1920 | General strike defeated right-wing coup attempt |
+| Munich Putsch | Nov 1923 | Hitler arrested; Nazis shifted to legal elections |
 
-Examiner Tip: Always state "water potential" rather than just "concentration of water" for full marks.
-Worked Example: Potato cylinders placed in 0.5 mol/dm3 sucrose solution lose mass because water moves out by osmosis.`;
+Examiner Tip: Always link the Treaty of Versailles ("Diktat") to why Germans blamed Weimar politicians ("November Criminals").`;
+
+const QUIZLET_SAMPLE = `Mitochondria\tSite of aerobic respiration where ATP is produced
+Ribosome\tSite of protein synthesis (translation) in cytoplasm or rough ER
+Osmosis\tNet movement of water molecules from high to low water potential through a partially permeable membrane
+Active Transport\tMovement of substances against a concentration gradient using energy from respiration (ATP)
+Enzyme\tBiological catalyst made of protein that lowers activation energy without being used up`;
+
+const GIZMO_CLOZE_SAMPLE = `- In photosynthesis, {{chlorophyll}} absorbs light energy inside the {{chloroplasts}}.
+- The balanced symbol equation for aerobic respiration is {{C6H12O6 + 6O2 -> 6CO2 + 6H2O}}.
+- During {{mitosis}}, one parent cell divides to produce {{two genetically identical}} daughter cells.
+- The {{Treaty of Versailles}} forced Germany to pay {{£6.6 billion}} in reparations in 1919.`;
+
+const FORMAT_PRESETS: Array<{ id: NoteFormatPreset; label: string; hint: string }> = [
+  {
+    id: 'save-my-exams',
+    label: 'Save My Exams',
+    hint: 'Exam headings, clean bullets, bold terms, tips & tables',
+  },
+  {
+    id: 'cornell',
+    label: 'Cornell',
+    hint: 'Top key summary + structured detail hierarchy & cues',
+  },
+  {
+    id: 'timeline-causal',
+    label: 'Timeline & Causal',
+    hint: 'Chronological dates, causes/effects & turning points',
+  },
+  {
+    id: 'compact',
+    label: 'Compact',
+    hint: 'Condensed high-yield bullet points for fast revision',
+  },
+];
+
+const QUIZLET_DELIMITERS: Array<{ id: QuizletDelimiterMode; label: string }> = [
+  { id: 'auto', label: 'Auto-detect (Tab, Blank-line, ::, |, Cloze)' },
+  { id: 'tab', label: 'Tab-separated (Quizlet Export)' },
+  { id: 'blank-line', label: 'Blank-line pairs (Copied Quizlet cards)' },
+  { id: 'alternating', label: 'Alternating lines (Line 1 Term ↵ Line 2 Def)' },
+  { id: 'cloze', label: 'Gizmo Cloze ({{answer}} / ==answer==)' },
+  { id: 'semicolon', label: 'Semicolon (;)' },
+  { id: 'pipe', label: 'Pipe (|)' },
+];
 
 export function UniversalImportModal({
   open,
   onClose,
   workspace,
   defaultSubjectId,
+  onOpenApiKeySettings,
   onApplyImport,
 }: UniversalImportModalProps) {
+  const byokConfig = useByokConfig();
+  const [sourceTab, setSourceTab] = useState<ImportSourceTab>('paste');
   const [rawText, setRawText] = useState('');
   const [sourceLabel, setSourceLabel] = useState('Pasted Notes');
   const [legacyHtml, setLegacyHtml] = useState<string | undefined>(undefined);
+  const [preExtractedCards, setPreExtractedCards] = useState<
+    Array<{ q: string; a: string; sectionName: string }> | undefined
+  >(undefined);
+
+  // Autoformatter & Quizlet/Gizmo options
+  const [formatOptions, setFormatOptions] = useState<AutoFormatOptions>({
+    preset: 'save-my-exams',
+    extractKeyTerms: true,
+    detectFlowDiagrams: true,
+    autoTables: true,
+    splitDenseParagraphs: true,
+    strictHeadings: false,
+  });
+  const [deckDelimiter, setDeckDelimiter] = useState<QuizletDelimiterMode>('auto');
+
   const [targetSubjectId, setTargetSubjectId] = useState<string>(
     defaultSubjectId || workspace.subjects[0]?.id || '__new__'
   );
   const [newSubjectName, setNewSubjectName] = useState('');
   const [topicNameOverride, setTopicNameOverride] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
+
   const [includeNotes, setIncludeNotes] = useState(true);
   const [includeCards, setIncludeCards] = useState(false);
+  const [includeTimeline, setIncludeTimeline] = useState(false);
+  const [previewTab, setPreviewTab] = useState<PreviewEditorTab>('notes');
+
+  // Editable Pre-Save Drafts (hydrated from parsed structure + entities)
+  const [draftSummary, setDraftSummary] = useState('');
+  const [draftSections, setDraftSections] = useState<NoteSectionBlock[]>([]);
+  const [draftKeyTerms, setDraftKeyTerms] = useState<KeyTermPair[]>([]);
+  const [draftExamTip, setDraftExamTip] = useState('');
+  const [draftWorkedExample, setDraftWorkedExample] = useState('');
+  const [draftCards, setDraftCards] = useState<EditableCardDraft[]>([]);
+  const [draftTimeline, setDraftTimeline] = useState<TimelineEventItem[]>([]);
+
   const [backupImportMode, setBackupImportMode] = useState<'merge' | 'replace'>('merge');
   const [readingFile, setReadingFile] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [statusNote, setStatusNote] = useState<string | null>(null);
+
+  // Web & Quizlet/Gizmo URL fetch state
+  const [webUrlInput, setWebUrlInput] = useState('');
+  const [quizletUrlInput, setQuizletUrlInput] = useState('');
+  const [fetchingUrl, setFetchingUrl] = useState(false);
+  const [aiFormatting, setAiFormatting] = useState(false);
+  const [aiFormattedApplied, setAiFormattedApplied] = useState(false);
+
+  // Google Docs state (in-memory token only)
+  const [hasGoogleToken, setHasGoogleToken] = useState<boolean>(() =>
+    Boolean(getGoogleDocsAccessToken())
+  );
+  const [gDocsLoading, setGDocsLoading] = useState(false);
+  const [gDocsList, setGDocsList] = useState<GoogleDocListItem[]>([]);
+  const [gDocsSearch, setGDocsSearch] = useState('');
+  const [gDocUrlInput, setGDocUrlInput] = useState('');
 
   const backupBundle = useMemo(() => {
     const t = rawText.trim();
@@ -82,25 +230,148 @@ export function UniversalImportModal({
     return parseBackupJsonToWorkspace(t);
   }, [rawText]);
 
-  const preview = useMemo(() => {
-    if (!rawText.trim() || backupBundle) return null;
-    return parseUniversalStudyImport(rawText, { sourceLabel, legacyHtml });
-  }, [rawText, sourceLabel, legacyHtml, backupBundle]);
+  const parsedPreview = useMemo(() => {
+    if (!rawText.trim() && !preExtractedCards?.length) return null;
+    if (backupBundle) return null;
+    return parseUniversalStudyImport(rawText, {
+      sourceLabel,
+      legacyHtml,
+      formatOptions,
+      deckDelimiter: sourceTab === 'quizlet' ? deckDelimiter : 'auto',
+      preExtractedCards,
+    });
+  }, [
+    rawText,
+    sourceLabel,
+    legacyHtml,
+    backupBundle,
+    formatOptions,
+    sourceTab,
+    deckDelimiter,
+    preExtractedCards,
+  ]);
+
+  // Keep Google Docs in-memory token synchronized with Firebase Auth sign-out
+  useEffect(() => {
+    const unsub = initGoogleDocsAuth(({ hasToken }) => {
+      setHasGoogleToken(hasToken);
+      if (!hasToken) {
+        setGDocsList([]);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const loadGoogleDocsFiles = useCallback(async (query = '') => {
+    setGDocsLoading(true);
+    setErrorMsg(null);
+    try {
+      const files = await listGoogleDocsFiles(query);
+      setGDocsList(files);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'AUTH_REQUIRED') {
+        setHasGoogleToken(false);
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : 'Could not list Google Docs.');
+      }
+    } finally {
+      setGDocsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open && sourceTab === 'gdocs' && hasGoogleToken && gDocsList.length === 0) {
+      void loadGoogleDocsFiles('');
+    }
+  }, [open, sourceTab, hasGoogleToken, gDocsList.length, loadGoogleDocsFiles]);
+
+  // Hydrate editable Pre-Save Preview drafts whenever parsedPreview changes
+  useEffect(() => {
+    if (!parsedPreview) {
+      setDraftSummary('');
+      setDraftSections([]);
+      setDraftKeyTerms([]);
+      setDraftExamTip('');
+      setDraftWorkedExample('');
+      setDraftCards([]);
+      setDraftTimeline([]);
+      return;
+    }
+
+    setDraftSummary(parsedPreview.note.summary || '');
+    setDraftSections(
+      parsedPreview.note.sections.map((s) => ({
+        id: s.id,
+        heading: s.heading,
+        points: [...s.points],
+      }))
+    );
+    setDraftKeyTerms(parsedPreview.note.keyTerms.map((k) => ({ ...k })));
+    setDraftExamTip(parsedPreview.note.examTip || '');
+    setDraftWorkedExample(parsedPreview.note.workedExample || '');
+    setDraftCards(
+      parsedPreview.cards.map((c) => ({
+        id: makeNoteId('fc'),
+        q: c.q,
+        a: c.a,
+        sectionName: c.sectionName,
+      }))
+    );
+    setDraftTimeline(parsedPreview.timelineEvents.map((ev) => ({ ...ev })));
+    setAiFormattedApplied(false);
+
+    const selectedSubj = workspace.subjects.find((s) => s.id === targetSubjectId);
+    const looksLikeHistory =
+      Boolean(selectedSubj?.hasTimeline) ||
+      /history/i.test(selectedSubj?.name || newSubjectName) ||
+      parsedPreview.timelineEvents.length >= 2;
+
+    if (parsedPreview.mode === 'flashcards-only') {
+      setIncludeNotes(false);
+      setIncludeCards(true);
+      setIncludeTimeline(false);
+      setPreviewTab('cards');
+    } else {
+      setIncludeNotes(true);
+      // Keep Make Flashcards user-triggered by default for notes
+      setIncludeCards(false);
+      setIncludeTimeline(parsedPreview.timelineEvents.length > 0 && looksLikeHistory);
+      setPreviewTab('notes');
+    }
+  }, [parsedPreview, targetSubjectId, newSubjectName, workspace.subjects]);
 
   if (!open) return null;
 
   const effectiveTopicName =
-    topicNameOverride.trim() || preview?.suggestedTitle || 'Imported Study Topic';
+    topicNameOverride.trim() || parsedPreview?.suggestedTitle || 'Imported Study Topic';
 
-  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+  const parsedTags = tagsInput
+    .split(/[,;]/)
+    .map((t) => t.trim().replace(/^#/, ''))
+    .filter(Boolean);
+
+  const ingestFile = async (file: File) => {
     setErrorMsg(null);
+    setStatusNote(null);
+    setPreExtractedCards(undefined);
     setReadingFile(true);
     try {
       setSourceLabel(file.name);
-      if (/\.docx$/i.test(file.name)) {
+      const lower = file.name.toLowerCase();
+
+      if (lower.endsWith('.pdf')) {
+        if (!topicNameOverride.trim()) {
+          setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
+        }
+        const ab = await file.arrayBuffer();
+        const res = await parsePdfFile(ab);
+        if (!res.text.trim()) {
+          throw new Error('No selectable text found in this PDF (scanned image PDFs need OCR first).');
+        }
+        setLegacyHtml(undefined);
+        setRawText(res.text);
+        setStatusNote(`Parsed ${res.pageCount} PDF page${res.pageCount === 1 ? '' : 's'} cleanly.`);
+      } else if (lower.endsWith('.docx')) {
         if (!topicNameOverride.trim()) {
           setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
         }
@@ -108,18 +379,135 @@ export function UniversalImportModal({
         const res = await parseDocxFile(ab);
         setLegacyHtml(res.html);
         setRawText(res.text);
+        setStatusNote('Parsed Word (.docx) headings, bold terms, nested bullets, and tables.');
       } else {
         const text = await file.text();
         setLegacyHtml(undefined);
-        if (!/\.json$/i.test(file.name) && !topicNameOverride.trim()) {
+        if (!lower.endsWith('.json') && !topicNameOverride.trim()) {
           setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
         }
         setRawText(text);
+        setStatusNote(`Loaded ${file.name}.`);
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Could not read the selected file.');
     } finally {
       setReadingFile(false);
+    }
+  };
+
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    await ingestFile(file);
+  };
+
+  const handleDropFile = async (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragActive(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      await ingestFile(file);
+    }
+  };
+
+  const handleFetchFromUrl = async (targetUrl: string, mode: 'quizlet' | 'web') => {
+    const cleaned = targetUrl.trim();
+    if (!cleaned) return;
+
+    setErrorMsg(null);
+    setStatusNote(null);
+    setFetchingUrl(true);
+
+    try {
+      const normalized = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`;
+      const res = await fetch('/api/import/url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: normalized }),
+      });
+
+      const data = (await res.json()) as {
+        url?: string;
+        domain?: string;
+        kind?: 'notes' | 'flashcards';
+        title?: string;
+        markdown?: string;
+        cards?: Array<{ q: string; a: string; sectionName: string }>;
+        error?: string;
+        blocked?: boolean;
+      };
+
+      if (!res.ok) {
+        throw new Error(data.error || `Could not fetch ${normalized} (HTTP ${res.status}).`);
+      }
+
+      const pageTitle = (data.title || data.domain || 'Web Import').trim();
+      setTopicNameOverride(pageTitle);
+      setLegacyHtml(undefined);
+
+      if (data.kind === 'flashcards' && Array.isArray(data.cards) && data.cards.length > 0) {
+        setPreExtractedCards(data.cards);
+        setSourceLabel(`${data.domain || 'Deck'} · ${pageTitle}`);
+        setRawText(
+          data.markdown || data.cards.map((c) => `${c.q}\t${c.a}`).join('\n')
+        );
+        setStatusNote(`Extracted ${data.cards.length} flashcards from "${pageTitle}".`);
+      } else {
+        setPreExtractedCards(undefined);
+        setSourceLabel(`${data.domain || 'Web'} · ${pageTitle}`);
+        setRawText(data.markdown || '');
+        setStatusNote(
+          mode === 'quizlet'
+            ? `Fetched page "${pageTitle}". Check cards or switch to paste mode if the deck is behind a login.`
+            : `Fetched and structured "${pageTitle}" from ${data.domain || 'the web'}.`
+        );
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch web page.');
+    } finally {
+      setFetchingUrl(false);
+    }
+  };
+
+  const handleGoogleDocsSignIn = async () => {
+    setErrorMsg(null);
+    setGDocsLoading(true);
+    try {
+      await signInWithGoogleDocs();
+      setHasGoogleToken(true);
+      await loadGoogleDocsFiles(gDocsSearch);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Google sign-in failed.');
+    } finally {
+      setGDocsLoading(false);
+    }
+  };
+
+  const handleImportGoogleDoc = async (docIdOrUrl: string, knownTitle?: string) => {
+    setErrorMsg(null);
+    setStatusNote(null);
+    setPreExtractedCards(undefined);
+    setGDocsLoading(true);
+    try {
+      const res = await fetchGoogleDocById(docIdOrUrl);
+      const docTitle = knownTitle || res.title || 'Google Doc';
+      setSourceLabel(`Google Doc · ${docTitle}`);
+      setTopicNameOverride(docTitle);
+      setLegacyHtml(undefined);
+      setRawText(res.markdown);
+      setStatusNote(`Loaded "${docTitle}" from Google Docs.`);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'AUTH_REQUIRED') {
+        clearGoogleDocsAccessToken();
+        setHasGoogleToken(false);
+        setErrorMsg('Please sign in with Google to grant Google Docs read access.');
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : 'Could not import Google Doc.');
+      }
+    } finally {
+      setGDocsLoading(false);
     }
   };
 
@@ -149,7 +537,9 @@ export function UniversalImportModal({
     );
 
     setRawText('');
+    setPreExtractedCards(undefined);
     setTopicNameOverride('');
+    setTagsInput('');
     setLegacyHtml(undefined);
     setIncludeCards(false);
     onClose();
@@ -161,8 +551,10 @@ export function UniversalImportModal({
       return;
     }
 
-    if (!preview) {
-      setErrorMsg('Paste study text, Quizlet/CSV cards, JSON backup, or upload a file first.');
+    if (!parsedPreview) {
+      setErrorMsg(
+        'Paste study notes, import a Quizlet/Gizmo deck, fetch a Web URL, upload PDF/DOCX/Markdown, or choose a Google Doc first.'
+      );
       return;
     }
     if (targetSubjectId === '__new__' && !newSubjectName.trim()) {
@@ -173,6 +565,43 @@ export function UniversalImportModal({
     let resolvedSubjId = '';
     let resolvedTopicId = '';
     const finalTopicName = effectiveTopicName;
+
+    const cleanSections = draftSections
+      .map((s) => ({
+        ...s,
+        heading: s.heading.trim() || 'Key Points',
+        points: s.points.map((p) => p.trimEnd()).filter((p) => p.trim().length > 0),
+      }))
+      .filter((s) => s.points.length > 0 || s.heading !== 'Key Points');
+
+    const builtNote = {
+      summary: draftSummary.trim(),
+      sections: cleanSections.length
+        ? cleanSections
+        : [{ id: makeNoteId('sec'), heading: 'Key Points', points: [] }],
+      keyTerms: draftKeyTerms.filter((k) => k.term.trim() && k.definition.trim()),
+      examTip: draftExamTip.trim(),
+      workedExample: draftWorkedExample.trim(),
+      legacyHtml: parsedPreview.legacyHtml,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const validTimeline = includeTimeline
+      ? draftTimeline
+          .map((ev) => ({
+            ...ev,
+            date: ev.date.trim() || 'Undated',
+            title: ev.title.trim(),
+            detail: ev.detail.trim(),
+            significance: ev.significance?.trim() || undefined,
+            era: ev.era?.trim() || undefined,
+          }))
+          .filter((ev) => ev.title)
+      : [];
+
+    const validCards = includeCards
+      ? draftCards.filter((c) => c.q.trim() && c.a.trim())
+      : [];
 
     onApplyImport(
       (prev) => {
@@ -192,14 +621,20 @@ export function UniversalImportModal({
             color: SUBJECT_COLOR_SWATCHES[nextSubjects.length % SUBJECT_COLOR_SWATCHES.length],
             examDate: '',
             weight: 2,
+            hasTimeline:
+              validTimeline.length > 0 || /history/i.test(newSubjectName.trim()),
             createdAt: new Date().toISOString(),
           };
           nextSubjects.push(subj);
+        } else if (validTimeline.length > 0 && !subj.hasTimeline) {
+          const sIdx = nextSubjects.findIndex((s) => s.id === subj!.id);
+          nextSubjects[sIdx] = { ...subj, hasTimeline: true };
+          subj = nextSubjects[sIdx];
         }
         resolvedSubjId = subj.id;
 
         const nextTopics = [...prev.topics];
-        let topic = nextTopics.find(
+        const topic = nextTopics.find(
           (t) =>
             t.subjectId === subj!.id &&
             t.name.toLowerCase() === finalTopicName.toLowerCase()
@@ -207,45 +642,62 @@ export function UniversalImportModal({
 
         if (topic) {
           resolvedTopicId = topic.id;
-          if (includeNotes) {
-            const mergedNote = {
-              ...topic.notes,
-              summary: topic.notes.summary || preview.note.summary,
-              sections: [...topic.notes.sections, ...preview.note.sections],
-              keyTerms: [...topic.notes.keyTerms, ...preview.note.keyTerms],
-              examTip: topic.notes.examTip || preview.note.examTip,
-              workedExample: topic.notes.workedExample || preview.note.workedExample,
-              legacyHtml: topic.notes.legacyHtml || preview.legacyHtml,
-              updatedAt: new Date().toISOString(),
-            };
-            const idx = nextTopics.findIndex((t) => t.id === topic!.id);
-            nextTopics[idx] = { ...topic, notes: mergedNote };
-          }
+          const mergedTags = Array.from(
+            new Set([...(topic.tags || []), ...parsedTags])
+          );
+          const mergedNote = includeNotes
+            ? {
+                ...topic.notes,
+                summary: topic.notes.summary || builtNote.summary,
+                sections: [...topic.notes.sections, ...builtNote.sections],
+                keyTerms: [...topic.notes.keyTerms, ...builtNote.keyTerms],
+                examTip: topic.notes.examTip || builtNote.examTip,
+                workedExample: topic.notes.workedExample || builtNote.workedExample,
+                legacyHtml: topic.notes.legacyHtml || builtNote.legacyHtml,
+                updatedAt: new Date().toISOString(),
+              }
+            : topic.notes;
+
+          const existingTimeline = topic.timelineEvents || [];
+          const mergedTimeline =
+            validTimeline.length > 0
+              ? [...existingTimeline, ...validTimeline]
+              : existingTimeline;
+
+          const idx = nextTopics.findIndex((t) => t.id === topic.id);
+          nextTopics[idx] = {
+            ...topic,
+            tags: mergedTags.length ? mergedTags : topic.tags,
+            notes: mergedNote,
+            timelineEvents: mergedTimeline.length ? mergedTimeline : topic.timelineEvents,
+          };
         } else {
           resolvedTopicId = makeId('top');
           const createdTopic: StudyTopic = {
             id: resolvedTopicId,
             subjectId: subj.id,
             name: finalTopicName,
+            tags: parsedTags.length ? parsedTags : undefined,
             completed: false,
             notes: includeNotes
-              ? preview.note
+              ? builtNote
               : createEmptyStructuredNote(
-                  `Flashcard deck imported from ${preview.sourceLabel}.`
+                  `Flashcard deck imported from ${parsedPreview.sourceLabel}.`
                 ),
+            timelineEvents: validTimeline.length ? validTimeline : undefined,
             createdAt: new Date().toISOString(),
           };
           nextTopics.push(createdTopic);
         }
 
         const nextCards = [...prev.flashcards];
-        if (includeCards && preview.cards.length > 0) {
+        if (validCards.length > 0) {
           const existingQ = new Set(
             nextCards
               .filter((c) => c.subjectId === subj!.id)
               .map((c) => c.q.trim().toLowerCase())
           );
-          for (const c of preview.cards) {
+          for (const c of validCards) {
             if (!c.q.trim() || !c.a.trim() || existingQ.has(c.q.trim().toLowerCase())) continue;
             existingQ.add(c.q.trim().toLowerCase());
             const fc: StudyFlashcard = {
@@ -275,17 +727,212 @@ export function UniversalImportModal({
           updatedAt: new Date().toISOString(),
         };
       },
-      `Imported "${finalTopicName}"${includeCards ? ` with ${preview.cards.length} flashcards` : ' (notes only — click Make Flashcards anytime inside Notes)'}.`,
+      `Imported "${finalTopicName}"${validTimeline.length ? ` · ${validTimeline.length} timeline nodes` : ''}${validCards.length ? ` · ${validCards.length} flashcards` : ''}.`,
       resolvedSubjId || targetSubjectId,
       resolvedTopicId
     );
 
     setRawText('');
+    setPreExtractedCards(undefined);
     setTopicNameOverride('');
+    setTagsInput('');
     setLegacyHtml(undefined);
     setIncludeCards(false);
+    setIncludeTimeline(false);
     onClose();
   };
+
+  const convertTimelineToCards = () => {
+    const existingQ = new Set(draftCards.map((c) => c.q.trim().toLowerCase()));
+    const additions: EditableCardDraft[] = [];
+    for (const ev of draftTimeline) {
+      if (!ev.title.trim()) continue;
+      const q = `When did ${ev.title.trim()} happen (and why was it significant)?`;
+      if (existingQ.has(q.toLowerCase())) continue;
+      existingQ.add(q.toLowerCase());
+      const a = [ev.date, ev.detail, ev.significance].filter(Boolean).join(' — ');
+      additions.push({
+        id: makeNoteId('fc'),
+        q,
+        a,
+        sectionName: ev.era || 'Timeline',
+      });
+    }
+    if (additions.length > 0) {
+      setDraftCards((prev) => [...prev, ...additions]);
+      setIncludeCards(true);
+      setPreviewTab('cards');
+    }
+  };
+
+  const handleAiAutoformat = async () => {
+    if (!byokConfig) {
+      setErrorMsg(
+        'AI Autoformat requires your own API key. Add one in Account & Data (the website key is strictly for Live Quiz marking).'
+      );
+      return;
+    }
+    if (!rawText.trim()) return;
+
+    setAiFormatting(true);
+    setErrorMsg(null);
+    setStatusNote(null);
+
+    try {
+      const selectedSubj = workspace.subjects.find((s) => s.id === targetSubjectId);
+      const wantsTimeline =
+        includeTimeline ||
+        Boolean(selectedSubj?.hasTimeline) ||
+        /history/i.test(selectedSubj?.name || newSubjectName) ||
+        (parsedPreview?.timelineEvents.length || 0) > 0;
+
+      const res = await fetch('/api/ai/autoformat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rawText,
+          preset: formatOptions.preset || 'save-my-exams',
+          includeCards,
+          includeTimeline: wantsTimeline,
+          detectFlowDiagrams: formatOptions.detectFlowDiagrams !== false,
+          autoTables: formatOptions.autoTables !== false,
+          byok: byokConfig,
+        }),
+      });
+
+      const data = (await res.json()) as {
+        formatted?: {
+          title?: string;
+          summary: string;
+          sections: Array<{ heading: string; points: string[] }>;
+          keyTerms: Array<{ term: string; definition: string }>;
+          examTip: string;
+          workedExample: string;
+          timelineEvents: Array<{
+            date: string;
+            title: string;
+            detail: string;
+            significance?: string;
+            era?: string;
+            keyEvent?: boolean;
+          }>;
+          cards: Array<{ q: string; a: string; sectionName: string }>;
+        };
+        usage?: {
+          model: string;
+          inputTokens: number;
+          outputTokens: number;
+          totalTokens: number;
+        };
+        error?: string;
+      };
+
+      if (!res.ok || !data.formatted) {
+        throw new Error(data.error || `AI Autoformat failed (HTTP ${res.status}).`);
+      }
+
+      const f = data.formatted;
+      if (f.title && !topicNameOverride.trim()) {
+        setTopicNameOverride(f.title);
+      }
+      setDraftSummary(f.summary || '');
+      setDraftSections(
+        f.sections.map((s) => ({
+          id: makeNoteId('sec'),
+          heading: s.heading,
+          points: [...s.points],
+        }))
+      );
+      setDraftKeyTerms(
+        f.keyTerms.map((k) => ({
+          id: makeNoteId('term'),
+          term: k.term,
+          definition: k.definition,
+        }))
+      );
+      setDraftExamTip(f.examTip || '');
+      setDraftWorkedExample(f.workedExample || '');
+
+      if (f.timelineEvents?.length) {
+        setDraftTimeline(
+          f.timelineEvents.map((ev) => ({
+            id: makeNoteId('ev'),
+            date: ev.date,
+            title: ev.title,
+            detail: ev.detail,
+            significance: ev.significance,
+            era: ev.era,
+            keyEvent: ev.keyEvent,
+          }))
+        );
+      }
+
+      if (f.cards?.length) {
+        setDraftCards(
+          f.cards.map((c) => ({
+            id: makeNoteId('fc'),
+            q: c.q,
+            a: c.a,
+            sectionName: c.sectionName,
+          }))
+        );
+      }
+
+      setAiFormattedApplied(true);
+      const u = data.usage;
+      setStatusNote(
+        u
+          ? `AI Autoformatted (${u.model} · ${u.inputTokens} in + ${u.outputTokens} out = ${u.totalTokens} tokens).`
+          : 'AI Autoformatted notes using your personal API key.'
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'AI Autoformat failed.');
+    } finally {
+      setAiFormatting(false);
+    }
+  };
+
+  const handleRevertInstantFormat = () => {
+    if (!parsedPreview) return;
+    setDraftSummary(parsedPreview.note.summary || '');
+    setDraftSections(
+      parsedPreview.note.sections.map((s) => ({
+        id: s.id,
+        heading: s.heading,
+        points: [...s.points],
+      }))
+    );
+    setDraftKeyTerms(parsedPreview.note.keyTerms.map((k) => ({ ...k })));
+    setDraftExamTip(parsedPreview.note.examTip || '');
+    setDraftWorkedExample(parsedPreview.note.workedExample || '');
+    setDraftCards(
+      parsedPreview.cards.map((c) => ({
+        id: makeNoteId('fc'),
+        q: c.q,
+        a: c.a,
+        sectionName: c.sectionName,
+      }))
+    );
+    setDraftTimeline(parsedPreview.timelineEvents.map((ev) => ({ ...ev })));
+    setAiFormattedApplied(false);
+    setStatusNote('Restored local instant autoformatted preview.');
+  };
+
+  const toggleFormatFlag = (
+    key:
+      | 'detectFlowDiagrams'
+      | 'autoTables'
+      | 'extractKeyTerms'
+      | 'splitDenseParagraphs'
+      | 'strictHeadings'
+  ) => {
+    setFormatOptions((prev) => ({
+      ...prev,
+      [key]: !(prev[key] ?? (key === 'strictHeadings' ? false : true)),
+    }));
+  };
+
+  const totalDraftPoints = draftSections.reduce((acc, s) => acc + s.points.length, 0);
 
   return (
     <div
@@ -297,18 +944,19 @@ export function UniversalImportModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="sd-card flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden">
+      <div className="sd-card flex max-h-[94dvh] w-full max-w-4xl flex-col overflow-hidden">
+        {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
           <div>
             <h2
               id="universal-import-title"
               className="font-display text-xl font-bold text-[var(--ink)]"
             >
-              Smart Study Importer
+              Note &amp; Study Importer
             </h2>
             <p className="mt-0.5 text-xs text-[var(--mute)]">
-              Import Word (.docx), full .json backups (notes + flashcards + timelines), Markdown,
-              Quizlet tabs, CSV, or pasted class text — instant offline formatting.
+              Ingest pasted notes, Quizlet &amp; Gizmo decks, revision webpages (Save My Exams, BBC
+              Bitesize), PDF/DOCX, or Google Docs — customize the autoformatter before saving.
             </p>
           </div>
           <button
@@ -321,89 +969,494 @@ export function UniversalImportModal({
           </button>
         </div>
 
+        {/* Body */}
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
           {errorMsg && (
             <div className="rounded-xl border border-[var(--bad)] bg-[var(--bg)] px-3.5 py-2.5 text-xs font-semibold text-[var(--bad)]">
               {errorMsg}
             </div>
           )}
+          {statusNote && !errorMsg && (
+            <div className="rounded-xl border border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_8%,var(--bg))] px-3.5 py-2 text-xs font-semibold text-[var(--ok)]">
+              {statusNote}
+            </div>
+          )}
 
-          {/* Step 1: Upload or Paste */}
+          {/* Source Switcher */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
-                1. Paste text / JSON or upload a file
-              </span>
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="sd-btn cursor-pointer px-3 py-1.5 text-xs whitespace-nowrap">
+              <div className="sd-seg flex-wrap" role="tablist" aria-label="Import source">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sourceTab === 'paste'}
+                  aria-pressed={sourceTab === 'paste'}
+                  onClick={() => setSourceTab('paste')}
+                  className="sd-seg-btn whitespace-nowrap"
+                >
+                  Paste Text
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sourceTab === 'quizlet'}
+                  aria-pressed={sourceTab === 'quizlet'}
+                  onClick={() => setSourceTab('quizlet')}
+                  className="sd-seg-btn whitespace-nowrap"
+                >
+                  Quizlet &amp; Gizmo
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sourceTab === 'web'}
+                  aria-pressed={sourceTab === 'web'}
+                  onClick={() => setSourceTab('web')}
+                  className="sd-seg-btn whitespace-nowrap"
+                >
+                  Web URL
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sourceTab === 'file'}
+                  aria-pressed={sourceTab === 'file'}
+                  onClick={() => setSourceTab('file')}
+                  className="sd-seg-btn whitespace-nowrap"
+                >
+                  Upload File
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={sourceTab === 'gdocs'}
+                  aria-pressed={sourceTab === 'gdocs'}
+                  onClick={() => setSourceTab('gdocs')}
+                  className="sd-seg-btn whitespace-nowrap"
+                >
+                  Google Docs
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSourceTab('paste');
+                  setSourceLabel('Sample History Notes');
+                  setLegacyHtml(undefined);
+                  setPreExtractedCards(undefined);
+                  setRawText(SAMPLE_SNIPPET);
+                  setTopicNameOverride('Weimar Republic & Early Challenges (1918–1923)');
+                  setTagsInput('History, Paper 1, Core');
+                  setErrorMsg(null);
+                  setStatusNote('Loaded structured lecture sample with dates and definitions.');
+                }}
+                className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+              >
+                Load Example
+              </button>
+            </div>
+
+            {/* Source 1: Paste Text */}
+            {sourceTab === 'paste' && (
+              <div className="space-y-2.5">
+                <textarea
+                  rows={6}
+                  value={rawText}
+                  onChange={(e) => {
+                    setRawText(e.target.value);
+                    setPreExtractedCards(undefined);
+                    setErrorMsg(null);
+                  }}
+                  placeholder={
+                    'Paste raw lecture notes, Markdown, Word text, Q:/A:, CSV, or a full .json backup:\n• # Headings, ## Subsections, - Bullets & indented sub-bullets\n• **Bolded terms**, Term: Definition, or "X refers to Y"\n• Dated events e.g. "1929 — Wall Street Crash: ..." for automatic History timelines'
+                  }
+                  className="sd-input font-mono-num text-xs leading-relaxed"
+                />
+                <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
+                  <span className="font-semibold">Download template:</span>
+                  <button
+                    type="button"
+                    onClick={downloadFlashcardsCsvTemplate}
+                    className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                  >
+                    <Download className="h-3 w-3" aria-hidden="true" />
+                    <span>Flashcards (.csv)</span>
+                  </button>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    onClick={downloadNotesMarkdownTemplate}
+                    className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                  >
+                    <Download className="h-3 w-3" aria-hidden="true" />
+                    <span>Notes (.md)</span>
+                  </button>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    onClick={downloadWorkspaceBackupTemplate}
+                    className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e2)] hover:underline whitespace-nowrap"
+                  >
+                    <Download className="h-3 w-3" aria-hidden="true" />
+                    <span>Full Backup (.json)</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Source 2: Quizlet & Gizmo (URL Fetch + Paste Export / Cloze) */}
+            {sourceTab === 'quizlet' && (
+              <div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-sm font-bold text-[var(--ink)]">
+                      <Layers className="h-4 w-4 text-[var(--ok)]" aria-hidden="true" />
+                      <span>Quizlet &amp; Gizmo Deck Importer</span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-[var(--mute)]">
+                      Fetch a public Quizlet/Gizmo set URL, or paste Quizlet Export text, copied
+                      term/definition pairs, or Gizmo <code className="font-mono-num">{'{{cloze}}'}</code>{' '}
+                      highlights below.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeckDelimiter('tab');
+                        setPreExtractedCards(undefined);
+                        setSourceLabel('Quizlet Biology Deck');
+                        setTopicNameOverride('Cell Biology & Transport');
+                        setRawText(QUIZLET_SAMPLE);
+                        setErrorMsg(null);
+                        setStatusNote('Loaded sample Quizlet tab-exported flashcard set.');
+                      }}
+                      className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                    >
+                      Quizlet Sample
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeckDelimiter('cloze');
+                        setPreExtractedCards(undefined);
+                        setSourceLabel('Gizmo Cloze Deck');
+                        setTopicNameOverride('Key Cloze Recall Cards');
+                        setRawText(GIZMO_CLOZE_SAMPLE);
+                        setErrorMsg(null);
+                        setStatusNote('Loaded sample Gizmo {{cloze}} flashcard deck.');
+                      }}
+                      className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                    >
+                      Gizmo Cloze Sample
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quizlet / Gizmo URL input */}
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="url"
+                    value={quizletUrlInput}
+                    onChange={(e) => setQuizletUrlInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && quizletUrlInput.trim()) {
+                        void handleFetchFromUrl(quizletUrlInput, 'quizlet');
+                      }
+                    }}
+                    placeholder="https://quizlet.com/... or https://gizmo.ai/..."
+                    className="sd-input min-w-[230px] flex-1 text-xs"
+                  />
+                  <button
+                    type="button"
+                    disabled={fetchingUrl || !quizletUrlInput.trim()}
+                    onClick={() => void handleFetchFromUrl(quizletUrlInput, 'quizlet')}
+                    className="sd-btn-pri px-3.5 py-2 text-xs whitespace-nowrap"
+                  >
+                    {fetchingUrl ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                    <span>{fetchingUrl ? 'Fetching Deck…' : 'Fetch Deck'}</span>
+                  </button>
+                </div>
+
+                {/* Format / Delimiter Selector */}
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <label className="font-semibold text-[var(--mute)]" htmlFor="quizlet-delim">
+                    Card Format:
+                  </label>
+                  <select
+                    id="quizlet-delim"
+                    value={deckDelimiter}
+                    onChange={(e) => {
+                      setDeckDelimiter(e.target.value as QuizletDelimiterMode);
+                      setPreExtractedCards(undefined);
+                    }}
+                    className="sd-input w-auto flex-1 py-1.5 text-xs font-semibold text-[var(--ink)]"
+                  >
+                    {QUIZLET_DELIMITERS.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <textarea
+                  rows={5}
+                  value={rawText}
+                  onChange={(e) => {
+                    setRawText(e.target.value);
+                    setSourceLabel('Quizlet / Gizmo Deck');
+                    setPreExtractedCards(undefined);
+                    setErrorMsg(null);
+                  }}
+                  placeholder={
+                    'Paste Quizlet Export (Tab/Semicolon) or copied Quizlet/Gizmo cards:\n• Term [Tab] Definition\n• Term (line 1) / Definition (line 2)\n• In Gizmo format: Germany paid {{£6.6 billion}} in 1919.'
+                  }
+                  className="sd-input font-mono-num text-xs leading-relaxed"
+                />
+              </div>
+            )}
+
+            {/* Source 3: Web URL Importer (Save My Exams, BBC Bitesize, Wikipedia, etc.) */}
+            {sourceTab === 'web' && (
+              <div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+                <div>
+                  <div className="flex items-center gap-1.5 text-sm font-bold text-[var(--ink)]">
+                    <Globe className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                    <span>Import Revision Webpage (Save My Exams, BBC Bitesize, Wikipedia…)</span>
+                  </div>
+                  <p className="mt-0.5 text-xs text-[var(--mute)]">
+                    Automatically strips site menus, banners, and sidebars — preserving revision
+                    headings, nested bullet lists, comparison tables, worked examples, and examiner
+                    tips.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="url"
+                    value={webUrlInput}
+                    onChange={(e) => setWebUrlInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && webUrlInput.trim()) {
+                        void handleFetchFromUrl(webUrlInput, 'web');
+                      }
+                    }}
+                    placeholder="https://www.savemyexams.com/... or https://www.bbc.co.uk/bitesize/..."
+                    className="sd-input min-w-[240px] flex-1 text-xs"
+                  />
+                  <button
+                    type="button"
+                    disabled={fetchingUrl || !webUrlInput.trim()}
+                    onClick={() => void handleFetchFromUrl(webUrlInput, 'web')}
+                    className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+                  >
+                    {fetchingUrl ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                    <span>{fetchingUrl ? 'Extracting Notes…' : 'Fetch & Format Notes'}</span>
+                  </button>
+                </div>
+
+                <div className="text-[11px] text-[var(--mute)]">
+                  Tip: If a webpage requires a paid login or blocks automated access, select &amp;
+                  copy the article text and paste it in the <strong className="text-[var(--ink)]">Paste Text</strong>{' '}
+                  tab — the autoformatter cleans navigation lines and rebuilds headings &amp; tables automatically.
+                </div>
+              </div>
+            )}
+
+            {/* Source 4: File Upload (PDF / DOCX / MD / TXT / CSV / JSON) */}
+            {sourceTab === 'file' && (
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragActive(true);
+                }}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={(e) => void handleDropFile(e)}
+                className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
+                  dragActive
+                    ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--bg))]'
+                    : 'border-[var(--line)] bg-[var(--bg)]'
+                }`}
+              >
+                {readingFile ? (
+                  <Loader2 className="h-6 w-6 animate-spin text-[var(--e3)]" aria-hidden="true" />
+                ) : (
+                  <Upload className="h-6 w-6 text-[var(--e3)]" aria-hidden="true" />
+                )}
+                <p className="mt-2 text-sm font-semibold text-[var(--ink)]">
+                  {readingFile
+                    ? 'Extracting headings, bullets, and entities…'
+                    : 'Drop a PDF, Word (.docx), Markdown (.md), CSV, or Backup (.json) file here'}
+                </p>
+                <p className="mt-1 text-xs text-[var(--mute)]">
+                  Preserves heading sizes, bold terms, nested bullet hierarchies, tables, and dates.
+                </p>
+                <label className="sd-btn-pri mt-3 cursor-pointer px-4 py-2 text-xs whitespace-nowrap">
                   <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>
-                    {readingFile ? 'Reading…' : 'Upload .docx / .json / .txt / .csv / .md'}
-                  </span>
+                  <span>Choose File</span>
                   <input
                     type="file"
-                    accept=".docx,.json,.txt,.md,.csv,application/json,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    accept=".pdf,.docx,.md,.txt,.csv,.json,application/pdf,application/json,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     onChange={(e) => void handleFileChange(e)}
                     className="hidden"
                   />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSourceLabel('Sample Biology Notes');
-                    setLegacyHtml(undefined);
-                    setRawText(SAMPLE_SNIPPET);
-                    if (!topicNameOverride) setTopicNameOverride('Osmosis & Active Transport');
-                  }}
-                  className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
-                >
-                  Load Example
-                </button>
               </div>
-            </div>
+            )}
 
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-xs">
-              <span className="font-semibold text-[var(--mute)]">Download template file:</span>
-              <button
-                type="button"
-                onClick={downloadFlashcardsCsvTemplate}
-                className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
-              >
-                <Download className="h-3 w-3" aria-hidden="true" />
-                <span>Flashcards (.csv)</span>
-              </button>
-              <span className="text-[var(--line)]">·</span>
-              <button
-                type="button"
-                onClick={downloadNotesMarkdownTemplate}
-                className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
-              >
-                <Download className="h-3 w-3" aria-hidden="true" />
-                <span>Notes (.md)</span>
-              </button>
-              <span className="text-[var(--line)]">·</span>
-              <button
-                type="button"
-                onClick={downloadWorkspaceBackupTemplate}
-                className="cursor-pointer inline-flex items-center gap-1 font-semibold text-[var(--e2)] hover:underline whitespace-nowrap"
-              >
-                <Download className="h-3 w-3" aria-hidden="true" />
-                <span>Full Backup (.json)</span>
-              </button>
-            </div>
+            {/* Source 5: Google Docs */}
+            {sourceTab === 'gdocs' && (
+              <div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+                {!hasGoogleToken ? (
+                  <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+                    <div>
+                      <div className="text-sm font-bold text-[var(--ink)]">
+                        Connect Google Docs
+                      </div>
+                      <p className="mt-0.5 text-xs text-[var(--mute)]">
+                        Browse your Google Docs and import headings, lists, bold formatting, and
+                        tables directly into structured notes.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={gDocsLoading}
+                      onClick={() => void handleGoogleDocsSignIn()}
+                      className="gsi-material-button shrink-0"
+                    >
+                      <div className="gsi-material-button-state" />
+                      <div className="gsi-material-button-content-wrapper">
+                        <div className="gsi-material-button-icon">
+                          <svg
+                            version="1.1"
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 48 48"
+                            style={{ display: 'block' }}
+                          >
+                            <path
+                              fill="#EA4335"
+                              d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                            />
+                            <path
+                              fill="#4285F4"
+                              d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                            />
+                            <path
+                              fill="#FBBC05"
+                              d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+                            />
+                            <path
+                              fill="#34A853"
+                              d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                            />
+                            <path fill="none" d="M0 0h48v48H0z" />
+                          </svg>
+                        </div>
+                        <span className="gsi-material-button-contents">Sign in with Google</span>
+                        <span style={{ display: 'none' }}>Sign in with Google</span>
+                      </div>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="relative min-w-[200px] flex-1">
+                        <Search
+                          className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                          aria-hidden="true"
+                        />
+                        <input
+                          type="text"
+                          value={gDocsSearch}
+                          onChange={(e) => setGDocsSearch(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void loadGoogleDocsFiles(gDocsSearch);
+                          }}
+                          placeholder="Search your Google Docs by title…"
+                          className="sd-input pl-8 text-xs"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={gDocsLoading}
+                        onClick={() => void loadGoogleDocsFiles(gDocsSearch)}
+                        className="sd-btn px-3 py-2 text-xs whitespace-nowrap"
+                      >
+                        <RefreshCw
+                          className={`h-3.5 w-3.5 ${gDocsLoading ? 'animate-spin' : ''}`}
+                          aria-hidden="true"
+                        />
+                        <span>Search</span>
+                      </button>
+                    </div>
 
-            <textarea
-              rows={7}
-              value={rawText}
-              onChange={(e) => {
-                setRawText(e.target.value);
-                setErrorMsg(null);
-              }}
-              placeholder={
-                'Paste anything here or upload a file:\n• Full StudyDeck / Revision-Site JSON backup (imports Notes + Flashcards + Timelines together)\n• Word (.docx) handouts — headings, bold terms, bullets, and tables auto-formatted\n• Markdown or plain class notes — headings, comparison tables | col | col |, **Term**: Definition\n• Quizlet Tab-separated or Q:/A: decks'
-              }
-              className="sd-input font-mono-num text-xs leading-relaxed"
-            />
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        type="text"
+                        value={gDocUrlInput}
+                        onChange={(e) => setGDocUrlInput(e.target.value)}
+                        placeholder="Or paste a Google Docs URL / ID (https://docs.google.com/document/d/…)"
+                        className="sd-input min-w-[240px] flex-1 text-xs"
+                      />
+                      <button
+                        type="button"
+                        disabled={gDocsLoading || !gDocUrlInput.trim()}
+                        onClick={() => void handleImportGoogleDoc(gDocUrlInput)}
+                        className="sd-btn-pri px-3 py-2 text-xs whitespace-nowrap"
+                      >
+                        <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Fetch Doc</span>
+                      </button>
+                    </div>
+
+                    {gDocsList.length > 0 ? (
+                      <div className="max-h-44 divide-y divide-[var(--line)] overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--card)]">
+                        {gDocsList.map((docItem) => (
+                          <div
+                            key={docItem.id}
+                            className="flex items-center justify-between gap-3 px-3 py-2 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate font-semibold text-[var(--ink)]">
+                                {docItem.name}
+                              </div>
+                              <div className="font-mono-num text-[11px] text-[var(--mute)]">
+                                Modified{' '}
+                                {docItem.modifiedTime ? docItem.modifiedTime.slice(0, 10) : 'Recently'}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={gDocsLoading}
+                              onClick={() => void handleImportGoogleDoc(docItem.id, docItem.name)}
+                              className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                            >
+                              Import
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-[var(--mute)]">
+                        {gDocsLoading
+                          ? 'Loading your Google Docs…'
+                          : 'No documents listed yet. Search above or paste a Google Docs link.'}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Full Backup Bundle Mode (.json file) */}
@@ -496,12 +1549,13 @@ export function UniversalImportModal({
             </div>
           )}
 
-          {/* Step 2: Single Topic / Doc Preview */}
-          {preview && (
+          {/* Step 2: Interactive Editable Pre-Save Preview */}
+          {parsedPreview && (
             <div className="space-y-4 border-t border-[var(--line)] pt-4">
-              <div className="grid gap-3 sm:grid-cols-2">
+              {/* Assignment & Tags Row */}
+              <div className="grid gap-3 sm:grid-cols-3">
                 <label className="block text-xs font-semibold text-[var(--mute)]">
-                  Target Subject
+                  Course / Subject
                   <select
                     value={targetSubjectId}
                     onChange={(e) => setTargetSubjectId(e.target.value)}
@@ -523,7 +1577,7 @@ export function UniversalImportModal({
                       type="text"
                       value={newSubjectName}
                       onChange={(e) => setNewSubjectName(e.target.value)}
-                      placeholder="e.g. Biology"
+                      placeholder="e.g. History"
                       className="sd-input mt-1 text-sm"
                     />
                   </label>
@@ -534,11 +1588,25 @@ export function UniversalImportModal({
                       type="text"
                       value={topicNameOverride}
                       onChange={(e) => setTopicNameOverride(e.target.value)}
-                      placeholder={preview.suggestedTitle}
+                      placeholder={parsedPreview.suggestedTitle}
                       className="sd-input mt-1 text-sm"
                     />
                   </label>
                 )}
+
+                <label className="block text-xs font-semibold text-[var(--mute)]">
+                  <span className="inline-flex items-center gap-1">
+                    <Tag className="h-3 w-3" aria-hidden="true" />
+                    Tags (comma-separated)
+                  </span>
+                  <input
+                    type="text"
+                    value={tagsInput}
+                    onChange={(e) => setTagsInput(e.target.value)}
+                    placeholder="e.g. Paper 1, Causes, Exam Core"
+                    className="sd-input mt-1 text-sm"
+                  />
+                </label>
               </div>
 
               {targetSubjectId === '__new__' && (
@@ -548,28 +1616,185 @@ export function UniversalImportModal({
                     type="text"
                     value={topicNameOverride}
                     onChange={(e) => setTopicNameOverride(e.target.value)}
-                    placeholder={preview.suggestedTitle}
+                    placeholder={parsedPreview.suggestedTitle}
                     className="sd-input mt-1 text-sm"
                   />
                 </label>
               )}
 
-              {/* Live Preview Box */}
+              {/* Autoformatter Style & Rules Bar */}
+              {parsedPreview.mode !== 'flashcards-only' && (
+                <div className="space-y-2.5 rounded-xl border border-[var(--line)] bg-[var(--card)] p-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--ink)]">
+                      <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                      <span>Autoformatter Style &amp; Structure Controls</span>
+                    </div>
+                    <div className="sd-seg flex-wrap" role="group" aria-label="Formatting preset">
+                      {FORMAT_PRESETS.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          title={p.hint}
+                          aria-pressed={formatOptions.preset === p.id}
+                          onClick={() =>
+                            setFormatOptions((prev) => ({ ...prev, preset: p.id }))
+                          }
+                          className="sd-seg-btn whitespace-nowrap"
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-2.5">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-[var(--ink)]">
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 font-medium">
+                        <input
+                          type="checkbox"
+                          checked={formatOptions.detectFlowDiagrams !== false}
+                          onChange={() => toggleFormatFlag('detectFlowDiagrams')}
+                          className="accent-[var(--e3)]"
+                        />
+                        <span>Flow Diagrams (→)</span>
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 font-medium">
+                        <input
+                          type="checkbox"
+                          checked={formatOptions.autoTables !== false}
+                          onChange={() => toggleFormatFlag('autoTables')}
+                          className="accent-[var(--e3)]"
+                        />
+                        <span>Auto-Tables</span>
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 font-medium">
+                        <input
+                          type="checkbox"
+                          checked={formatOptions.extractKeyTerms !== false}
+                          onChange={() => toggleFormatFlag('extractKeyTerms')}
+                          className="accent-[var(--e3)]"
+                        />
+                        <span>Extract Key Terms</span>
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 font-medium">
+                        <input
+                          type="checkbox"
+                          checked={formatOptions.splitDenseParagraphs !== false}
+                          onChange={() => toggleFormatFlag('splitDenseParagraphs')}
+                          className="accent-[var(--e3)]"
+                        />
+                        <span>Split Dense Prose</span>
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 font-medium">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(formatOptions.strictHeadings)}
+                          onChange={() => toggleFormatFlag('strictHeadings')}
+                          className="accent-[var(--e3)]"
+                        />
+                        <span>Strict # Headings</span>
+                      </label>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {aiFormattedApplied && (
+                        <button
+                          type="button"
+                          onClick={handleRevertInstantFormat}
+                          className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                          <span>Instant Format</span>
+                        </button>
+                      )}
+                      {byokConfig ? (
+                        <button
+                          type="button"
+                          disabled={aiFormatting}
+                          onClick={() => void handleAiAutoformat()}
+                          className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          {aiFormatting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                          )}
+                          <span>
+                            {aiFormatting
+                              ? 'AI Formatting…'
+                              : aiFormattedApplied
+                              ? 'Re-run AI Autoformat'
+                              : 'AI Autoformat (Your Key)'}
+                          </span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onOpenApiKeySettings) {
+                              onOpenApiKeySettings();
+                            } else {
+                              setErrorMsg(
+                                'Open Account & Data to paste your own Gemini or OpenAI-compatible API key.'
+                              );
+                            }
+                          }}
+                          className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          <KeyRound className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                          <span>Add Your API Key for AI Autoformat</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Pre-Save Split & Entity Preview Box */}
               <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
-                    Live Structured Preview
-                  </span>
-                  <div className="font-mono-num flex flex-wrap gap-3 text-xs text-[var(--mute)]">
-                    <span>{preview.note.sections.length} sections</span>
-                    <span>·</span>
-                    <span>{preview.note.keyTerms.length} key terms</span>
-                    <span>·</span>
-                    <span>{preview.cards.length} extractable cards</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-3">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
+                      Pre-Save Preview &amp; Cleanup
+                    </div>
+                    <div className="font-mono-num mt-0.5 text-xs text-[var(--mute)]">
+                      {draftSections.length} sections · {totalDraftPoints} points ·{' '}
+                      {parsedPreview.entityStats.tables} tables · {draftKeyTerms.length} terms ·{' '}
+                      {draftTimeline.length} timeline events · {draftCards.length} flashcards
+                    </div>
+                  </div>
+
+                  <div className="sd-seg" role="tablist" aria-label="Preview category">
+                    <button
+                      type="button"
+                      aria-pressed={previewTab === 'notes'}
+                      onClick={() => setPreviewTab('notes')}
+                      className="sd-seg-btn whitespace-nowrap"
+                    >
+                      Notes ({draftSections.length})
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={previewTab === 'timeline'}
+                      onClick={() => setPreviewTab('timeline')}
+                      className="sd-seg-btn whitespace-nowrap"
+                    >
+                      Timeline ({draftTimeline.length})
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={previewTab === 'cards'}
+                      onClick={() => setPreviewTab('cards')}
+                      className="sd-seg-btn whitespace-nowrap"
+                    >
+                      Flashcards ({draftCards.length})
+                    </button>
                   </div>
                 </div>
 
-                <div className="mt-3 flex flex-wrap items-center gap-4">
+                {/* Output Toggles */}
+                <div className="mt-3 flex flex-wrap items-center gap-3">
                   <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-[var(--ink)]">
                     <input
                       type="checkbox"
@@ -578,51 +1803,460 @@ export function UniversalImportModal({
                       className="accent-[var(--e3)]"
                     />
                     <BookOpen className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                    <span>Save cleanly formatted structured notes</span>
+                    <span>Save structured notes</span>
                   </label>
-                  {preview.cards.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setIncludeCards((v) => !v)}
-                      className={`cursor-pointer inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                        includeCards
-                          ? 'border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_12%,var(--card))] text-[var(--ok)]'
-                          : 'border-[var(--line)] bg-[var(--card)] text-[var(--ink)] hover:border-[var(--e3)]'
-                      }`}
-                    >
-                      <Layers className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>
-                        {includeCards
-                          ? `Make Flashcards Enabled (${preview.cards.length})`
-                          : `Make Flashcards (${preview.cards.length})`}
-                      </span>
-                    </button>
-                  )}
+
+                  <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-[var(--ink)]">
+                    <input
+                      type="checkbox"
+                      checked={includeTimeline}
+                      onChange={(e) => setIncludeTimeline(e.target.checked)}
+                      className="accent-[var(--e2)]"
+                    />
+                    <Calendar className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                    <span>Save timeline events ({draftTimeline.length})</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => setIncludeCards((v) => !v)}
+                    className={`cursor-pointer inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                      includeCards
+                        ? 'border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_12%,var(--card))] text-[var(--ok)]'
+                        : 'border-[var(--line)] bg-[var(--card)] text-[var(--ink)] hover:border-[var(--e3)]'
+                    }`}
+                  >
+                    <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>
+                      {includeCards
+                        ? `Make Flashcards Enabled (${draftCards.length})`
+                        : `Make Flashcards (${draftCards.length})`}
+                    </span>
+                  </button>
                 </div>
 
-                {preview.cards.length > 0 && (
-                  <div className="mt-3 space-y-1.5 border-t border-[var(--line)] pt-3">
-                    <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                      Sample Extracted Key Terms / Cards
+                {/* Preview Tab 1: Editable Structured Sections */}
+                {previewTab === 'notes' && (
+                  <div className="mt-4 space-y-3">
+                    <label className="block text-[11px] font-semibold text-[var(--mute)]">
+                      Topic Overview / Summary
+                      <textarea
+                        rows={2}
+                        value={draftSummary}
+                        onChange={(e) => setDraftSummary(e.target.value)}
+                        placeholder="Optional 1–2 sentence overview..."
+                        className="sd-input mt-1 text-xs"
+                      />
+                    </label>
+
+                    <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+                      {draftSections.map((sec, sIdx) => (
+                        <div
+                          key={sec.id}
+                          className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-3"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono-num text-xs font-bold text-[var(--e3)]">
+                              {String(sIdx + 1).padStart(2, '0')}.
+                            </span>
+                            <input
+                              type="text"
+                              value={sec.heading}
+                              onChange={(e) =>
+                                setDraftSections((prev) =>
+                                  prev.map((item, idx) =>
+                                    idx === sIdx ? { ...item, heading: e.target.value } : item
+                                  )
+                                )
+                              }
+                              className="sd-input flex-1 py-1 text-xs font-bold"
+                            />
+                            <button
+                              type="button"
+                              title="Remove section"
+                              aria-label={`Remove section ${sec.heading}`}
+                              onClick={() =>
+                                setDraftSections((prev) => prev.filter((_, idx) => idx !== sIdx))
+                              }
+                              className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+
+                          <div className="mt-2 space-y-1.5">
+                            {sec.points.map((pt, pIdx) => {
+                              const isSub = pt.startsWith('↳ ');
+                              return (
+                                <div key={pIdx} className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    title={isSub ? 'Outdent to main point' : 'Indent as sub-point'}
+                                    onClick={() =>
+                                      setDraftSections((prev) =>
+                                        prev.map((item, idx) =>
+                                          idx === sIdx
+                                            ? {
+                                                ...item,
+                                                points: item.points.map((x, j) =>
+                                                  j === pIdx
+                                                    ? x.startsWith('↳ ')
+                                                      ? x.slice(2)
+                                                      : `↳ ${x}`
+                                                    : x
+                                                ),
+                                              }
+                                            : item
+                                        )
+                                      )
+                                    }
+                                    className={`sd-btn h-7 w-7 shrink-0 p-0 ${
+                                      isSub ? 'border-[var(--e3)] text-[var(--e3)]' : 'text-[var(--mute)]'
+                                    }`}
+                                  >
+                                    <Indent className="h-3 w-3" aria-hidden="true" />
+                                  </button>
+                                  <input
+                                    type="text"
+                                    value={pt}
+                                    onChange={(e) =>
+                                      setDraftSections((prev) =>
+                                        prev.map((item, idx) =>
+                                          idx === sIdx
+                                            ? {
+                                                ...item,
+                                                points: item.points.map((x, j) =>
+                                                  j === pIdx ? e.target.value : x
+                                                ),
+                                              }
+                                            : item
+                                        )
+                                      )
+                                    }
+                                    className="sd-input flex-1 py-1 text-xs"
+                                  />
+                                  <button
+                                    type="button"
+                                    title="Delete point"
+                                    onClick={() =>
+                                      setDraftSections((prev) =>
+                                        prev.map((item, idx) =>
+                                          idx === sIdx
+                                            ? {
+                                                ...item,
+                                                points: item.points.filter((_, j) => j !== pIdx),
+                                              }
+                                            : item
+                                        )
+                                      )
+                                    }
+                                    className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                                  >
+                                    <X className="h-3 w-3" aria-hidden="true" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDraftSections((prev) =>
+                                  prev.map((item, idx) =>
+                                    idx === sIdx ? { ...item, points: [...item.points, ''] } : item
+                                  )
+                                )
+                              }
+                              className="cursor-pointer inline-flex items-center gap-1 pt-1 text-[11px] font-semibold text-[var(--e3)] hover:underline"
+                            >
+                              <Plus className="h-3 w-3" aria-hidden="true" />
+                              <span>Add point</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    {preview.cards.slice(0, 3).map((c, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-start justify-between gap-3 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-xs"
+
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDraftSections((prev) => [
+                            ...prev,
+                            { id: makeNoteId('sec'), heading: 'New Section', points: [''] },
+                          ])
+                        }
+                        className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                       >
-                        <span className="font-semibold text-[var(--ink)]">{c.q}</span>
-                        <span className="text-right text-[var(--mute)]">{c.a}</span>
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Add Section</span>
+                      </button>
+                    </div>
+
+                    {(draftExamTip || draftWorkedExample) && (
+                      <div className="grid gap-2.5 sm:grid-cols-2">
+                        <label className="block text-[11px] font-semibold text-[var(--mute)]">
+                          Examiner Tip
+                          <input
+                            type="text"
+                            value={draftExamTip}
+                            onChange={(e) => setDraftExamTip(e.target.value)}
+                            className="sd-input mt-1 text-xs"
+                          />
+                        </label>
+                        <label className="block text-[11px] font-semibold text-[var(--mute)]">
+                          Worked Example
+                          <input
+                            type="text"
+                            value={draftWorkedExample}
+                            onChange={(e) => setDraftWorkedExample(e.target.value)}
+                            className="sd-input mt-1 text-xs"
+                          />
+                        </label>
                       </div>
-                    ))}
+                    )}
                   </div>
                 )}
 
-                {preview.note.sections.length > 0 && (
-                  <div className="mt-3 flex items-center gap-2 text-xs text-[var(--mute)]">
-                    <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span className="truncate">
-                      Sections: {preview.note.sections.map((s) => s.heading).join(' · ')}
-                    </span>
+                {/* Preview Tab 2: Editable Extracted Timeline Events */}
+                {previewTab === 'timeline' && (
+                  <div className="mt-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-[var(--mute)]">
+                        Auto-detected dates and turning points from your notes. Edit or remove
+                        false positives before saving.
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {draftTimeline.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={convertTimelineToCards}
+                            className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                          >
+                            <Layers className="h-3 w-3 text-[var(--ok)]" aria-hidden="true" />
+                            <span>+ Make Cards from Dates</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIncludeTimeline(true);
+                            setDraftTimeline((prev) => [
+                              ...prev,
+                              { id: makeNoteId('ev'), date: '', title: '', detail: '' },
+                            ]);
+                          }}
+                          className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                        >
+                          <Plus className="h-3 w-3" aria-hidden="true" />
+                          <span>Add Event</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {draftTimeline.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-[var(--line)] bg-[var(--card)] p-4 text-center text-xs text-[var(--mute)]">
+                        No historical dates detected in this text. Click &ldquo;Add Event&rdquo; to
+                        add timeline nodes manually.
+                      </div>
+                    ) : (
+                      <div className="max-h-72 space-y-2.5 overflow-y-auto pr-1">
+                        {draftTimeline.map((ev, idx) => (
+                          <div
+                            key={ev.id}
+                            className="space-y-2 rounded-lg border border-[var(--line)] bg-[var(--card)] p-3"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <input
+                                type="text"
+                                value={ev.date}
+                                onChange={(e) =>
+                                  setDraftTimeline((prev) =>
+                                    prev.map((item, j) =>
+                                      j === idx ? { ...item, date: e.target.value } : item
+                                    )
+                                  )
+                                }
+                                placeholder="Date (e.g. Oct 1929)"
+                                className="sd-input font-mono-num w-32 py-1 text-xs font-bold"
+                              />
+                              <input
+                                type="text"
+                                value={ev.title}
+                                onChange={(e) =>
+                                  setDraftTimeline((prev) =>
+                                    prev.map((item, j) =>
+                                      j === idx ? { ...item, title: e.target.value } : item
+                                    )
+                                  )
+                                }
+                                placeholder="Event Title"
+                                className="sd-input min-w-[160px] flex-1 py-1 text-xs font-semibold"
+                              />
+                              <input
+                                type="text"
+                                value={ev.era || ''}
+                                onChange={(e) =>
+                                  setDraftTimeline((prev) =>
+                                    prev.map((item, j) =>
+                                      j === idx ? { ...item, era: e.target.value } : item
+                                    )
+                                  )
+                                }
+                                placeholder="Era / Theme"
+                                className="sd-input w-36 py-1 text-xs"
+                              />
+                              <button
+                                type="button"
+                                title="Toggle Key Turning Point"
+                                onClick={() =>
+                                  setDraftTimeline((prev) =>
+                                    prev.map((item, j) =>
+                                      j === idx ? { ...item, keyEvent: !item.keyEvent } : item
+                                    )
+                                  )
+                                }
+                                className={`sd-btn h-7 w-7 shrink-0 p-0 ${
+                                  ev.keyEvent ? 'border-[var(--e2)] text-[var(--e2)]' : 'text-[var(--mute)]'
+                                }`}
+                              >
+                                <Star className="h-3.5 w-3.5" aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Remove timeline node"
+                                onClick={() =>
+                                  setDraftTimeline((prev) => prev.filter((_, j) => j !== idx))
+                                }
+                                className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              </button>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <input
+                                type="text"
+                                value={ev.detail}
+                                onChange={(e) =>
+                                  setDraftTimeline((prev) =>
+                                    prev.map((item, j) =>
+                                      j === idx ? { ...item, detail: e.target.value } : item
+                                    )
+                                  )
+                                }
+                                placeholder="What happened..."
+                                className="sd-input py-1 text-xs"
+                              />
+                              <input
+                                type="text"
+                                value={ev.significance || ''}
+                                onChange={(e) =>
+                                  setDraftTimeline((prev) =>
+                                    prev.map((item, j) =>
+                                      j === idx ? { ...item, significance: e.target.value } : item
+                                    )
+                                  )
+                                }
+                                placeholder="Significance / impact (optional)"
+                                className="sd-input py-1 text-xs"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Preview Tab 3: Editable Extracted Flashcards */}
+                {previewTab === 'cards' && (
+                  <div className="mt-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-[var(--mute)]">
+                        {includeCards
+                          ? 'These flashcards will be saved into the selected topic deck.'
+                          : 'Click "Make Flashcards" above if you want to save these cards along with your notes.'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIncludeCards(true);
+                          setDraftCards((prev) => [
+                            ...prev,
+                            { id: makeNoteId('fc'), q: '', a: '', sectionName: effectiveTopicName },
+                          ]);
+                        }}
+                        className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                      >
+                        <Plus className="h-3 w-3" aria-hidden="true" />
+                        <span>Add Card</span>
+                      </button>
+                    </div>
+
+                    {draftCards.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-[var(--line)] bg-[var(--card)] p-4 text-center text-xs text-[var(--mute)]">
+                        No definition or Q/A pairs extracted automatically. Click &ldquo;Add
+                        Card&rdquo; to create cards manually.
+                      </div>
+                    ) : (
+                      <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                        {draftCards.map((c, idx) => (
+                          <div
+                            key={c.id}
+                            className="grid gap-2 rounded-lg border border-[var(--line)] bg-[var(--card)] p-2.5 sm:grid-cols-[1fr_1fr_140px_auto]"
+                          >
+                            <input
+                              type="text"
+                              value={c.q}
+                              onChange={(e) =>
+                                setDraftCards((prev) =>
+                                  prev.map((item, j) =>
+                                    j === idx ? { ...item, q: e.target.value } : item
+                                  )
+                                )
+                              }
+                              placeholder="Question / Term"
+                              className="sd-input py-1 text-xs font-semibold"
+                            />
+                            <input
+                              type="text"
+                              value={c.a}
+                              onChange={(e) =>
+                                setDraftCards((prev) =>
+                                  prev.map((item, j) =>
+                                    j === idx ? { ...item, a: e.target.value } : item
+                                  )
+                                )
+                              }
+                              placeholder="Answer / Definition"
+                              className="sd-input py-1 text-xs"
+                            />
+                            <input
+                              type="text"
+                              value={c.sectionName}
+                              onChange={(e) =>
+                                setDraftCards((prev) =>
+                                  prev.map((item, j) =>
+                                    j === idx ? { ...item, sectionName: e.target.value } : item
+                                  )
+                                )
+                              }
+                              placeholder="Section"
+                              className="sd-input py-1 text-xs"
+                            />
+                            <button
+                              type="button"
+                              title="Remove card"
+                              onClick={() =>
+                                setDraftCards((prev) => prev.filter((_, j) => j !== idx))
+                              }
+                              className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -630,6 +2264,7 @@ export function UniversalImportModal({
           )}
         </div>
 
+        {/* Footer */}
         <div className="flex items-center justify-end gap-2 border-t border-[var(--line)] px-5 py-3.5">
           <button type="button" onClick={onClose} className="sd-btn px-4 py-2 text-xs">
             Cancel
@@ -646,7 +2281,7 @@ export function UniversalImportModal({
           ) : (
             <button
               type="button"
-              disabled={!preview || (!includeNotes && !includeCards)}
+              disabled={!parsedPreview || (!includeNotes && !includeCards && !includeTimeline)}
               onClick={handleConfirmImport}
               className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
             >

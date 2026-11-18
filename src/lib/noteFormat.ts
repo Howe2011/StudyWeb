@@ -2,7 +2,23 @@ import {
   KeyTermPair,
   NoteSectionBlock,
   StructuredNoteData,
+  TimelineEventItem,
 } from '../types';
+
+export type NoteFormatPreset =
+  | 'save-my-exams'
+  | 'cornell'
+  | 'timeline-causal'
+  | 'compact';
+
+export interface AutoFormatOptions {
+  preset?: NoteFormatPreset;
+  extractKeyTerms?: boolean;
+  detectFlowDiagrams?: boolean;
+  autoTables?: boolean;
+  splitDenseParagraphs?: boolean;
+  strictHeadings?: boolean;
+}
 
 export function makeNoteId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -63,11 +79,14 @@ function addTermAndCard(
   seenTerms: Set<string>,
   term: string,
   definition: string,
-  sectionHeading: string
+  sectionHeading: string,
+  allowExtraction = true
 ) {
-  const cleanTerm = term.replace(/\*\*/g, '').trim();
-  const cleanDef = definition.trim();
-  if (!cleanTerm || !cleanDef) return;
+  if (!allowExtraction) return;
+  const cleanTerm = term.replace(/\*\*/g, '').replace(/[{}]/g, '').trim();
+  const cleanDef = definition.replace(/\{\{([^}]+)\}\}/g, '$1').trim();
+  if (!cleanTerm || !cleanDef || cleanTerm.length < 2 || cleanDef.length < 2) return;
+  if (/^(?:page|fig(?:ure)?|table|source|http|step\s*\d+)\b/i.test(cleanTerm)) return;
   const key = cleanTerm.toLowerCase();
   if (!seenTerms.has(key)) {
     seenTerms.add(key);
@@ -84,32 +103,115 @@ function addTermAndCard(
   }
 }
 
+function splitRespectingAbbreviations(paragraph: string): string[] {
+  const placeholderMap: Array<[string, string]> = [];
+  let protectedTxt = paragraph.replace(
+    /\b(e\.g\.|i\.e\.|etc\.|vs\.|c\.|dr\.|mr\.|mrs\.|ms\.|prof\.|fig\.|no\.|st\.|approx\.)/gi,
+    (m) => {
+      const token = `__ABBR_${placeholderMap.length}__`;
+      placeholderMap.push([token, m]);
+      return token;
+    }
+  );
+  protectedTxt = protectedTxt.replace(/(\d)\.(\d)/g, '$1__DEC__$2');
+
+  const rawSentences = protectedTxt.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g);
+  if (!rawSentences) return [paragraph];
+
+  return rawSentences
+    .map((s) => {
+      let restored = s.replace(/__DEC__/g, '.');
+      for (const [token, orig] of placeholderMap) {
+        restored = restored.replace(token, orig);
+      }
+      return restored.trim();
+    })
+    .filter(Boolean);
+}
+
+function isBoilerplateNoiseLine(line: string): boolean {
+  const clean = line.replace(/\*\*/g, '').trim();
+  if (!clean) return true;
+  if (/^(?:={3,}|-{3,}|_{3,}|\*{3,})$/.test(clean)) return true;
+  if (
+    /^(?:advertisement|sponsored|did this page help you\??|yes\s*no|test yourself|join now|sign up|log in|cookie preferences|next topic|previous topic|back to top|download pdf|view all topics|jump to|table of contents|skip to (?:main )?content|\[edit\]|share this page|print this page)$/i.test(
+      clean
+    )
+  ) {
+    return true;
+  }
+  if (/^(?:page\s*)?\d{1,3}(?:\s*(?:of|\/)\s*\d{1,3})?$/i.test(clean)) return true;
+  return false;
+}
+
 /**
- * Splits dense plain prose into clean readable bullets/paragraphs when pasting large unformatted blocks.
+ * Normalizes Setext headings, strips web/PDF boilerplate, detects multi-space tables,
+ * preserves bullet hierarchy, and splits dense walls of text safely.
  */
-function preprocessPlainStudyText(rawInput: string): string {
+function preprocessPlainStudyText(
+  rawInput: string,
+  opts: AutoFormatOptions
+): string {
   const normalized = String(rawInput || '')
     .replace(/\u00a0/g, ' ')
     .replace(/\r/g, '')
     .trim();
   if (!normalized) return '';
 
+  const rawLines = normalized.split('\n');
   const outLines: string[] = [];
-  for (const rawLine of normalized.split('\n')) {
-    const line = rawLine.trimEnd();
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i].trimEnd();
     const trimmed = line.trim();
-    // If a single line is a giant paragraph (> 320 chars) with multiple sentences and no pipes/markdown headings, break into crisp sentences/clauses
+
+    // Handle Setext headings ("Title\n====" or "Subheading\n----")
+    const nextTrimmed = (rawLines[i + 1] || '').trim();
+    if (trimmed && /^={3,}$/.test(nextTrimmed)) {
+      outLines.push(`# ${trimmed.replace(/\*\*/g, '')}`);
+      i++;
+      continue;
+    }
+    if (trimmed && /^-{3,}$/.test(nextTrimmed) && !trimmed.startsWith('|')) {
+      outLines.push(`## ${trimmed.replace(/\*\*/g, '')}`);
+      i++;
+      continue;
+    }
+
+    if (!trimmed) continue;
+    if (isBoilerplateNoiseLine(trimmed)) continue;
+
+    // Preserve indentation before bullet markers so sub-bullets keep hierarchy
+    const indentLead = line.match(/^(\s{2,}|\t+)(.*)$/);
+    if (indentLead && /^(?:[-*•▪◦‣–—]|\d+[.)])\s+/.test(indentLead[2])) {
+      outLines.push(`  ${indentLead[2].trim()}`);
+      continue;
+    }
+
+    // Convert multi-space column lines ("Term    Value    Impact") into pipe tables if autoTables is active
     if (
-      trimmed.length > 320 &&
+      opts.autoTables !== false &&
+      !/^[-*•#\d|]/.test(trimmed) &&
+      /\S\s{3,}\S/.test(trimmed)
+    ) {
+      const cols = trimmed.split(/\s{3,}/).map((c) => c.trim()).filter(Boolean);
+      if (cols.length >= 2 && cols.length <= 5) {
+        outLines.push(`| ${cols.join(' | ')} |`);
+        continue;
+      }
+    }
+
+    // Split dense prose paragraphs (> 240 chars or 3+ sentences) when splitDenseParagraphs is enabled
+    if (
+      opts.splitDenseParagraphs !== false &&
+      trimmed.length > 230 &&
       !trimmed.startsWith('|') &&
       !trimmed.startsWith('#') &&
-      !trimmed.startsWith('-') &&
-      !trimmed.startsWith('*') &&
-      !trimmed.startsWith('•')
+      !/^(?:[-*•▪◦‣]|\d+[.)])\s+/.test(trimmed)
     ) {
-      const sentences = trimmed.match(/[^.!?]+[.!?]+(?:\s+|$)/g);
-      if (sentences && sentences.length >= 3) {
-        sentences.forEach((s) => outLines.push(s.trim()));
+      const sentences = splitRespectingAbbreviations(trimmed);
+      if (sentences.length >= 2) {
+        sentences.forEach((s) => outLines.push(s));
         continue;
       }
     }
@@ -118,14 +220,105 @@ function preprocessPlainStudyText(rawInput: string): string {
   return outLines.join('\n');
 }
 
+function tryBuildSequentialFlow(line: string): string | null {
+  const clean = line.replace(/\*\*/g, '').trim();
+  // Explicit arrows (A -> B -> C or A => B => C or A → B → C)
+  const arrowParts = clean.split(/\s*(?:->|=>|→)\s*/).filter(Boolean);
+  if (arrowParts.length >= 3 && arrowParts.every((p) => p.length <= 90)) {
+    return `⇒ ${arrowParts.join(' → ')}`;
+  }
+
+  // Step 1: ... Step 2: ... Step 3: ...
+  const stepMatches = clean.match(
+    /(?:step\s*\d+\s*[:–-]\s*|^\s*first(?:ly)?,\s*|(?<=[\.;]\s*)(?:next|then|after\s+that|subsequently|finally),\s*)/gi
+  );
+  if (stepMatches && stepMatches.length >= 2) {
+    const parts = clean
+      .split(
+        /(?:^|\.\s*|;\s*)(?:step\s*\d+\s*[:–-]\s*|first(?:ly)?,\s*|next,\s*|then,\s*|after\s+that,\s*|subsequently,\s*|finally,\s*)/i
+      )
+      .map((p) => p.replace(/[.;]+$/, '').trim())
+      .filter((p) => p.length >= 3);
+    if (parts.length >= 3 && parts.length <= 7 && parts.every((p) => p.length <= 95)) {
+      return `⇒ ${parts.join(' → ')}`;
+    }
+  }
+  return null;
+}
+
+function convertBalancedProsConsToTables(sections: NoteSectionBlock[]): void {
+  const pairHeads: Array<[RegExp, RegExp, [string, string]]> = [
+    [/^advantages|pros|strengths|benefits/i, /^disadvantages|cons|weaknesses|limitations|drawbacks/i, ['Advantages / Strengths', 'Disadvantages / Limitations']],
+    [/^causes|reasons/i, /^effects|consequences|impacts/i, ['Causes', 'Effects / Consequences']],
+  ];
+
+  for (const sec of sections) {
+    const pts = sec.points;
+    for (let i = 0; i < pts.length; i++) {
+      if (!pts[i].startsWith('### ')) continue;
+      const h1 = pts[i].slice(4).trim();
+
+      // Find end of block 1 and start of next ### heading
+      let nextSubIdx = -1;
+      for (let j = i + 1; j < pts.length; j++) {
+        if (pts[j].startsWith('### ')) {
+          nextSubIdx = j;
+          break;
+        }
+      }
+      if (nextSubIdx === -1) continue;
+      const h2 = pts[nextSubIdx].slice(4).trim();
+      const matchedPair = pairHeads.find(([r1, r2]) => r1.test(h1) && r2.test(h2));
+      if (!matchedPair) continue;
+
+      let endBlock2 = pts.length;
+      for (let j = nextSubIdx + 1; j < pts.length; j++) {
+        if (pts[j].startsWith('### ') || /^\|.+\|$/.test(pts[j])) {
+          endBlock2 = j;
+          break;
+        }
+      }
+
+      const list1 = pts
+        .slice(i + 1, nextSubIdx)
+        .map((p) => p.replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim())
+        .filter(Boolean);
+      const list2 = pts
+        .slice(nextSubIdx + 1, endBlock2)
+        .map((p) => p.replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim())
+        .filter(Boolean);
+
+      if (list1.length >= 2 && list2.length >= 2 && list1.length <= 7 && list2.length <= 7) {
+        const rowsCount = Math.max(list1.length, list2.length);
+        const tableLines: string[] = [`| ${matchedPair[2][0]} | ${matchedPair[2][1]} |`];
+        for (let r = 0; r < rowsCount; r++) {
+          tableLines.push(`| ${list1[r] || '—'} | ${list2[r] || '—'} |`);
+        }
+        pts.splice(i, endBlock2 - i, ...tableLines);
+        i += tableLines.length - 1;
+      }
+    }
+  }
+}
+
 /**
- * Converts pasted notes / Word text / Markdown / tables into beautifully structured Save My Exams-style sections.
+ * Converts pasted notes / Word text / PDF / Web articles / Markdown / tables into cleanly structured
+ * study sections according to the user's chosen formatting preset and options.
  */
-export function parseTextIntoStructuredNote(rawInput: string): {
+export function parseTextIntoStructuredNote(
+  rawInput: string,
+  options: AutoFormatOptions = {}
+): {
   note: StructuredNoteData;
   extractedCards: Array<{ q: string; a: string; sectionName: string }>;
 } {
-  const text = preprocessPlainStudyText(rawInput);
+  const preset: NoteFormatPreset = options.preset || 'save-my-exams';
+  const allowKeyTerms = options.extractKeyTerms !== false;
+  const detectFlows = options.detectFlowDiagrams !== false || preset === 'timeline-causal';
+  const buildAutoTables = options.autoTables !== false;
+  const strictHeadings = Boolean(options.strictHeadings);
+
+  const text = preprocessPlainStudyText(rawInput, options);
   const sections: NoteSectionBlock[] = [];
   const keyTerms: KeyTermPair[] = [];
   const extractedCards: Array<{ q: string; a: string; sectionName: string }> = [];
@@ -146,10 +339,46 @@ export function parseTextIntoStructuredNote(rawInput: string): {
     }
   };
 
+  const SUBHEADING_CUES =
+    /^(?:causes|effects|consequences|impacts|advantages|disadvantages|pros|cons|strengths|weaknesses|limitations|benefits|drawbacks|key features|evaluation|evidence|methods|factors|solutions|significance|outcomes)$/i;
+
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+    const rawLine = lines[i];
+    const isNestedBullet = /^\s{2,}(?:[-*•▪◦‣–—]|\d+[.)])\s+/.test(rawLine);
+    let line = rawLine.trim();
     if (!line) continue;
+
+    // Extract Gizmo / revision cloze deletions `{{answer}}` or `==answer==` into flashcards
+    if (/\{\{[^}]+\}\}|==[^=]+==/.test(line)) {
+      const cleanStatement = line
+        .replace(/^(?:[-*•▪◦‣–—]|\d+[.)])\s+/, '')
+        .replace(/\{\{([^}]+)\}\}/g, '**$1**')
+        .replace(/==([^=]+)==/g, '**$1**')
+        .trim();
+
+      const clozeRegex = /\{\{([^}]+)\}\}|==([^=]+)==/g;
+      let match: RegExpExecArray | null;
+      while ((match = clozeRegex.exec(line)) !== null) {
+        const answer = (match[1] || match[2] || '').trim();
+        if (answer) {
+          const prompt = line
+            .replace(/^(?:[-*•▪◦‣–—]|\d+[.)])\s+/, '')
+            .replace(match[0], '[____]')
+            .replace(/\{\{([^}]+)\}\}/g, '$1')
+            .replace(/==([^=]+)==/g, '$1')
+            .trim();
+          if (allowKeyTerms && prompt && answer) {
+            extractedCards.push({
+              q: prompt,
+              a: answer,
+              sectionName: currentSec.heading || 'Cloze Recall',
+            });
+          }
+        }
+      }
+      line = isNestedBullet ? `  - ${cleanStatement}` : `- ${cleanStatement}`;
+    }
 
     // Markdown table row handling: keep `| col1 | col2 |` lines intact (skip separator lines `| --- | --- |`)
     if (/^\|.+\|$/.test(line)) {
@@ -160,9 +389,9 @@ export function parseTextIntoStructuredNote(rawInput: string): {
       continue;
     }
 
-    // Exam tip detection
+    // Exam tip / Key Takeaway / Misconception detection
     const tipMatch = line.match(
-      /^(?:[-*•]\s*)?(?:\*\*)?(?:exam(?:iner)?\s*tip|top\s*tip|pro\s*tip|exam\s*alert|important|remember|warning)(?:\*\*)?\s*[:–—-]\s*(.+)$/i
+      /^(?:[-*•]\s*)?(?:\*\*)?(?:exam(?:iner)?\s*tip|top\s*tip|pro\s*tip|exam\s*alert|key\s*takeaway|common\s*mistake|important|remember|warning)(?:\*\*)?\s*[:–—-]\s*(.+)$/i
     );
     if (tipMatch) {
       const val = tipMatch[1].trim();
@@ -170,7 +399,7 @@ export function parseTextIntoStructuredNote(rawInput: string): {
       continue;
     }
 
-    // Worked example / Case study line detection
+    // Worked example / Model answer detection
     const exMatch = line.match(
       /^(?:[-*•]\s*)?(?:\*\*)?(?:worked\s*example|model\s*answer|sample\s*answer)(?:\*\*)?\s*[:–—-]\s*(.+)$/i
     );
@@ -181,101 +410,143 @@ export function parseTextIntoStructuredNote(rawInput: string): {
     }
 
     // Summary detection
-    const sumMatch = line.match(/^(?:[-*•]\s*)?(?:\*\*)?(?:summary|overview|introduction)(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    const sumMatch = line.match(
+      /^(?:[-*•]\s*)?(?:\*\*)?(?:summary|overview|introduction|key\s*idea)(?:\*\*)?\s*[:–—-]\s*(.+)$/i
+    );
     if (sumMatch) {
       summary = summary ? `${summary} ${sumMatch[1].trim()}` : sumMatch[1].trim();
       continue;
     }
 
-    // Markdown headings (#, ##, ###)
+    // Markdown headings (#, ##, ###, ####)
     const hMatch = line.match(/^(#{1,4})\s+(.+)$/);
     if (hMatch) {
       const level = hMatch[1].length;
       const headingText = hMatch[2].replace(/\*\*/g, '').trim();
       if (level <= 2) {
-        pushCurrentSection();
+        // Avoid leaving an empty initial H1-title-only section before an H2 if there are no points yet
+        if (
+          level === 2 &&
+          sections.length === 0 &&
+          currentSec.points.length === 0 &&
+          currentSec.heading !== 'Key Points' &&
+          !summary
+        ) {
+          summary = `Study notes on ${currentSec.heading}.`;
+        } else {
+          pushCurrentSection();
+        }
         currentSec = {
           id: makeNoteId('sec'),
           heading: headingText,
           points: [],
         };
       } else {
-        // Subheading H3 / H4 renders cleanly inside section
         currentSec.points.push(`### ${headingText}`);
       }
       continue;
     }
 
-    // Whole-line bold heading e.g. **Causes of Urban Growth**
-    const boldHeading = line.match(/^\*\*([^*]{3,75})\*\*$/);
-    if (boldHeading) {
-      pushCurrentSection();
-      currentSec = {
-        id: makeNoteId('sec'),
-        heading: boldHeading[1].trim(),
-        points: [],
-      };
-      continue;
+    if (!strictHeadings) {
+      // Whole-line bold heading e.g. **Causes of Urban Growth**
+      const boldHeading = line.match(/^\*\*([^*]{3,80})\*\*$/);
+      if (boldHeading) {
+        const headingTxt = boldHeading[1].replace(/:$/, '').trim();
+        if (SUBHEADING_CUES.test(headingTxt)) {
+          currentSec.points.push(`### ${headingTxt}`);
+        } else {
+          pushCurrentSection();
+          currentSec = {
+            id: makeNoteId('sec'),
+            heading: headingTxt,
+            points: [],
+          };
+        }
+        continue;
+      }
+
+      // Hierarchical numbered/Part/Topic/Case Study headings ("1.1 Economic Factors", "Part B: Effects", "Case Study – Nairobi")
+      const structSec = line.match(
+        /^(?:(?:\d+(?:\.\d+)*[.)]\s+)|(?:Part|Topic|Section|Unit|Chapter)\s+[A-Z0-9]+\s*[:–—-]\s*|(?:Case\s+Study\s*[–—:-]\s*))(.{3,80})$/i
+      );
+      if (
+        structSec &&
+        !/[.!?]$/.test(line) &&
+        line.split(/\s+/).length <= 12 &&
+        !/^\d{3,4}\s/.test(line)
+      ) {
+        const cleanHead = /^case\s+study/i.test(line)
+          ? line.trim()
+          : structSec[1].replace(/:$/, '').trim();
+        if (/^\d+\.\d+/.test(line)) {
+          currentSec.points.push(`### ${cleanHead}`);
+        } else {
+          pushCurrentSection();
+          currentSec = {
+            id: makeNoteId('sec'),
+            heading: cleanHead,
+            points: [],
+          };
+        }
+        continue;
+      }
+
+      // Heading ending with ":" (standalone short line)
+      if (
+        line.length <= 68 &&
+        line.endsWith(':') &&
+        !line.startsWith('-') &&
+        !line.startsWith('*') &&
+        !line.startsWith('•') &&
+        !line.includes('|')
+      ) {
+        const headingTxt = line.slice(0, -1).replace(/\*\*/g, '').trim();
+        if (SUBHEADING_CUES.test(headingTxt)) {
+          currentSec.points.push(`### ${headingTxt}`);
+        } else {
+          pushCurrentSection();
+          currentSec = {
+            id: makeNoteId('sec'),
+            heading: headingTxt,
+            points: [],
+          };
+        }
+        continue;
+      }
+
+      // Short standalone ALL-CAPS heading
+      if (
+        line.length >= 4 &&
+        line.length <= 60 &&
+        /^[A-Z0-9\s&/()-]+$/.test(line) &&
+        /[A-Z]{3}/.test(line)
+      ) {
+        pushCurrentSection();
+        currentSec = {
+          id: makeNoteId('sec'),
+          heading: line
+            .toLowerCase()
+            .replace(/\b\w/g, (ch) => ch.toUpperCase()),
+          points: [],
+        };
+        continue;
+      }
     }
 
-    // Case Study / numbered section line e.g. "1. Coastal Processes" or "Case Study – Nairobi, Kenya"
-    const numberedSec = line.match(/^(?:\d+[.)]\s+|Case\s+Study\s*[–—:-]\s*)(.{3,75})$/i);
-    if (
-      numberedSec &&
-      !/[.!?]$/.test(line) &&
-      !line.includes(':') &&
-      line.split(/\s+/).length <= 10
-    ) {
-      pushCurrentSection();
-      currentSec = {
-        id: makeNoteId('sec'),
-        heading: line.replace(/^\d+[.)]\s+/, '').trim(),
-        points: [],
-      };
-      continue;
-    }
-
-    // Heading ending with ":" (standalone short line)
-    if (
-      line.length <= 68 &&
-      line.endsWith(':') &&
-      !line.startsWith('-') &&
-      !line.startsWith('*') &&
-      !line.startsWith('•') &&
-      !line.includes('|')
-    ) {
-      pushCurrentSection();
-      currentSec = {
-        id: makeNoteId('sec'),
-        heading: line.slice(0, -1).replace(/\*\*/g, '').trim(),
-        points: [],
-      };
-      continue;
-    }
-
-    // Short standalone ALL-CAPS heading
-    if (
-      line.length >= 4 &&
-      line.length <= 60 &&
-      /^[A-Z0-9\s&/()-]+$/.test(line) &&
-      /[A-Z]{3}/.test(line)
-    ) {
-      pushCurrentSection();
-      currentSec = {
-        id: makeNoteId('sec'),
-        heading: line
-          .toLowerCase()
-          .replace(/\b\w/g, (ch) => ch.toUpperCase()),
-        points: [],
-      };
-      continue;
-    }
-
-    const isExplicitBullet = /^(?:[-*•–—]|\d+[.)])\s+/.test(line);
-    const cleanBullet = line.replace(/^(?:[-*•–—]|\d+[.)])\s+/, '').trim();
+    const isExplicitBullet = /^(?:[-*•▪◦‣–—]|\d+[.)])\s+/.test(line);
+    const cleanBullet = line.replace(/^(?:[-*•▪◦‣–—]|\d+[.)])\s+/, '').trim();
     if (!cleanBullet) continue;
 
-    // Tab / Pipe / :: / Arrow definitions (Term | Definition or Term \t Definition)
+    // Detect sequential process / cause-effect flows when enabled
+    if (detectFlows && !isNestedBullet) {
+      const flowLine = tryBuildSequentialFlow(cleanBullet);
+      if (flowLine) {
+        currentSec.points.push(flowLine);
+        continue;
+      }
+    }
+
+    // Tab / Pipe / :: definitions (Term | Definition or Term \t Definition)
     const tabOrPipe = cleanBullet.includes('\t')
       ? cleanBullet.split('\t').map((s) => s.trim()).filter(Boolean)
       : cleanBullet.includes('|')
@@ -287,8 +558,34 @@ export function parseTextIntoStructuredNote(rawInput: string): {
     if (tabOrPipe && tabOrPipe.length >= 2 && tabOrPipe[0] && tabOrPipe[1]) {
       const cleanT = tabOrPipe[0].replace(/\*\*/g, '').trim();
       const cleanD = tabOrPipe.slice(1).join(' — ').trim();
-      addTermAndCard(keyTerms, extractedCards, seenTerms, cleanT, cleanD, currentSec.heading);
-      currentSec.points.push(`**${cleanT}**: ${cleanD}`);
+      addTermAndCard(
+        keyTerms,
+        extractedCards,
+        seenTerms,
+        cleanT,
+        cleanD,
+        currentSec.heading,
+        allowKeyTerms
+      );
+      currentSec.points.push(isNestedBullet ? `↳ **${cleanT}**: ${cleanD}` : `**${cleanT}**: ${cleanD}`);
+      continue;
+    }
+
+    // Formula / Equation highlighting
+    const formulaMatch = cleanBullet.match(/^(?:\*\*)?(formula|equation|rule)(?:\*\*)?\s*[:–—=]\s*(.+)$/i);
+    if (formulaMatch) {
+      const label = formulaMatch[1].charAt(0).toUpperCase() + formulaMatch[1].slice(1).toLowerCase();
+      const expr = formulaMatch[2].trim();
+      addTermAndCard(
+        keyTerms,
+        extractedCards,
+        seenTerms,
+        `${currentSec.heading} ${label}`,
+        expr,
+        currentSec.heading,
+        allowKeyTerms
+      );
+      currentSec.points.push(`**${label}**: ${expr}`);
       continue;
     }
 
@@ -297,20 +594,89 @@ export function parseTextIntoStructuredNote(rawInput: string): {
     if (boldDef && boldDef[1].length <= 80) {
       const term = boldDef[1].trim();
       const def = boldDef[2].trim();
-      addTermAndCard(keyTerms, extractedCards, seenTerms, term, def, currentSec.heading);
-      currentSec.points.push(`**${term}**: ${def}`);
+      addTermAndCard(
+        keyTerms,
+        extractedCards,
+        seenTerms,
+        term,
+        def,
+        currentSec.heading,
+        allowKeyTerms
+      );
+      const formatted = `**${term}**: ${def}`;
+      currentSec.points.push(isNestedBullet ? `↳ ${formatted}` : formatted);
       continue;
     }
 
-    // Term: Definition (when term is crisp & descriptive)
+    // Term: Definition (when term is crisp & descriptive and not a date prefix)
     const colonDef = cleanBullet.match(/^([A-Za-z0-9 ()/%'’&-]{2,52}):\s+(.{6,})$/);
-    if (colonDef && !/^http/i.test(colonDef[1])) {
+    if (
+      colonDef &&
+      !/^http/i.test(colonDef[1]) &&
+      !/^(?:in|on|by|at|during)\s+\d{3,4}/i.test(colonDef[1]) &&
+      !/^\d{3,4}$/.test(colonDef[1].trim())
+    ) {
       const term = colonDef[1].trim();
       const def = colonDef[2].trim();
-      addTermAndCard(keyTerms, extractedCards, seenTerms, term, def, currentSec.heading);
-      currentSec.points.push(`**${term}**: ${def}`);
+      addTermAndCard(
+        keyTerms,
+        extractedCards,
+        seenTerms,
+        term,
+        def,
+        currentSec.heading,
+        allowKeyTerms
+      );
+      const formatted = `**${term}**: ${def}`;
+      currentSec.points.push(isNestedBullet ? `↳ ${formatted}` : formatted);
       continue;
     }
+
+    // Natural lecture prose definitions: "X is defined as Y" / "X refers to Y" / "X means Y" / "X is the process..."
+    const proseDef = cleanBullet.match(
+      /^(?:\*\*)?([A-Za-z][A-Za-z0-9 ()/'’&-]{1,50}?)(?:\*\*)?\s+(?:is defined as|refers to|is the process (?:by|in) which|means|describes)\s+(.{12,})$/i
+    );
+    if (proseDef) {
+      const term = proseDef[1].replace(/\*\*/g, '').trim();
+      const def = proseDef[2].trim();
+      if (term.split(/\s+/).length <= 6) {
+        addTermAndCard(
+          keyTerms,
+          extractedCards,
+          seenTerms,
+          term,
+          def,
+          currentSec.heading,
+          allowKeyTerms
+        );
+      }
+    } else {
+      // Bolded key concept in sentence: "**The Dawes Plan** was a 1924 agreement..."
+      const boldConcept = cleanBullet.match(
+        /^\*\*([^*]{2,55})\*\*\s+(?:is|are|was|were|caused|enabled|allowed|reduced|created|established)\s+(.{14,})$/i
+      );
+      if (boldConcept) {
+        const term = boldConcept[1].trim();
+        addTermAndCard(
+          keyTerms,
+          extractedCards,
+          seenTerms,
+          term,
+          cleanBullet.replace(/\*\*/g, ''),
+          currentSec.heading,
+          allowKeyTerms
+        );
+      }
+    }
+
+    // Highlight historical dates in timeline-causal preset
+    const formattedPoint =
+      preset === 'timeline-causal'
+        ? cleanBullet.replace(
+            /\b((?:\d{1,2}\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)?\s*(?:1\d{3}|20\d{2})(?:\s*[–-]\s*\d{2,4})?)\b/g,
+            (m) => (cleanBullet.includes(`**${m}`) ? m : `**${m.trim()}**`)
+          )
+        : cleanBullet;
 
     // First clean prose sentence becomes Topic Overview if none specified yet
     if (
@@ -320,19 +686,70 @@ export function parseTextIntoStructuredNote(rawInput: string): {
       !isExplicitBullet &&
       cleanBullet.length >= 35
     ) {
-      summary = cleanBullet;
-    } else if (isExplicitBullet) {
-      currentSec.points.push(cleanBullet);
+      summary = cleanBullet.replace(/\*\*/g, '');
+    } else if (isNestedBullet) {
+      currentSec.points.push(`↳ ${formattedPoint}`);
+    } else if (isExplicitBullet || preset === 'compact') {
+      currentSec.points.push(formattedPoint);
     } else {
-      // Preserve prose sentence cleanly as paragraph or concise bullet depending on length
-      currentSec.points.push(cleanBullet.length > 115 ? `¶ ${cleanBullet}` : cleanBullet);
+      currentSec.points.push(
+        formattedPoint.length > 135 ? `¶ ${formattedPoint}` : formattedPoint
+      );
     }
   }
 
   pushCurrentSection();
 
-  if (sections.length === 0) {
-    sections.push({
+  // Prune empty placeholder sections & merge duplicate adjacent section headings
+  let cleanedSections = sections.filter(
+    (s) => s.points.length > 0 || (sections.length === 1 && s.heading.trim().length > 0)
+  );
+
+  // Merge sections with identical normalized headings
+  const mergedByHeading: NoteSectionBlock[] = [];
+  for (const sec of cleanedSections) {
+    const existing = mergedByHeading.find(
+      (x) => x.heading.toLowerCase() === sec.heading.toLowerCase()
+    );
+    if (existing) {
+      existing.points.push(...sec.points);
+    } else {
+      mergedByHeading.push(sec);
+    }
+  }
+  cleanedSections = mergedByHeading;
+
+  // Compact preset: merge tiny 1-point orphan sections into previous section as H3 subheading
+  if (preset === 'compact' && cleanedSections.length > 2) {
+    const compacted: NoteSectionBlock[] = [];
+    for (const sec of cleanedSections) {
+      if (
+        compacted.length > 0 &&
+        sec.points.length === 1 &&
+        !sec.points[0].startsWith('|') &&
+        !/^case\s+study/i.test(sec.heading)
+      ) {
+        compacted[compacted.length - 1].points.push(`### ${sec.heading}`);
+        compacted[compacted.length - 1].points.push(sec.points[0]);
+      } else {
+        compacted.push(sec);
+      }
+    }
+    cleanedSections = compacted;
+  }
+
+  // Cornell preset: auto-generate crisp Topic Overview if missing
+  if (preset === 'cornell' && !summary && cleanedSections.length > 0) {
+    const topHeadings = cleanedSections.slice(0, 4).map((s) => s.heading).join(', ');
+    summary = `Covers ${topHeadings} with ${keyTerms.length} key terms extracted for active recall.`;
+  }
+
+  if (buildAutoTables) {
+    convertBalancedProsConsToTables(cleanedSections);
+  }
+
+  if (cleanedSections.length === 0) {
+    cleanedSections.push({
       id: makeNoteId('sec'),
       heading: 'Key Points',
       points: summary ? [] : text ? [text] : [],
@@ -342,7 +759,7 @@ export function parseTextIntoStructuredNote(rawInput: string): {
   return {
     note: {
       summary,
-      sections,
+      sections: cleanedSections,
       keyTerms,
       examTip,
       workedExample,
@@ -365,6 +782,28 @@ function extractInlineFormattedText(el: Element): string {
     const cls = (elem.getAttribute('class') || '').toLowerCase();
 
     // Handle flowcharts: <span class="flow"><span class="st"><em>1</em>Step</span><span class="ar">→</span></span>
+    if (cls.includes('flow')) {
+      const flowSteps: string[] = [];
+      Array.from(elem.children).forEach((ch) => {
+        const chCls = (ch.getAttribute('class') || '').toLowerCase();
+        if (chCls.includes('st')) {
+          const stepParts: string[] = [];
+          Array.from(ch.childNodes).forEach((sub) => {
+            if (sub.nodeType === 1 && (sub as Element).tagName.toLowerCase() === 'em') {
+              return; // Step number is rendered cleanly by flow diagram UI
+            }
+            stepParts.push(sub.textContent || '');
+          });
+          const stepTxt = stepParts.join('').replace(/\s+/g, ' ').trim();
+          if (stepTxt) flowSteps.push(stepTxt);
+        }
+      });
+      if (flowSteps.length > 0) {
+        parts.push(`⇒ ${flowSteps.join(' → ')}`);
+        return;
+      }
+    }
+
     if (cls.includes('st')) {
       const stepParts: string[] = [];
       Array.from(elem.childNodes).forEach((ch) => {
@@ -380,6 +819,13 @@ function extractInlineFormattedText(el: Element): string {
     }
     if (cls.includes('ar')) {
       parts.push(' → ');
+      return;
+    }
+
+    // Highlighted figures/stats (<span class="fg">5.5 million</span>)
+    if (cls.includes('fg')) {
+      const val = (elem.textContent || '').replace(/\s+/g, ' ').trim();
+      if (val) parts.push(`**${val}**`);
       return;
     }
 
@@ -401,7 +847,7 @@ function extractInlineFormattedText(el: Element): string {
         const prevLen = parts.length;
         walkNode(c);
         return parts.splice(prevLen).join('');
-      }).join('').trim();
+      }).join('').replace(/\*\*/g, '').trim();
       if (inner) {
         parts.push(`**${inner}**`);
       }
@@ -464,6 +910,12 @@ export function legacyHtmlToStructuredNote(html: string): StructuredNoteData {
           current.points.push(`| ${cols.join(' | ')} |`);
           return;
         }
+      }
+
+      // Preserve flow sequences intact without mis-splitting as key-value terms
+      if (clean.includes('⇒ ') || (clean.match(/\s*→\s*/g) || []).length >= 2) {
+        current.points.push(clean);
+        return;
       }
 
       const boldKv = clean.match(/^\*\*(.+?)\*\*:\s*(.+)$/);
@@ -571,7 +1023,11 @@ export function structuredNoteToHtml(title: string, note: StructuredNoteData): s
     if (!sec.heading.trim() && sec.points.length === 0) continue;
     parts.push(`<h2>${esc(sec.heading)}</h2>`);
     if (sec.points.length > 0) {
-      parts.push(`<ul>${sec.points.map((p) => `<li>${fmt(p)}</li>`).join('')}</ul>`);
+      parts.push(
+        `<ul>${sec.points
+          .map((p) => `<li>${fmt(p.replace(/^↳\s*/, '').replace(/^¶\s*/, ''))}</li>`)
+          .join('')}</ul>`
+      );
     }
   }
   if (note.keyTerms.length > 0) {
@@ -593,7 +1049,8 @@ export function structuredNoteToHtml(title: string, note: StructuredNoteData): s
 export type SectionRenderBlock =
   | { kind: 'subheading'; text: string }
   | { kind: 'paragraph'; text: string }
-  | { kind: 'bullet'; text: string }
+  | { kind: 'bullet'; text: string; indent?: number }
+  | { kind: 'flow'; label?: string; steps: string[] }
   | { kind: 'table'; headers: string[]; rows: string[][] };
 
 function splitPipeRow(line: string): string[] {
@@ -605,8 +1062,36 @@ function splitPipeRow(line: string): string[] {
     .map((c) => c.trim());
 }
 
+function parseFlowLine(raw: string): { label?: string; steps: string[] } | null {
+  const arrowCount = (raw.match(/\s*→\s*/g) || []).length;
+  if (!raw.includes('⇒ ') && arrowCount < 2) return null;
+
+  let label: string | undefined;
+  let body = raw;
+  const flowMarkerIdx = raw.indexOf('⇒ ');
+  if (flowMarkerIdx >= 0) {
+    const prefix = raw.slice(0, flowMarkerIdx).replace(/\*\*/g, '').replace(/:\s*$/, '').trim();
+    if (prefix) label = prefix;
+    body = raw.slice(flowMarkerIdx + 2).trim();
+  } else {
+    const colonSplit = raw.match(/^(?:\*\*)?([^:*→]{2,48})(?:\*\*)?:\s*(.+)$/);
+    if (colonSplit && (colonSplit[2].match(/\s*→\s*/g) || []).length >= 2) {
+      label = colonSplit[1].trim();
+      body = colonSplit[2].trim();
+    }
+  }
+
+  const steps = body
+    .split(/\s*→\s*/)
+    .map((s) => s.replace(/^\d+\)\s*/, '').trim())
+    .filter(Boolean);
+
+  if (steps.length < 2) return null;
+  return { label, steps };
+}
+
 /**
- * Groups raw section point strings into semantic blocks (tables, H3 subheadings, prose paragraphs, bullets)
+ * Groups raw section point strings into semantic blocks (tables, process flows, H3 subheadings, prose paragraphs, bullets)
  * for clean Save My Exams-style rendering.
  */
 export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
@@ -646,8 +1131,21 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
       continue;
     }
 
+    const flow = parseFlowLine(raw.startsWith('¶ ') ? raw.slice(2).trim() : raw);
+    if (flow) {
+      blocks.push({ kind: 'flow', label: flow.label, steps: flow.steps });
+      i++;
+      continue;
+    }
+
     if (raw.startsWith('¶ ')) {
       blocks.push({ kind: 'paragraph', text: raw.slice(2).trim() });
+      i++;
+      continue;
+    }
+
+    if (raw.startsWith('↳ ')) {
+      blocks.push({ kind: 'bullet', text: raw.slice(2).trim(), indent: 1 });
       i++;
       continue;
     }
@@ -658,4 +1156,133 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
 
   return blocks;
 }
+
+const DATE_PREFIX_REGEX =
+  /^(?:\*\*)?((?:c\.\s*)?(?:\d{1,2}\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)?\.?\s*\d{3,4}(?:\s*[–-]\s*\d{2,4})?(?:\s*(?:BC|BCE|AD))?)(?:\*\*)?\s*(?:[:–—-]|\s-\s)\s*(.+)$/i;
+
+const NARRATIVE_DATE_REGEX =
+  /\b(?:In|On|By|During|From)\s+((?:\d{1,2}\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?\.?\s+)?\d{3,4}(?:\s*[–-]\s*\d{2,4})?(?:\s*(?:BC|BCE|AD))?)\s*[,:]?\s+(.{12,})/i;
+
+function splitClauseAndSignificance(rawBody: string): {
+  title: string;
+  detail: string;
+  significance?: string;
+} {
+  const clean = rawBody.replace(/\*\*/g, '').trim();
+  const sigSplit = clean.match(
+    /^(.+?)\s*(?:;|\.|,)?\s*(?:which\s+(?:meant|led to|caused|triggered|resulted in)|leading to|significance\s*:|impact\s*:|—)\s*(.{8,})$/i
+  );
+  const main = sigSplit ? sigSplit[1].trim() : clean;
+  const significance = sigSplit ? sigSplit[2].trim() : undefined;
+
+  const titleColon = main.match(/^([^:]{3,65}):\s+(.+)$/);
+  if (titleColon) {
+    return {
+      title: titleColon[1].trim(),
+      detail: titleColon[2].trim(),
+      significance,
+    };
+  }
+
+  // Extract concise title (first ~7 words or up to comma)
+  const commaIdx = main.indexOf(',');
+  const shortLead =
+    commaIdx >= 8 && commaIdx <= 58
+      ? main.slice(0, commaIdx).trim()
+      : main.split(/\s+/).slice(0, 7).join(' ').replace(/[.;:]+$/, '');
+
+  return {
+    title: shortLead || main.slice(0, 55),
+    detail: main,
+    significance,
+  };
+}
+
+/**
+ * Entity Extractor: scans structured note sections + raw text for dated historical events,
+ * preserving parent section as Era and extracting What Happened vs Significance.
+ */
+export function extractTimelineEventsFromNote(
+  note: StructuredNoteData,
+  rawText = ''
+): TimelineEventItem[] {
+  const events: TimelineEventItem[] = [];
+  const seen = new Set<string>();
+
+  const pushCandidate = (
+    date: string,
+    body: string,
+    era?: string,
+    wasBolded = false
+  ) => {
+    const cleanDate = date.replace(/\*\*/g, '').trim();
+    const yearMatch = cleanDate.match(/\d{3,4}/);
+    if (!yearMatch) return;
+    const yearNum = Number(yearMatch[0]);
+    if (yearNum > 2100 && !/BC|BCE/i.test(cleanDate)) return;
+
+    const { title, detail, significance } = splitClauseAndSignificance(body);
+    if (!title || title.length < 3) return;
+    const key = `${cleanDate.toLowerCase()}::${title.toLowerCase().slice(0, 32)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    const isKey =
+      wasBolded ||
+      /\b(?:turning point|landmark|crucial|key event|vital)\b/i.test(`${body} ${significance || ''}`);
+
+    events.push({
+      id: makeNoteId('ev'),
+      date: cleanDate,
+      title,
+      detail,
+      significance,
+      era: era && !/^(?:key points|study notes|core concepts)$/i.test(era) ? era : undefined,
+      keyEvent: isKey || undefined,
+    });
+  };
+
+  const scanLine = (rawLine: string, era?: string) => {
+    const line = rawLine.replace(/^(?:↳|¶)\s*/, '').trim();
+    if (!line || line.startsWith('### ') || line.startsWith('|')) return;
+
+    const boldInLine = /\*\*/.test(line);
+
+    const prefixMatch = line.match(DATE_PREFIX_REGEX);
+    if (prefixMatch && prefixMatch[1].trim().length <= 30) {
+      pushCandidate(prefixMatch[1], prefixMatch[2], era, boldInLine);
+      return;
+    }
+
+    // Check sentences inside longer prose/bullet lines
+    const sentences = line.split(/(?<=[.!?])\s+/);
+    for (const sentence of sentences) {
+      const sPrefix = sentence.match(DATE_PREFIX_REGEX);
+      if (sPrefix && sPrefix[1].trim().length <= 30) {
+        pushCandidate(sPrefix[1], sPrefix[2], era, /\*\*/.test(sentence));
+        continue;
+      }
+      const narMatch = sentence.match(NARRATIVE_DATE_REGEX);
+      if (narMatch && narMatch[1].trim().length <= 30) {
+        pushCandidate(narMatch[1], narMatch[2], era, /\*\*/.test(sentence));
+      }
+    }
+  };
+
+  for (const sec of note.sections) {
+    const secEra = sec.heading.replace(/^\d+[.)]\s*/, '').trim();
+    for (const pt of sec.points) {
+      scanLine(pt, secEra);
+    }
+  }
+
+  if (events.length === 0 && rawText.trim()) {
+    for (const line of rawText.split('\n')) {
+      scanLine(line);
+    }
+  }
+
+  return events;
+}
+
 

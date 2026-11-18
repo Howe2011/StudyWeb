@@ -1,12 +1,15 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   ArrowUpDown,
   BookOpen,
   Calendar,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Edit3,
   Eye,
@@ -17,7 +20,9 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Search,
   Share2,
+  Star,
   Trash2,
   Upload,
   X,
@@ -98,6 +103,54 @@ function renderInlineBold(text: string) {
   });
 }
 
+function cleanSectionTitle(heading: string): {
+  title: string;
+  isCaseStudy: boolean;
+  contextTag?: string;
+} {
+  let raw = String(heading || '').replace(/^\d+[.)]\s*/, '').trim();
+  let contextTag: string | undefined;
+  const tagMatch = raw.match(/\s*\[([A-Za-z0-9 /&-]{2,14})\]\s*$/);
+  if (tagMatch) {
+    contextTag = tagMatch[1].trim();
+    raw = raw.slice(0, raw.length - tagMatch[0].length).trim();
+  }
+  const isCaseStudy = /^case\s+study\b/i.test(raw);
+  if (isCaseStudy) {
+    raw = raw.replace(/^case\s+study\s*[–—:-]?\s*/i, '').trim() || raw;
+  }
+  return { title: raw || 'Key Points', isCaseStudy, contextTag };
+}
+
+function splitTermBullet(text: string): { term: string; body: string } | null {
+  const boldMatch = text.match(/^\*\*(.+?)\*\*:\s*(.+)$/);
+  if (boldMatch && boldMatch[1].length <= 80) {
+    return { term: boldMatch[1].trim(), body: boldMatch[2].trim() };
+  }
+  const plainMatch = text.match(/^([A-Za-z0-9 ()/%'’&-]{2,52}):\s+(.{6,})$/);
+  if (plainMatch && !/^http/i.test(plainMatch[1])) {
+    return { term: plainMatch[1].trim(), body: plainMatch[2].trim() };
+  }
+  return null;
+}
+
+function splitEventDetailAndSignificance(ev: TimelineEventItem): {
+  what: string;
+  why: string;
+} {
+  if (ev.significance && ev.significance.trim()) {
+    return { what: ev.detail.trim(), why: ev.significance.trim() };
+  }
+  const idx = ev.detail.indexOf(' — ');
+  if (idx > 0) {
+    return {
+      what: ev.detail.slice(0, idx).trim(),
+      why: ev.detail.slice(idx + 3).trim(),
+    };
+  }
+  return { what: ev.detail.trim(), why: '' };
+}
+
 export function NotesStudioView({
   workspace,
   selectedSubjectId,
@@ -143,19 +196,29 @@ export function NotesStudioView({
   const [addingTopic, setAddingTopic] = useState(false);
   const [cardsFeedback, setCardsFeedback] = useState<string | null>(null);
   const [showLegacyHtml, setShowLegacyHtml] = useState(false);
+  const [glossaryExpanded, setGlossaryExpanded] = useState(false);
+  const [glossaryFilter, setGlossaryFilter] = useState('');
 
   // History Timeline state
   const [hideTimelineDates, setHideTimelineDates] = useState(false);
   const [revealedEventIds, setRevealedEventIds] = useState<Set<string>>(new Set());
+  const [timelineEraFilter, setTimelineEraFilter] = useState<string>('ALL');
+  const [timelineSearch, setTimelineSearch] = useState('');
+  const [timelineKeyOnly, setTimelineKeyOnly] = useState(false);
+  const [addEventOpen, setAddEventOpen] = useState(false);
   const [tlDate, setTlDate] = useState('');
   const [tlTitle, setTlTitle] = useState('');
   const [tlDetail, setTlDetail] = useState('');
+  const [tlSignificance, setTlSignificance] = useState('');
   const [tlEra, setTlEra] = useState('');
+  const [tlKeyEvent, setTlKeyEvent] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [editEvDate, setEditEvDate] = useState('');
   const [editEvTitle, setEditEvTitle] = useState('');
   const [editEvDetail, setEditEvDetail] = useState('');
+  const [editEvSignificance, setEditEvSignificance] = useState('');
   const [editEvEra, setEditEvEra] = useState('');
+  const [editEvKeyEvent, setEditEvKeyEvent] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkAutoSort, setBulkAutoSort] = useState(true);
@@ -200,6 +263,11 @@ export function NotesStudioView({
     setCardsFeedback(null);
     setShowLegacyHtml(false);
     setEditingEventId(null);
+    setTimelineEraFilter('ALL');
+    setTimelineSearch('');
+    setTimelineKeyOnly(false);
+    setGlossaryFilter('');
+    setGlossaryExpanded((activeTopic?.notes.keyTerms.length || 0) <= 8);
     if (viewMode === 'timeline' && !isHistorySubject) {
       setViewMode('read');
     }
@@ -304,7 +372,9 @@ export function NotesStudioView({
       date: tlDate.trim(),
       title: tlTitle.trim(),
       detail: tlDetail.trim(),
+      significance: tlSignificance.trim() || undefined,
       era: tlEra.trim() || undefined,
+      keyEvent: tlKeyEvent || undefined,
     };
     updateTopic(activeTopic.id, (t) => ({
       ...t,
@@ -313,7 +383,10 @@ export function NotesStudioView({
     setTlDate('');
     setTlTitle('');
     setTlDetail('');
+    setTlSignificance('');
     setTlEra('');
+    setTlKeyEvent(false);
+    setAddEventOpen(false);
   };
 
   const handleSortTimelineEvents = () => {
@@ -326,11 +399,12 @@ export function NotesStudioView({
     }));
   };
 
-  const handleMoveTimelineEvent = (idx: number, dir: -1 | 1) => {
+  const handleMoveTimelineEvent = (evId: string, dir: -1 | 1) => {
     if (!activeTopic) return;
     const list = [...(activeTopic.timelineEvents || [])];
+    const idx = list.findIndex((x) => x.id === evId);
     const target = idx + dir;
-    if (target < 0 || target >= list.length) return;
+    if (idx < 0 || target < 0 || target >= list.length) return;
     const [item] = list.splice(idx, 1);
     list.splice(target, 0, item);
     updateTopic(activeTopic.id, (t) => ({
@@ -350,7 +424,9 @@ export function NotesStudioView({
               date: editEvDate.trim(),
               title: editEvTitle.trim(),
               detail: editEvDetail.trim(),
+              significance: editEvSignificance.trim() || undefined,
               era: editEvEra.trim() || undefined,
+              keyEvent: editEvKeyEvent || undefined,
             }
           : ev
       ),
@@ -375,7 +451,9 @@ export function NotesStudioView({
           date: node.date.trim(),
           title: node.title.trim(),
           detail: node.detail.trim(),
+          significance: node.significance?.trim() || undefined,
           era: node.era?.trim() || undefined,
+          keyEvent: node.keyEvent || undefined,
         });
         addedCount++;
       }
@@ -397,6 +475,77 @@ export function NotesStudioView({
     setBulkText('');
     setBulkOpen(false);
   };
+
+  const handleMakeFlashcardsFromTimeline = () => {
+    if (!activeSubject || !activeTopic) return;
+    const events = activeTopic.timelineEvents || [];
+    if (!events.length) {
+      setBulkFeedback('Add timeline events first before generating flashcards.');
+      return;
+    }
+    let addedCount = 0;
+    onUpdateWorkspace((prev) => {
+      const existingQ = new Set(
+        prev.flashcards
+          .filter((c) => c.subjectId === activeSubject.id)
+          .map((c) => c.q.trim().toLowerCase())
+      );
+      const added: StudyFlashcard[] = [];
+      for (const ev of events) {
+        const q = `When did "${ev.title}" take place, and why did it matter?`;
+        if (existingQ.has(q.toLowerCase())) continue;
+        existingQ.add(q.toLowerCase());
+        const parts = splitEventDetailAndSignificance(ev);
+        const answerBits = [ev.date, parts.what, parts.why ? `Significance: ${parts.why}` : ''].filter(Boolean);
+        added.push({
+          id: makeId('fc'),
+          subjectId: activeSubject.id,
+          topicId: activeTopic.id,
+          sectionName: `${activeTopic.name} · Timeline`,
+          q,
+          a: answerBits.join(' — '),
+          box: 1,
+          dueAt: Date.now(),
+          flagged: Boolean(ev.keyEvent),
+          createdAt: new Date().toISOString(),
+        });
+      }
+      addedCount = added.length;
+      if (!added.length) return prev;
+      return {
+        ...prev,
+        flashcards: [...prev.flashcards, ...added],
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setBulkFeedback(
+      addedCount > 0
+        ? `Created ${addedCount} timeline flashcard${addedCount === 1 ? '' : 's'} in ${activeTopic.name}.`
+        : 'All timeline events are already saved as flashcards.'
+    );
+  };
+
+  const timelineEventsAll = activeTopic?.timelineEvents || [];
+  const timelineEras = useMemo(() => {
+    const set = new Set<string>();
+    for (const ev of timelineEventsAll) {
+      if (ev.era && ev.era.trim()) set.add(ev.era.trim());
+    }
+    return Array.from(set);
+  }, [timelineEventsAll]);
+
+  const filteredTimelineEvents = useMemo(() => {
+    const q = timelineSearch.trim().toLowerCase();
+    return timelineEventsAll.filter((ev) => {
+      if (timelineEraFilter !== 'ALL' && (ev.era || '').trim() !== timelineEraFilter) return false;
+      if (timelineKeyOnly && !ev.keyEvent) return false;
+      if (q) {
+        const hay = `${ev.date} ${ev.title} ${ev.detail} ${ev.significance || ''} ${ev.era || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [timelineEventsAll, timelineEraFilter, timelineKeyOnly, timelineSearch]);
 
   if (!workspace.subjects.length) {
     return (
@@ -667,6 +816,12 @@ export function NotesStudioView({
                       <span className="font-mono-num">Spec {activeTopic.specCode}</span>
                     </>
                   )}
+                  {activeTopic.tags && activeTopic.tags.length > 0 && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>{activeTopic.tags.join(' · ')}</span>
+                    </>
+                  )}
                   <span aria-hidden="true">·</span>
                   <span className="inline-flex items-center gap-1 font-mono-num">
                     <Clock className="h-3 w-3" aria-hidden="true" />
@@ -743,214 +898,441 @@ export function NotesStudioView({
               </div>
             )}
 
-            {/* MODE 1: SAVE MY EXAMS READER */}
-            {viewMode === 'read' && (
-              <div className="space-y-6 text-[15px] leading-relaxed">
-                {/* Summary Callout */}
-                {activeTopic.notes.summary.trim() ? (
-                  <section className="sd-card p-5">
-                    <div className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
-                      Topic Overview
-                    </div>
-                    <p className="mt-1.5 whitespace-pre-line text-[var(--ink)]">
-                      {renderInlineBold(activeTopic.notes.summary)}
-                    </p>
-                  </section>
-                ) : null}
+            {/* MODE 1: STRUCTURED SAVE MY EXAMS READER */}
+            {viewMode === 'read' && (() => {
+              const populatedSections = activeTopic.notes.sections.filter(
+                (s) => s.points.length > 0 || s.heading.trim()
+              );
+              let theorySectionCounter = 0;
+              const filteredTerms = activeTopic.notes.keyTerms.filter((kt) => {
+                if (!glossaryFilter.trim()) return true;
+                const q = glossaryFilter.trim().toLowerCase();
+                return (kt.term + ' ' + kt.definition).toLowerCase().includes(q);
+              });
 
-                {/* Specification Sections */}
-                {activeTopic.notes.sections.some((s) => s.points.length > 0 || s.heading.trim()) ? (
-                  <div className="space-y-5">
-                    {activeTopic.notes.sections.map((sec) => {
-                      if (!sec.heading.trim() && sec.points.length === 0) return null;
-                      return (
-                        <section key={sec.id} className="sd-card p-6">
-                          <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                            {sec.heading || 'Key Points'}
-                          </h2>
-                          {sec.points.length > 0 && (
-                            <div className="mt-3 space-y-2.5 text-[var(--ink)]">
-                              {groupSectionPoints(sec.points).map((blk, i) => {
-                                if (blk.kind === 'subheading') {
-                                  return (
-                                    <h3
-                                      key={i}
-                                      className="font-display pt-2 text-[15px] font-bold text-[var(--e3)]"
-                                    >
-                                      {renderInlineBold(blk.text)}
-                                    </h3>
-                                  );
-                                }
-                                if (blk.kind === 'table') {
+              return (
+                <div className="space-y-6 text-[15px] leading-relaxed">
+                  {/* Quick Section Jump Index (TOC) */}
+                  {populatedSections.length >= 2 && (
+                    <nav
+                      aria-label="Topic section contents"
+                      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-[var(--line)] pb-3 text-xs"
+                    >
+                      <span className="font-bold text-[var(--mute)]">Jump to:</span>
+                      {populatedSections.map((sec, idx) => {
+                        const meta = cleanSectionTitle(sec.heading);
+                        return (
+                          <a
+                            key={sec.id}
+                            href={`#note-sec-${sec.id}`}
+                            className="inline-flex items-baseline gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                          >
+                            <span className="font-mono-num text-[11px] opacity-75">
+                              {meta.isCaseStudy ? 'CS' : String(idx + 1).padStart(2, '0')}
+                            </span>
+                            <span className="max-w-[180px] truncate">{meta.title}</span>
+                          </a>
+                        );
+                      })}
+                      {activeTopic.notes.keyTerms.length > 0 && (
+                        <a
+                          href="#note-key-terms"
+                          className="font-semibold text-[var(--mute)] hover:text-[var(--ink)] hover:underline whitespace-nowrap"
+                        >
+                          Key Terms ({activeTopic.notes.keyTerms.length})
+                        </a>
+                      )}
+                    </nav>
+                  )}
+
+                  {/* Summary Callout */}
+                  {activeTopic.notes.summary.trim() ? (
+                    <section className="sd-card p-6">
+                      <div className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
+                        Topic Overview
+                      </div>
+                      <p className="mt-2 max-w-[72ch] whitespace-pre-line text-[15px] leading-[1.7] text-[var(--ink)]">
+                        {renderInlineBold(activeTopic.notes.summary)}
+                      </p>
+                    </section>
+                  ) : null}
+
+                  {/* Specification Sections */}
+                  {populatedSections.length > 0 ? (
+                    <div className="space-y-5">
+                      {populatedSections.map((sec) => {
+                        const meta = cleanSectionTitle(sec.heading);
+                        if (!meta.isCaseStudy) theorySectionCounter += 1;
+                        const sectionNumber = String(theorySectionCounter).padStart(2, '0');
+                        const blocks = groupSectionPoints(sec.points);
+
+                        return (
+                          <section
+                            id={`note-sec-${sec.id}`}
+                            key={sec.id}
+                            className={`sd-card scroll-mt-4 p-6 ${
+                              meta.isCaseStudy
+                                ? 'border-[color-mix(in_srgb,var(--e2)_45%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_3%,var(--card))]'
+                                : ''
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[var(--line)] pb-3">
+                              <div className="flex min-w-0 items-baseline gap-3">
+                                {meta.isCaseStudy ? (
+                                  <span className="text-xs font-bold uppercase tracking-wider text-[var(--e2)] whitespace-nowrap">
+                                    Case Study
+                                  </span>
+                                ) : (
+                                  <span className="font-mono-num text-sm font-bold text-[var(--e3)]">
+                                    {sectionNumber}.
+                                  </span>
+                                )}
+                                <h2 className="font-display text-lg font-bold text-[var(--ink)] sm:text-xl">
+                                  {meta.title}
+                                </h2>
+                              </div>
+                              {meta.contextTag && (
+                                <span className="font-mono-num text-xs font-semibold text-[var(--mute)]">
+                                  {meta.contextTag}
+                                </span>
+                              )}
+                            </div>
+
+                            {blocks.length > 0 && (
+                              <div className="mt-4 space-y-3 text-[var(--ink)]">
+                                {blocks.map((blk, i) => {
+                                  if (blk.kind === 'subheading') {
+                                    return (
+                                      <h3
+                                        key={i}
+                                        className={`font-display text-[15px] font-bold text-[var(--e3)] ${
+                                          i > 0 ? 'border-t border-[var(--line)] pt-4 mt-4' : ''
+                                        }`}
+                                      >
+                                        {renderInlineBold(blk.text)}
+                                      </h3>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'flow') {
+                                    return (
+                                      <div
+                                        key={i}
+                                        className="my-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4"
+                                      >
+                                        {blk.label && (
+                                          <div className="mb-2.5 text-xs font-bold text-[var(--e3)]">
+                                            {blk.label}
+                                          </div>
+                                        )}
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-stretch">
+                                          {blk.steps.map((step, sIdx) => (
+                                            <div
+                                              key={sIdx}
+                                              className="flex items-center gap-2 sm:max-w-[240px]"
+                                            >
+                                              <div className="flex-1 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-xs leading-snug text-[var(--ink)]">
+                                                <span className="font-mono-num mr-1.5 font-bold text-[var(--e3)]">
+                                                  {sIdx + 1}.
+                                                </span>
+                                                {renderInlineBold(step)}
+                                              </div>
+                                              {sIdx < blk.steps.length - 1 && (
+                                                <ArrowRight
+                                                  className="hidden h-3.5 w-3.5 shrink-0 text-[var(--mute)] sm:block"
+                                                  aria-hidden="true"
+                                                />
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'table') {
+                                    return (
+                                      <div
+                                        key={i}
+                                        className="my-2 overflow-x-auto rounded-xl border border-[var(--line)]"
+                                      >
+                                        <table className="w-full border-collapse text-left text-xs sm:text-sm">
+                                          <thead className="border-b border-[var(--line)] bg-[var(--bg)]">
+                                            <tr>
+                                              {blk.headers.map((h, hi) => (
+                                                <th
+                                                  key={hi}
+                                                  className="px-4 py-2.5 font-bold text-[var(--ink)]"
+                                                >
+                                                  {renderInlineBold(h)}
+                                                </th>
+                                              ))}
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-[var(--line)]">
+                                            {blk.rows.map((row, ri) => (
+                                              <tr
+                                                key={ri}
+                                                className={
+                                                  ri % 2 === 1
+                                                    ? 'bg-[color-mix(in_srgb,var(--bg)_55%,var(--card))]'
+                                                    : ''
+                                                }
+                                              >
+                                                {row.map((cell, ci) => (
+                                                  <td
+                                                    key={ci}
+                                                    className="px-4 py-2.5 align-top leading-relaxed text-[var(--ink)]"
+                                                  >
+                                                    {renderInlineBold(cell)}
+                                                  </td>
+                                                ))}
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'paragraph') {
+                                    return (
+                                      <p
+                                        key={i}
+                                        className="max-w-[72ch] whitespace-pre-line leading-[1.7] text-[var(--ink)]"
+                                      >
+                                        {renderInlineBold(blk.text)}
+                                      </p>
+                                    );
+                                  }
+
+                                  const isSubBullet = Boolean(blk.indent && blk.indent > 0);
+                                  const kv = splitTermBullet(blk.text);
+                                  if (kv) {
+                                    return (
+                                      <div
+                                        key={i}
+                                        className={`flex items-start gap-2.5 leading-relaxed ${
+                                          isSubBullet ? 'pl-6' : 'pl-1'
+                                        }`}
+                                      >
+                                        <span
+                                          className={`mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                            isSubBullet
+                                              ? 'border border-[var(--e3)] bg-transparent'
+                                              : 'bg-[var(--e3)]'
+                                          }`}
+                                          aria-hidden="true"
+                                        />
+                                        <div className="max-w-[72ch]">
+                                          <span className="font-bold text-[var(--ink)]">
+                                            {kv.term}:{' '}
+                                          </span>
+                                          <span className="text-[var(--ink)]/90">
+                                            {renderInlineBold(kv.body)}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
                                   return (
                                     <div
                                       key={i}
-                                      className="my-2 overflow-x-auto rounded-xl border border-[var(--line)]"
+                                      className={`flex items-start gap-2.5 leading-relaxed ${
+                                        isSubBullet ? 'pl-6' : 'pl-1'
+                                      }`}
                                     >
-                                      <table className="w-full border-collapse text-left text-xs sm:text-sm">
-                                        <thead className="border-b border-[var(--line)] bg-[var(--bg)]">
-                                          <tr>
-                                            {blk.headers.map((h, hi) => (
-                                              <th
-                                                key={hi}
-                                                className="px-3.5 py-2.5 font-bold text-[var(--ink)]"
-                                              >
-                                                {renderInlineBold(h)}
-                                              </th>
-                                            ))}
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-[var(--line)]">
-                                          {blk.rows.map((row, ri) => (
-                                            <tr key={ri}>
-                                              {row.map((cell, ci) => (
-                                                <td
-                                                  key={ci}
-                                                  className="px-3.5 py-2 align-top text-[var(--ink)]"
-                                                >
-                                                  {renderInlineBold(cell)}
-                                                </td>
-                                              ))}
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
+                                      <span
+                                        className={`mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                          isSubBullet
+                                            ? 'border border-[var(--mute)] bg-transparent'
+                                            : 'bg-[var(--mute)]'
+                                        }`}
+                                        aria-hidden="true"
+                                      />
+                                      <span className="max-w-[72ch]">
+                                        {renderInlineBold(blk.text)}
+                                      </span>
                                     </div>
                                   );
-                                }
-                                if (blk.kind === 'paragraph') {
-                                  return (
-                                    <p key={i} className="whitespace-pre-line leading-relaxed">
-                                      {renderInlineBold(blk.text)}
-                                    </p>
-                                  );
-                                }
-                                return (
-                                  <div key={i} className="flex items-start gap-2.5 pl-1">
-                                    <span
-                                      className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ink)]"
-                                      aria-hidden="true"
-                                    />
-                                    <span>{renderInlineBold(blk.text)}</span>
-                                  </div>
-                                );
-                              })}
+                                })}
+                              </div>
+                            )}
+                          </section>
+                        );
+                      })}
+                    </div>
+                  ) : !activeTopic.notes.summary.trim() &&
+                    !activeTopic.notes.keyTerms.length &&
+                    !activeTopic.notes.legacyHtml ? (
+                    <div className="sd-card p-8 text-center">
+                      <p className="text-sm text-[var(--mute)]">
+                        This topic doesn&apos;t have structured notes yet.
+                      </p>
+                      <div className="mt-4 flex flex-wrap justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('edit')}
+                          className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Write in Notion Editor</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onOpenImport}
+                          className="sd-btn px-4 py-2 text-xs whitespace-nowrap"
+                        >
+                          <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Paste / Import Notes</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Worked Example & Examiner Tip */}
+                  {(activeTopic.notes.workedExample.trim() ||
+                    activeTopic.notes.examTip.trim()) && (
+                    <div
+                      className={`grid gap-4 ${
+                        activeTopic.notes.workedExample.trim() &&
+                        activeTopic.notes.examTip.trim()
+                          ? 'lg:grid-cols-2'
+                          : ''
+                      }`}
+                    >
+                      {activeTopic.notes.workedExample.trim() && (
+                        <section className="sd-card p-5">
+                          <div className="text-xs font-bold uppercase tracking-wider text-[var(--ok)]">
+                            Worked Example
+                          </div>
+                          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-[var(--ink)]">
+                            {renderInlineBold(activeTopic.notes.workedExample)}
+                          </p>
+                        </section>
+                      )}
+
+                      {activeTopic.notes.examTip.trim() && (
+                        <section className="sd-card border-[var(--e2)] p-5">
+                          <div className="text-xs font-bold uppercase tracking-wider text-[var(--e2)]">
+                            Examiner Tip
+                          </div>
+                          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-[var(--ink)]">
+                            {renderInlineBold(activeTopic.notes.examTip)}
+                          </p>
+                        </section>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Key Terms & Definitions Table + Explicit Make Flashcards */}
+                  {activeTopic.notes.keyTerms.length > 0 && (
+                    <section id="note-key-terms" className="sd-card scroll-mt-4 overflow-hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-6 py-4">
+                        <button
+                          type="button"
+                          onClick={() => setGlossaryExpanded((v) => !v)}
+                          className="flex cursor-pointer items-center gap-2 text-left"
+                        >
+                          {glossaryExpanded ? (
+                            <ChevronDown className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                          )}
+                          <div>
+                            <h2 className="font-display text-base font-bold text-[var(--ink)] sm:text-lg">
+                              Key Terms &amp; Definitions ({activeTopic.notes.keyTerms.length})
+                            </h2>
+                            <p className="text-xs text-[var(--mute)]">
+                              Click Make Flashcards whenever you want spaced-repetition cards from these terms.
+                            </p>
+                          </div>
+                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setGlossaryExpanded((v) => !v)}
+                            className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            {glossaryExpanded ? 'Collapse' : 'Show Glossary'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleMakeFlashcardsFromTerms}
+                            className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap shrink-0"
+                          >
+                            <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Make Flashcards ({activeTopic.notes.keyTerms.length})</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {glossaryExpanded && (
+                        <>
+                          {activeTopic.notes.keyTerms.length > 6 && (
+                            <div className="border-b border-[var(--line)] bg-[var(--bg)] px-6 py-2.5">
+                              <div className="relative max-w-xs">
+                                <Search
+                                  className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                                  aria-hidden="true"
+                                />
+                                <input
+                                  type="text"
+                                  value={glossaryFilter}
+                                  onChange={(e) => setGlossaryFilter(e.target.value)}
+                                  placeholder="Filter glossary terms…"
+                                  className="sd-input py-1 pl-8 text-xs"
+                                />
+                              </div>
                             </div>
                           )}
-                        </section>
-                      );
-                    })}
-                  </div>
-                ) : !activeTopic.notes.summary.trim() &&
-                  !activeTopic.notes.keyTerms.length &&
-                  !activeTopic.notes.legacyHtml ? (
-                  <div className="sd-card p-8 text-center">
-                    <p className="text-sm text-[var(--mute)]">
-                      This topic doesn&apos;t have structured notes yet.
-                    </p>
-                    <div className="mt-4 flex flex-wrap justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setViewMode('edit')}
-                        className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Write in Notion Editor</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={onOpenImport}
-                        className="sd-btn px-4 py-2 text-xs whitespace-nowrap"
-                      >
-                        <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Paste / Import Notes</span>
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
+                          <div className="divide-y divide-[var(--line)]">
+                            {filteredTerms.map((kt) => (
+                              <div
+                                key={kt.id}
+                                className="grid gap-1.5 px-6 py-3 text-sm sm:grid-cols-3 sm:gap-4"
+                              >
+                                <div className="font-bold text-[var(--ink)]">{kt.term}</div>
+                                <div className="text-[var(--mute)] sm:col-span-2">
+                                  {kt.definition}
+                                </div>
+                              </div>
+                            ))}
+                            {filteredTerms.length === 0 && (
+                              <div className="px-6 py-4 text-xs text-[var(--mute)]">
+                                No key terms match &ldquo;{glossaryFilter}&rdquo;.
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </section>
+                  )}
 
-                {/* Key Terms & Definitions Table + Explicit Make Flashcards */}
-                {activeTopic.notes.keyTerms.length > 0 && (
-                  <section className="sd-card overflow-hidden">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-6 py-4">
-                      <div>
-                        <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                          Key Terms &amp; Definitions
-                        </h2>
-                        <p className="text-xs text-[var(--mute)]">
-                          Click Make Flashcards whenever you want spaced-repetition cards from these terms.
-                        </p>
-                      </div>
+                  {/* Optional Migrated Legacy / Word Tables */}
+                  {activeTopic.notes.legacyHtml && (
+                    <div className="sd-card p-5">
                       <button
                         type="button"
-                        onClick={handleMakeFlashcardsFromTerms}
-                        className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap shrink-0"
+                        onClick={() => setShowLegacyHtml((v) => !v)}
+                        className="cursor-pointer text-xs font-bold text-[var(--e3)] hover:underline"
                       >
-                        <Layers className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Make Flashcards ({activeTopic.notes.keyTerms.length})</span>
+                        {showLegacyHtml
+                          ? 'Hide original document tables / formatting'
+                          : 'Show original Word / legacy HTML document view'}
                       </button>
-                    </div>
-
-                    <div className="divide-y divide-[var(--line)]">
-                      {activeTopic.notes.keyTerms.map((kt) => (
+                      {showLegacyHtml && (
                         <div
-                          key={kt.id}
-                          className="grid gap-2 px-6 py-3.5 text-sm sm:grid-cols-3"
-                        >
-                          <div className="font-bold text-[var(--ink)]">{kt.term}</div>
-                          <div className="text-[var(--mute)] sm:col-span-2">{kt.definition}</div>
-                        </div>
-                      ))}
+                          className="mt-3 overflow-x-auto text-sm text-[var(--ink)] [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--line)] [&_td]:p-2 [&_th]:border [&_th]:border-[var(--line)] [&_th]:p-2"
+                          dangerouslySetInnerHTML={{ __html: activeTopic.notes.legacyHtml }}
+                        />
+                      )}
                     </div>
-                  </section>
-                )}
-
-                {/* Worked Example */}
-                {activeTopic.notes.workedExample.trim() && (
-                  <section className="sd-card p-5">
-                    <div className="text-xs font-bold uppercase tracking-wider text-[var(--ok)]">
-                      Worked Example
-                    </div>
-                    <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-[var(--ink)]">
-                      {renderInlineBold(activeTopic.notes.workedExample)}
-                    </p>
-                  </section>
-                )}
-
-                {/* Examiner Tip */}
-                {activeTopic.notes.examTip.trim() && (
-                  <section className="sd-card border-[var(--e2)] p-5">
-                    <div className="text-xs font-bold uppercase tracking-wider text-[var(--e2)]">
-                      Examiner Tip
-                    </div>
-                    <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-[var(--ink)]">
-                      {renderInlineBold(activeTopic.notes.examTip)}
-                    </p>
-                  </section>
-                )}
-
-                {/* Optional Migrated Legacy / Word Tables */}
-                {activeTopic.notes.legacyHtml && (
-                  <div className="sd-card p-5">
-                    <button
-                      type="button"
-                      onClick={() => setShowLegacyHtml((v) => !v)}
-                      className="cursor-pointer text-xs font-bold text-[var(--e3)] hover:underline"
-                    >
-                      {showLegacyHtml
-                        ? 'Hide original document tables / formatting'
-                        : 'Show imported Word / legacy HTML document tables'}
-                    </button>
-                    {showLegacyHtml && (
-                      <div
-                        className="mt-3 overflow-x-auto text-sm text-[var(--ink)] [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--line)] [&_td]:p-2 [&_th]:border [&_th]:border-[var(--line)] [&_th]:p-2"
-                        dangerouslySetInnerHTML={{ __html: activeTopic.notes.legacyHtml }}
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                </div>
+              );
+            })()}
 
             {/* MODE 2: NOTION-STYLE BLOCK EDITOR */}
             {viewMode === 'edit' && (
@@ -971,59 +1353,163 @@ export function NotesStudioView({
               />
             )}
 
-            {/* MODE 3: HISTORY-ONLY EASY TIMELINE */}
+            {/* MODE 3: HISTORY-ONLY STRUCTURED TIMELINE */}
             {viewMode === 'timeline' && isHistorySubject && (
               <div className="space-y-5">
-                <div className="sd-card flex flex-wrap items-center justify-between gap-3 p-4">
-                  <div className="flex items-center gap-2 text-xs text-[var(--mute)]">
-                    <Calendar className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
-                    <span>
-                      {(activeTopic.timelineEvents || []).length} events · Add events, click Sort by
-                      Year, or drill hidden dates
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBulkOpen((v) => !v);
-                        setBulkFeedback(null);
-                      }}
-                      className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
-                        bulkOpen ? 'border-[var(--e3)] text-[var(--e3)]' : ''
-                      }`}
-                    >
-                      <ListPlus className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Bulk Import Nodes</span>
-                    </button>
-                    {(activeTopic.timelineEvents || []).length > 1 && (
+                {/* Timeline Command & Study Toolbar */}
+                <div className="sd-card space-y-3 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
+                      <Calendar className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                      <span className="font-mono-num font-semibold text-[var(--ink)]">
+                        {timelineEventsAll.length} event{timelineEventsAll.length === 1 ? '' : 's'}
+                      </span>
+                      {timelineEventsAll.some((e) => e.keyEvent) && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono-num">
+                            {timelineEventsAll.filter((e) => e.keyEvent).length} key turning points
+                          </span>
+                        </>
+                      )}
+                      {hideTimelineDates && timelineEventsAll.length > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono-num font-semibold text-[var(--e3)]">
+                            Revealed {revealedEventIds.size}/{timelineEventsAll.length}
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={handleSortTimelineEvents}
-                        className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                        onClick={() => setAddEventOpen((v) => !v)}
+                        className={`sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap`}
                       >
-                        <ArrowUpDown className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Sort Chronologically</span>
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Add Event</span>
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setHideTimelineDates((v) => !v);
-                        setRevealedEventIds(new Set());
-                      }}
-                      className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
-                        hideTimelineDates ? 'border-[var(--e3)] text-[var(--e3)]' : ''
-                      }`}
-                    >
-                      {hideTimelineDates ? (
-                        <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                      ) : (
-                        <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkOpen((v) => !v);
+                          setBulkFeedback(null);
+                        }}
+                        className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
+                          bulkOpen ? 'border-[var(--e3)] text-[var(--e3)]' : ''
+                        }`}
+                      >
+                        <ListPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Bulk Import</span>
+                      </button>
+                      {timelineEventsAll.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={handleSortTimelineEvents}
+                          className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          <ArrowUpDown className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Sort Chronologically</span>
+                        </button>
                       )}
-                      <span>{hideTimelineDates ? 'Show All Dates' : 'Hide Dates Self-Test'}</span>
-                    </button>
+                      {timelineEventsAll.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHideTimelineDates((v) => !v);
+                              setRevealedEventIds(new Set());
+                            }}
+                            className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
+                              hideTimelineDates ? 'border-[var(--e3)] text-[var(--e3)]' : ''
+                            }`}
+                          >
+                            {hideTimelineDates ? (
+                              <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                            ) : (
+                              <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                            <span>{hideTimelineDates ? 'Show Dates' : 'Date Recall Test'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleMakeFlashcardsFromTimeline}
+                            className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            <Layers className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                            <span>Make Flashcards</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Era Filter & Search Strip */}
+                  {timelineEventsAll.length > 0 && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {timelineEras.length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setTimelineEraFilter('ALL')}
+                              className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                                timelineEraFilter === 'ALL'
+                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                                  : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                              }`}
+                            >
+                              All Eras
+                            </button>
+                            {timelineEras.map((era) => (
+                              <button
+                                key={era}
+                                type="button"
+                                onClick={() => setTimelineEraFilter(era)}
+                                className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                                  timelineEraFilter === era
+                                    ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                                    : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                                }`}
+                              >
+                                {era}
+                              </button>
+                            ))}
+                          </>
+                        )}
+                        {timelineEventsAll.some((e) => e.keyEvent) && (
+                          <button
+                            type="button"
+                            onClick={() => setTimelineKeyOnly((v) => !v)}
+                            className={`inline-flex cursor-pointer items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                              timelineKeyOnly
+                                ? 'border-[var(--e2)] bg-[color-mix(in_srgb,var(--e2)_12%,var(--card))] text-[var(--e2)]'
+                                : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                            }`}
+                          >
+                            <Star className="h-3 w-3" aria-hidden="true" />
+                            <span>Key Events Only</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="relative w-full sm:w-56">
+                        <Search
+                          className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                          aria-hidden="true"
+                        />
+                        <input
+                          type="text"
+                          value={timelineSearch}
+                          onChange={(e) => setTimelineSearch(e.target.value)}
+                          placeholder="Search dates or events…"
+                          className="sd-input py-1 pl-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {bulkFeedback && (
@@ -1043,8 +1529,7 @@ export function NotesStudioView({
                           Import Multiple Timeline Nodes at Once
                         </h3>
                         <p className="text-xs text-[var(--mute)]">
-                          One event per line (<code className="font-mono-num">Date | Event Title | Impact | Era</code> or{' '}
-                          <code className="font-mono-num">1923 — Hyperinflation: Marks became worthless</code>), or paste a legacy{' '}
+                          One event per line (<code className="font-mono-num">Date | Title | What happened | Significance | Era</code>), or paste a legacy{' '}
                           <code className="font-mono-num">edits-*</code> JSON block.
                         </p>
                       </div>
@@ -1058,7 +1543,7 @@ export function NotesStudioView({
                       value={bulkText}
                       onChange={(e) => setBulkText(e.target.value)}
                       placeholder={
-                        'Nov 1918 | Armistice Signed | Ended WWI and forced Kaiser abdication | Weimar\nJun 1919 | Treaty of Versailles | Article 231 war guilt and £6.6bn reparations | Weimar\nJan 1923 — Ruhr Crisis: French troops occupied industrial heartland'
+                        'Nov 1918 | Armistice Signed | Ended WWI fighting | Forced Kaiser abdication & led to "stab-in-the-back" myth | Weimar\nJun 1919 | Treaty of Versailles | Cut army to 100k & £6.6bn reparations | Caused lasting nationalist resentment | Weimar'
                       }
                       className="sd-input font-mono-num text-xs leading-relaxed"
                     />
@@ -1119,209 +1604,326 @@ export function NotesStudioView({
                   </div>
                 )}
 
-                {/* Quick-Add Historical Event Bar */}
-                <form
-                  onSubmit={handleAddTimelineEvent}
-                  className="sd-card grid gap-2.5 p-4 sm:grid-cols-12"
-                >
-                  <input
-                    type="text"
-                    required
-                    value={tlDate}
-                    onChange={(e) => setTlDate(e.target.value)}
-                    placeholder="Year / Date (e.g. Nov 1918)"
-                    className="sd-input text-xs sm:col-span-3"
-                  />
-                  <input
-                    type="text"
-                    required
-                    value={tlTitle}
-                    onChange={(e) => setTlTitle(e.target.value)}
-                    placeholder="Event title (e.g. Armistice Signed)"
-                    className="sd-input text-xs sm:col-span-4"
-                  />
-                  <input
-                    type="text"
-                    value={tlDetail}
-                    onChange={(e) => setTlDetail(e.target.value)}
-                    placeholder="Impact / why it mattered"
-                    className="sd-input text-xs sm:col-span-3"
-                  />
-                  <input
-                    type="text"
-                    value={tlEra}
-                    onChange={(e) => setTlEra(e.target.value)}
-                    placeholder="Era (opt.)"
-                    className="sd-input text-xs sm:col-span-2"
-                  />
-                  <div className="flex justify-end sm:col-span-12">
-                    <button type="submit" className="sd-btn-pri px-4 py-1.5 text-xs whitespace-nowrap">
-                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Add to Timeline</span>
-                    </button>
-                  </div>
-                </form>
+                {/* Collapsible Add Historical Event Form (auto-open if timeline empty) */}
+                {(addEventOpen || timelineEventsAll.length === 0) && (
+                  <form
+                    onSubmit={handleAddTimelineEvent}
+                    className="sd-card space-y-3 p-4"
+                  >
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-display text-sm font-bold text-[var(--ink)]">
+                        Add Timeline Event
+                      </h3>
+                      {timelineEventsAll.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAddEventOpen(false)}
+                          className="sd-btn h-7 w-7 p-0"
+                          aria-label="Close form"
+                        >
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid gap-2.5 sm:grid-cols-12">
+                      <input
+                        type="text"
+                        required
+                        value={tlDate}
+                        onChange={(e) => setTlDate(e.target.value)}
+                        placeholder="Date / Year (e.g. 27 Feb 1933)"
+                        className="sd-input text-xs font-mono-num sm:col-span-3"
+                      />
+                      <input
+                        type="text"
+                        required
+                        value={tlTitle}
+                        onChange={(e) => setTlTitle(e.target.value)}
+                        placeholder="Event title (e.g. Reichstag Fire)"
+                        className="sd-input text-xs sm:col-span-6"
+                      />
+                      <input
+                        type="text"
+                        value={tlEra}
+                        onChange={(e) => setTlEra(e.target.value)}
+                        placeholder="Era (optional)"
+                        className="sd-input text-xs sm:col-span-3"
+                      />
+                      <input
+                        type="text"
+                        value={tlDetail}
+                        onChange={(e) => setTlDetail(e.target.value)}
+                        placeholder="What happened (key facts / actors)"
+                        className="sd-input text-xs sm:col-span-6"
+                      />
+                      <input
+                        type="text"
+                        value={tlSignificance}
+                        onChange={(e) => setTlSignificance(e.target.value)}
+                        placeholder="Why it mattered (significance / exam link)"
+                        className="sd-input text-xs sm:col-span-6"
+                      />
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-[var(--mute)]">
+                        <input
+                          type="checkbox"
+                          checked={tlKeyEvent}
+                          onChange={(e) => setTlKeyEvent(e.target.checked)}
+                          className="accent-[var(--e2)]"
+                        />
+                        <span>Mark as Key Turning Point</span>
+                      </label>
+                      <button type="submit" className="sd-btn-pri px-4 py-1.5 text-xs whitespace-nowrap">
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Add to Timeline</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
 
-                {/* Vertical Chronological Spine */}
-                {(activeTopic.timelineEvents || []).length === 0 ? (
+                {/* Editorial Two-Column Chronological Track */}
+                {filteredTimelineEvents.length === 0 ? (
                   <div className="sd-card p-6 text-center text-xs text-[var(--mute)]">
-                    No History events for {activeTopic.name} yet. Enter a date and event above to start your timeline.
+                    {timelineEventsAll.length === 0
+                      ? `No History events for ${activeTopic.name} yet. Enter a date and event above or use Bulk Import.`
+                      : 'No timeline events match your current era or search filter.'}
                   </div>
                 ) : (
-                  <div className="relative space-y-3 pl-6 before:absolute before:bottom-3 before:left-[9px] before:top-3 before:w-[2px] before:bg-[var(--line)]">
-                    {(activeTopic.timelineEvents || []).map((ev, idx) => {
+                  <div className="space-y-3">
+                    {filteredTimelineEvents.map((ev) => {
                       const isHidden = hideTimelineDates && !revealedEventIds.has(ev.id);
                       const isEditingEv = editingEventId === ev.id;
-                      const listLen = (activeTopic.timelineEvents || []).length;
+                      const fullIdx = timelineEventsAll.findIndex((x) => x.id === ev.id);
+                      const { what, why } = splitEventDetailAndSignificance(ev);
 
                       return (
-                        <div key={ev.id} className="relative">
-                          {/* Timeline Node */}
-                          <span
-                            className="absolute -left-[21px] top-5 h-3 w-3 rounded-full border-2 border-[var(--card)] bg-[var(--e3)]"
-                            aria-hidden="true"
-                          />
+                        <div key={ev.id} className="flex items-stretch gap-3 sm:gap-5">
+                          {/* Left Chronological Date Anchor */}
+                          <div className="flex w-24 shrink-0 flex-col items-end pt-4 text-right sm:w-36">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setRevealedEventIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(ev.id)) next.delete(ev.id);
+                                  else next.add(ev.id);
+                                  return next;
+                                })
+                              }
+                              className={`font-mono-num cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-bold transition-colors ${
+                                isHidden
+                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))] text-[var(--e3)]'
+                                  : ev.keyEvent
+                                  ? 'border-[color-mix(in_srgb,var(--e2)_50%,var(--line))] bg-[var(--card)] text-[var(--e2)]'
+                                  : 'border-[var(--line)] bg-[var(--card)] text-[var(--ink)]'
+                              }`}
+                              title={isHidden ? 'Click to reveal date' : ev.date}
+                            >
+                              {isHidden ? 'Reveal Date' : ev.date}
+                            </button>
+                            {ev.era && (
+                              <span className="mt-1 text-[11px] font-medium text-[var(--mute)]">
+                                {ev.era}
+                              </span>
+                            )}
+                          </div>
 
-                          {isEditingEv ? (
-                            <div className="sd-card space-y-2.5 p-4">
-                              <div className="grid gap-2 sm:grid-cols-12">
-                                <input
-                                  type="text"
-                                  value={editEvDate}
-                                  onChange={(e) => setEditEvDate(e.target.value)}
-                                  placeholder="Date / Year"
-                                  className="sd-input text-xs font-bold sm:col-span-3"
-                                />
-                                <input
-                                  type="text"
-                                  value={editEvTitle}
-                                  onChange={(e) => setEditEvTitle(e.target.value)}
-                                  placeholder="Event title"
-                                  className="sd-input text-xs sm:col-span-6"
-                                />
-                                <input
-                                  type="text"
-                                  value={editEvEra}
-                                  onChange={(e) => setEditEvEra(e.target.value)}
-                                  placeholder="Era (optional)"
-                                  className="sd-input text-xs sm:col-span-3"
-                                />
-                              </div>
-                              <textarea
-                                rows={2}
-                                value={editEvDetail}
-                                onChange={(e) => setEditEvDetail(e.target.value)}
-                                placeholder="Historical significance / detail…"
-                                className="sd-input text-xs"
-                              />
-                              <div className="flex justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingEventId(null)}
-                                  className="sd-btn px-3 py-1 text-xs"
-                                >
-                                  <X className="h-3 w-3" aria-hidden="true" />
-                                  <span>Cancel</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSaveTimelineEdit(ev.id)}
-                                  className="sd-btn-pri px-3 py-1 text-xs"
-                                >
-                                  <Check className="h-3 w-3" aria-hidden="true" />
-                                  <span>Save</span>
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="sd-card flex flex-wrap items-start justify-between gap-3 p-4">
-                              <div className="flex min-w-0 flex-1 items-start gap-4">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setRevealedEventIds((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(ev.id)) next.delete(ev.id);
-                                      else next.add(ev.id);
-                                      return next;
-                                    })
-                                  }
-                                  className={`font-mono-num shrink-0 cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-1 text-xs font-bold ${
-                                    isHidden ? 'text-transparent select-none' : 'text-[var(--e3)]'
-                                  }`}
-                                  title={isHidden ? 'Click to reveal date' : ev.date}
-                                >
-                                  {isHidden ? 'Reveal Date' : ev.date}
-                                </button>
+                          {/* Center Spine & Node */}
+                          <div className="relative flex w-4 shrink-0 justify-center">
+                            <div
+                              className="w-px bg-[var(--line)]"
+                              aria-hidden="true"
+                            />
+                            <span
+                              className={`absolute top-5 h-3 w-3 rounded-full border-2 border-[var(--bg)] ${
+                                ev.keyEvent ? 'bg-[var(--e2)]' : 'bg-[var(--e3)]'
+                              }`}
+                              aria-hidden="true"
+                            />
+                          </div>
 
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-baseline gap-2">
-                                    <span className="font-display text-base font-bold text-[var(--ink)]">
-                                      {ev.title}
-                                    </span>
-                                    {ev.era && (
-                                      <span className="text-xs font-semibold text-[var(--mute)]">
-                                        · {ev.era}
-                                      </span>
-                                    )}
+                          {/* Right Event Card */}
+                          <div className="min-w-0 flex-1 pb-2">
+                            {isEditingEv ? (
+                              <div className="sd-card space-y-2.5 p-4">
+                                <div className="grid gap-2 sm:grid-cols-12">
+                                  <input
+                                    type="text"
+                                    value={editEvDate}
+                                    onChange={(e) => setEditEvDate(e.target.value)}
+                                    placeholder="Date / Year"
+                                    className="sd-input font-mono-num text-xs font-bold sm:col-span-3"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={editEvTitle}
+                                    onChange={(e) => setEditEvTitle(e.target.value)}
+                                    placeholder="Event title"
+                                    className="sd-input text-xs sm:col-span-6"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={editEvEra}
+                                    onChange={(e) => setEditEvEra(e.target.value)}
+                                    placeholder="Era (optional)"
+                                    className="sd-input text-xs sm:col-span-3"
+                                  />
+                                </div>
+                                <textarea
+                                  rows={2}
+                                  value={editEvDetail}
+                                  onChange={(e) => setEditEvDetail(e.target.value)}
+                                  placeholder="What happened…"
+                                  className="sd-input text-xs"
+                                />
+                                <textarea
+                                  rows={2}
+                                  value={editEvSignificance}
+                                  onChange={(e) => setEditEvSignificance(e.target.value)}
+                                  placeholder="Why it mattered / exam significance…"
+                                  className="sd-input text-xs"
+                                />
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-[var(--mute)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={editEvKeyEvent}
+                                      onChange={(e) => setEditEvKeyEvent(e.target.checked)}
+                                      className="accent-[var(--e2)]"
+                                    />
+                                    <span>Key Turning Point</span>
+                                  </label>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingEventId(null)}
+                                      className="sd-btn px-3 py-1 text-xs"
+                                    >
+                                      <X className="h-3 w-3" aria-hidden="true" />
+                                      <span>Cancel</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveTimelineEdit(ev.id)}
+                                      className="sd-btn-pri px-3 py-1 text-xs"
+                                    >
+                                      <Check className="h-3 w-3" aria-hidden="true" />
+                                      <span>Save</span>
+                                    </button>
                                   </div>
-                                  {ev.detail && (
-                                    <p className="mt-1 text-sm text-[var(--mute)]">{ev.detail}</p>
-                                  )}
                                 </div>
                               </div>
+                            ) : (
+                              <div
+                                className={`sd-card p-4 transition-colors ${
+                                  ev.keyEvent
+                                    ? 'border-[color-mix(in_srgb,var(--e2)_50%,var(--line))]'
+                                    : ''
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    {ev.keyEvent && (
+                                      <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wider text-[var(--e2)]">
+                                        Key Turning Point
+                                      </div>
+                                    )}
+                                    <h3 className="font-display text-base font-bold leading-snug text-[var(--ink)]">
+                                      {ev.title}
+                                    </h3>
+                                  </div>
 
-                              <div className="flex shrink-0 items-center gap-1">
-                                <button
-                                  type="button"
-                                  disabled={idx === 0}
-                                  onClick={() => handleMoveTimelineEvent(idx, -1)}
-                                  aria-label="Move event earlier"
-                                  className="sd-btn h-7 w-7 p-0 disabled:opacity-40"
-                                >
-                                  <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={idx === listLen - 1}
-                                  onClick={() => handleMoveTimelineEvent(idx, 1)}
-                                  aria-label="Move event later"
-                                  className="sd-btn h-7 w-7 p-0 disabled:opacity-40"
-                                >
-                                  <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingEventId(ev.id);
-                                    setEditEvDate(ev.date);
-                                    setEditEvTitle(ev.title);
-                                    setEditEvDetail(ev.detail);
-                                    setEditEvEra(ev.era || '');
-                                  }}
-                                  aria-label="Edit timeline event"
-                                  className="sd-btn h-7 w-7 p-0 text-[var(--mute)]"
-                                >
-                                  <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    updateTopic(activeTopic.id, (t) => ({
-                                      ...t,
-                                      timelineEvents: (t.timelineEvents || []).filter(
-                                        (x) => x.id !== ev.id
-                                      ),
-                                    }))
-                                  }
-                                  aria-label="Delete timeline event"
-                                  className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                                </button>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateTopic(activeTopic.id, (t) => ({
+                                          ...t,
+                                          timelineEvents: (t.timelineEvents || []).map((x) =>
+                                            x.id === ev.id ? { ...x, keyEvent: !x.keyEvent } : x
+                                          ),
+                                        }))
+                                      }
+                                      aria-label={
+                                        ev.keyEvent ? 'Unmark key turning point' : 'Mark as key turning point'
+                                      }
+                                      title="Toggle Key Turning Point"
+                                      className={`sd-btn h-7 w-7 p-0 ${
+                                        ev.keyEvent ? 'border-[var(--e2)] text-[var(--e2)]' : 'text-[var(--mute)]'
+                                      }`}
+                                    >
+                                      <Star className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={fullIdx <= 0}
+                                      onClick={() => handleMoveTimelineEvent(ev.id, -1)}
+                                      aria-label="Move event earlier"
+                                      className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
+                                    >
+                                      <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={fullIdx >= timelineEventsAll.length - 1}
+                                      onClick={() => handleMoveTimelineEvent(ev.id, 1)}
+                                      aria-label="Move event later"
+                                      className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
+                                    >
+                                      <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const split = splitEventDetailAndSignificance(ev);
+                                        setEditingEventId(ev.id);
+                                        setEditEvDate(ev.date);
+                                        setEditEvTitle(ev.title);
+                                        setEditEvDetail(split.what);
+                                        setEditEvSignificance(split.why);
+                                        setEditEvEra(ev.era || '');
+                                        setEditEvKeyEvent(Boolean(ev.keyEvent));
+                                      }}
+                                      aria-label="Edit timeline event"
+                                      className="sd-btn h-7 w-7 p-0 text-[var(--mute)]"
+                                    >
+                                      <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateTopic(activeTopic.id, (t) => ({
+                                          ...t,
+                                          timelineEvents: (t.timelineEvents || []).filter(
+                                            (x) => x.id !== ev.id
+                                          ),
+                                        }))
+                                      }
+                                      aria-label="Delete timeline event"
+                                      className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {(what || why) && (
+                                  <div className="mt-2 space-y-1.5 text-sm leading-relaxed">
+                                    {what && <p className="text-[var(--ink)]/90">{what}</p>}
+                                    {why && (
+                                      <p className="rounded-lg bg-[var(--bg)] px-3 py-1.5 text-xs leading-relaxed text-[var(--mute)]">
+                                        <span className="font-bold text-[var(--e3)]">
+                                          Significance:{' '}
+                                        </span>
+                                        {why}
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          )}
+                            )}
+                          </div>
                         </div>
                       );
                     })}

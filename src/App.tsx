@@ -793,6 +793,7 @@ export default function App() {
         subjectId?: string;
         topicId?: string;
         plannerTab?: PlannerSubTab;
+        vaultSection?: VaultSection;
         openQuickAdd?: boolean;
         communityTypeFilter?: CommunityTypeFilter;
         shareCode?: string;
@@ -804,6 +805,7 @@ export default function App() {
 
       if (opts?.communityTypeFilter) setCommunityTypeFilter(opts.communityTypeFilter);
       if (opts?.shareCode) setInitialShareCode(opts.shareCode.trim().toUpperCase());
+      if (opts?.vaultSection) setVaultSection(opts.vaultSection);
 
       if (opts?.plannerTab) {
         if (opts.plannerTab === 'calendar') {
@@ -1026,6 +1028,10 @@ export default function App() {
           onClose={() => setImportModalOpen(false)}
           workspace={workspace}
           defaultSubjectId={selectedSubjectId}
+          onOpenApiKeySettings={() => {
+            setImportModalOpen(false);
+            handleNavigate('vault', { vaultSection: 'data' });
+          }}
           onApplyImport={(updater, _msg, targetSubjectId) => {
             updateWorkspace(updater);
             if (targetSubjectId) setSelectedSubjectId(targetSubjectId);

@@ -5,8 +5,12 @@ import {
   Copy,
   Database,
   Download,
+  ExternalLink,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   FileText,
+  HelpCircle,
   KeyRound,
   Laptop,
   Library,
@@ -17,6 +21,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Smartphone,
+  Sparkles,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -26,6 +31,16 @@ import {
   downloadNotesMarkdownTemplate,
   downloadWorkspaceBackupTemplate,
 } from '../lib/backupTemplates';
+import {
+  ByokProvider,
+  DEFAULT_GEMINI_FORMAT_MODEL,
+  DEFAULT_GROK_MODEL,
+  DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_OPENAI_MODEL,
+  maskApiKey,
+  saveByokConfig,
+  useByokConfig,
+} from '../lib/byokStore';
 import { getDeviceInfo, setCustomDeviceName } from '../lib/device';
 import { isNoteEmpty, structuredNoteToHtml } from '../lib/noteFormat';
 import { BackupImportCounts, parseBackupJsonToWorkspace } from '../lib/smartImporter';
@@ -209,6 +224,31 @@ export function ProfileVaultView({
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
   const [importStatus, setImportStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [importing, setImporting] = useState(false);
+
+  // BYOK (Bring Your Own AI API Key) state
+  const savedByok = useByokConfig();
+  const [byokProvider, setByokProvider] = useState<ByokProvider>(
+    () => savedByok?.provider || 'gemini'
+  );
+  const [byokKeyInput, setByokKeyInput] = useState<string>(() => savedByok?.apiKey || '');
+  const [byokModelInput, setByokModelInput] = useState<string>(() => savedByok?.model || '');
+  const [byokBaseUrlInput, setByokBaseUrlInput] = useState<string>(
+    () => savedByok?.baseUrl || ''
+  );
+  const [showByokKey, setShowByokKey] = useState(false);
+  const [showByokAdvanced, setShowByokAdvanced] = useState(false);
+  const [showByokGuide, setShowByokGuide] = useState(false);
+  const [testingByok, setTestingByok] = useState(false);
+  const [byokStatus, setByokStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  useEffect(() => {
+    if (savedByok) {
+      setByokProvider(savedByok.provider);
+      setByokKeyInput(savedByok.apiKey);
+      setByokModelInput(savedByok.model || '');
+      setByokBaseUrlInput(savedByok.baseUrl || '');
+    }
+  }, [savedByok]);
 
   useEffect(() => {
     setSection(initialSection);
@@ -500,6 +540,85 @@ export function ProfileVaultView({
     }
   };
 
+  const handleSaveByok = (e?: FormEvent) => {
+    e?.preventDefault();
+    const trimmedKey = byokKeyInput.trim();
+    if (!trimmedKey) {
+      saveByokConfig(null);
+      setByokStatus({
+        ok: true,
+        msg: 'API key removed. Live Quiz marking now uses the site key, and AI Note Autoformat is locked.',
+      });
+      return;
+    }
+    saveByokConfig({
+      provider: byokProvider,
+      apiKey: trimmedKey,
+      baseUrl: byokProvider === 'openai-compatible' ? byokBaseUrlInput.trim() : undefined,
+      model: byokModelInput.trim() || undefined,
+    });
+    setByokStatus({
+      ok: true,
+      msg: `Saved ${
+        byokProvider === 'gemini'
+          ? 'Gemini'
+          : byokProvider === 'grok'
+          ? 'Grok (xAI)'
+          : 'OpenAI-compatible'
+      } API key (${maskApiKey(trimmedKey)}) locally. AI Autoformat and BYOK Live Quiz marking are active.`,
+    });
+  };
+
+  const handleTestByok = async () => {
+    const trimmedKey = byokKeyInput.trim();
+    if (!trimmedKey) {
+      setByokStatus({ ok: false, msg: 'Paste your API key before testing.' });
+      return;
+    }
+    setTestingByok(true);
+    setByokStatus(null);
+    try {
+      const payload = {
+        provider: byokProvider,
+        apiKey: trimmedKey,
+        baseUrl: byokProvider === 'openai-compatible' ? byokBaseUrlInput.trim() : undefined,
+        model: byokModelInput.trim() || undefined,
+      };
+      const res = await fetch('/api/ai/test-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ byok: payload }),
+      });
+      const data = (await res.json()) as { ok?: boolean; model?: string; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Key verification failed.');
+      }
+      saveByokConfig(payload);
+      setByokStatus({
+        ok: true,
+        msg: `Verified and saved (${data.model || DEFAULT_GEMINI_FORMAT_MODEL}). Ready for AI Autoformat & Live Quiz marking.`,
+      });
+    } catch (err) {
+      setByokStatus({
+        ok: false,
+        msg: err instanceof Error ? err.message : 'Verification failed.',
+      });
+    } finally {
+      setTestingByok(false);
+    }
+  };
+
+  const handleClearByok = () => {
+    setByokKeyInput('');
+    setByokModelInput('');
+    setByokBaseUrlInput('');
+    saveByokConfig(null);
+    setByokStatus({
+      ok: true,
+      msg: 'Cleared your personal API key from this device.',
+    });
+  };
+
   const isAdmin =
     Boolean(firebaseUser) &&
     (account?.role === 'admin' ||
@@ -567,6 +686,290 @@ export function ProfileVaultView({
             )}
           </div>
         </div>
+
+        {(section === 'account' || section === 'data') && (
+          <div className="sd-card p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <h2 className="font-display text-lg font-bold text-[var(--ink)]">
+                    Personal AI API Key (BYOK)
+                  </h2>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--mute)]">
+                  Bring your own API key (defaults to Google Gemini) to unlock token-efficient AI
+                  Note Autoformatting and use your own quota for Live Quiz marking. Without a
+                  personal key, the website&apos;s API is strictly used only for Live Quiz marking.
+                </p>
+              </div>
+              <div className="font-mono-num text-xs font-semibold text-[var(--ink)]">
+                {savedByok ? (
+                  <span className="text-[var(--ok)]">
+                    Active ·{' '}
+                    {savedByok.provider === 'gemini'
+                      ? 'Gemini'
+                      : savedByok.provider === 'grok'
+                      ? 'Grok (xAI)'
+                      : 'OpenAI-Compatible'}{' '}
+                    ({maskApiKey(savedByok.apiKey)})
+                  </span>
+                ) : (
+                  <span className="text-[var(--mute)]">Not configured · Live Quiz uses site key</span>
+                )}
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveByok} className="mt-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="sd-seg flex-wrap" role="group" aria-label="AI API provider">
+                  <button
+                    type="button"
+                    aria-pressed={byokProvider === 'gemini'}
+                    onClick={() => setByokProvider('gemini')}
+                    className="sd-seg-btn whitespace-nowrap"
+                  >
+                    Google Gemini (Default)
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={byokProvider === 'grok'}
+                    onClick={() => setByokProvider('grok')}
+                    className="sd-seg-btn whitespace-nowrap"
+                  >
+                    Grok (xAI)
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={byokProvider === 'openai-compatible'}
+                    onClick={() => setByokProvider('openai-compatible')}
+                    className="sd-seg-btn whitespace-nowrap"
+                  >
+                    OpenAI-Compatible
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowByokAdvanced((v) => !v)}
+                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline"
+                >
+                  {showByokAdvanced ? 'Hide model / endpoint options' : 'Model / endpoint options'}
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative min-w-[240px] flex-1">
+                  <input
+                    type={showByokKey ? 'text' : 'password'}
+                    value={byokKeyInput}
+                    onChange={(e) => setByokKeyInput(e.target.value)}
+                    placeholder={
+                      byokProvider === 'gemini'
+                        ? 'Paste your Google Gemini API key (AIza...)'
+                        : byokProvider === 'grok'
+                        ? 'Paste your xAI Grok API key (xai-...)'
+                        : 'Paste your OpenAI-compatible API key (sk-...)'
+                    }
+                    autoComplete="off"
+                    className="sd-input font-mono-num pr-9 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowByokKey((v) => !v)}
+                    aria-label={showByokKey ? 'Hide API key' : 'Show API key'}
+                    className="absolute top-1/2 right-2.5 -translate-y-1/2 cursor-pointer text-[var(--mute)] hover:text-[var(--ink)]"
+                  >
+                    {showByokKey ? (
+                      <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+
+                <button type="submit" className="sd-btn-pri px-3.5 py-2 text-xs whitespace-nowrap">
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Save Key</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={testingByok || !byokKeyInput.trim()}
+                  onClick={() => void handleTestByok()}
+                  className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${testingByok ? 'animate-spin' : ''}`}
+                    aria-hidden="true"
+                  />
+                  <span>{testingByok ? 'Testing…' : 'Test & Save'}</span>
+                </button>
+                {savedByok && (
+                  <button
+                    type="button"
+                    onClick={handleClearByok}
+                    className="sd-btn px-3 py-2 text-xs text-[var(--bad)] whitespace-nowrap"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Remove</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Subtle, quiet link right below the key input */}
+              <div className="flex items-center justify-between pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => setShowByokGuide((v) => !v)}
+                  className="cursor-pointer inline-flex items-center gap-1 text-[11px] font-medium text-[var(--mute)] transition-colors hover:text-[var(--ink)]"
+                >
+                  <HelpCircle className="h-3 w-3 opacity-75" aria-hidden="true" />
+                  <span>{showByokGuide ? 'Hide key guide' : 'How to get a key'}</span>
+                </button>
+              </div>
+
+              {showByokGuide && (
+                <div className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5 text-xs text-[var(--mute)]">
+                  {byokProvider === 'gemini' && (
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-[var(--ink)]">
+                          Get a Google Gemini API Key (Free tier available)
+                        </span>
+                        <a
+                          href="https://aistudio.google.com/apikey"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline"
+                        >
+                          <span>aistudio.google.com/apikey</span>
+                          <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                        </a>
+                      </div>
+                      <ol className="list-decimal space-y-0.5 pl-4 text-[11px]">
+                        <li>Open Google AI Studio and sign in with your Google account.</li>
+                        <li>
+                          Click <strong className="text-[var(--ink)]">Create API key</strong> and
+                          choose or create a project.
+                        </li>
+                        <li>
+                          Copy the key starting with <code className="font-mono-num">AIza…</code>{' '}
+                          and paste it into the box above.
+                        </li>
+                      </ol>
+                    </div>
+                  )}
+
+                  {byokProvider === 'grok' && (
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-[var(--ink)]">
+                          Get an xAI Grok API Key
+                        </span>
+                        <a
+                          href="https://console.x.ai"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline"
+                        >
+                          <span>console.x.ai</span>
+                          <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                        </a>
+                      </div>
+                      <ol className="list-decimal space-y-0.5 pl-4 text-[11px]">
+                        <li>Sign in to the xAI Console and add billing/credits if required.</li>
+                        <li>
+                          Go to <strong className="text-[var(--ink)]">API Keys</strong> in the left
+                          menu and click <strong className="text-[var(--ink)]">Create API key</strong>.
+                        </li>
+                        <li>
+                          Copy the key starting with <code className="font-mono-num">xai-…</code>{' '}
+                          and paste it above (uses <code className="font-mono-num">grok-3-mini</code>{' '}
+                          by default for lowest token cost).
+                        </li>
+                      </ol>
+                    </div>
+                  )}
+
+                  {byokProvider === 'openai-compatible' && (
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-[var(--ink)]">
+                          Get an OpenAI / Custom API Key
+                        </span>
+                        <a
+                          href="https://platform.openai.com/api-keys"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 font-semibold text-[var(--e3)] hover:underline"
+                        >
+                          <span>platform.openai.com/api-keys</span>
+                          <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                        </a>
+                      </div>
+                      <ol className="list-decimal space-y-0.5 pl-4 text-[11px]">
+                        <li>Sign in to OpenAI Platform (or OpenRouter / Groq / DeepSeek).</li>
+                        <li>
+                          Click <strong className="text-[var(--ink)]">Create new secret key</strong>{' '}
+                          and copy the <code className="font-mono-num">sk-…</code> key.
+                        </li>
+                        <li>
+                          If using another OpenAI-compatible host, open{' '}
+                          <strong className="text-[var(--ink)]">Model / endpoint options</strong>{' '}
+                          above to set its Base URL and model name.
+                        </li>
+                      </ol>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {showByokAdvanced && (
+                <div className="grid gap-3 pt-1 sm:grid-cols-2">
+                  <label className="block text-[11px] font-semibold text-[var(--mute)]">
+                    Model Name (optional)
+                    <input
+                      type="text"
+                      value={byokModelInput}
+                      onChange={(e) => setByokModelInput(e.target.value)}
+                      placeholder={
+                        byokProvider === 'gemini'
+                          ? `Default: ${DEFAULT_GEMINI_FORMAT_MODEL}`
+                          : byokProvider === 'grok'
+                          ? `Default: ${DEFAULT_GROK_MODEL}`
+                          : `Default: ${DEFAULT_OPENAI_MODEL}`
+                      }
+                      className="sd-input font-mono-num mt-1 text-xs"
+                    />
+                  </label>
+                  {byokProvider === 'openai-compatible' && (
+                    <label className="block text-[11px] font-semibold text-[var(--mute)]">
+                      API Base URL (optional)
+                      <input
+                        type="url"
+                        value={byokBaseUrlInput}
+                        onChange={(e) => setByokBaseUrlInput(e.target.value)}
+                        placeholder={`Default: ${DEFAULT_OPENAI_BASE_URL}`}
+                        className="sd-input font-mono-num mt-1 text-xs"
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+
+              {byokStatus && (
+                <p
+                  className={`text-xs font-semibold ${
+                    byokStatus.ok ? 'text-[var(--ok)]' : 'text-[var(--bad)]'
+                  }`}
+                  role="status"
+                >
+                  {byokStatus.msg}
+                </p>
+              )}
+            </form>
+          </div>
+        )}
 
         {section === 'data' && (
           <div className="space-y-6">

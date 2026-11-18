@@ -645,15 +645,14 @@ export function convertLegacyEntriesToWorkspace(
               const dedupKey = `${date.toLowerCase()}::${title.toLowerCase()}`;
               if (existingKeys.has(dedupKey)) continue;
               existingKeys.add(dedupKey);
-              const detailParts = [String(ev.x || '').trim(), String(ev.w || '').trim()].filter(
-                Boolean
-              );
               existing.push({
                 id: makeId('tl'),
                 date,
                 title: title || 'Historical Event',
-                detail: detailParts.join(' — '),
+                detail: String(ev.x || '').trim(),
+                significance: String(ev.w || '').trim() || undefined,
                 era: ev.era?.trim() || undefined,
+                keyEvent: Boolean((ev as { key?: boolean }).key) || undefined,
               });
             }
             targetTopic.timelineEvents = existing;

@@ -147,6 +147,30 @@ function StructuredNoteReader({
                       </div>
                     );
                   }
+                  if (blk.kind === 'flow') {
+                    return (
+                      <div key={i} className="my-1.5 rounded-lg border border-[var(--line)] bg-[var(--card)] p-3">
+                        {blk.label && (
+                          <div className="mb-1.5 text-[11px] font-bold text-[var(--e3)]">
+                            {blk.label}
+                          </div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          {blk.steps.map((step, sIdx) => (
+                            <span key={sIdx} className="inline-flex items-center gap-1.5">
+                              <span className="rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1">
+                                <strong className="font-mono-num text-[var(--e3)]">{sIdx + 1}.</strong>{' '}
+                                {renderInlineBold(step)}
+                              </span>
+                              {sIdx < blk.steps.length - 1 && (
+                                <span className="text-[var(--mute)]" aria-hidden="true">→</span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
                   if (blk.kind === 'paragraph') {
                     return (
                       <p key={i} className="whitespace-pre-line leading-relaxed">
@@ -154,10 +178,18 @@ function StructuredNoteReader({
                       </p>
                     );
                   }
+                  const isSubBullet = Boolean(blk.indent && blk.indent > 0);
                   return (
-                    <div key={i} className="flex items-start gap-2 pl-1">
+                    <div
+                      key={i}
+                      className={`flex items-start gap-2 ${isSubBullet ? 'pl-6' : 'pl-1'}`}
+                    >
                       <span
-                        className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ink)]"
+                        className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
+                          isSubBullet
+                            ? 'border border-[var(--ink)] bg-transparent'
+                            : 'bg-[var(--ink)]'
+                        }`}
                         aria-hidden="true"
                       />
                       <span>{renderInlineBold(blk.text)}</span>

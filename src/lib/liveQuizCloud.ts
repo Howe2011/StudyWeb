@@ -15,6 +15,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { getByokConfig } from './byokStore';
 import { fastLocalQuizCheck, smartSemanticFallbackCheck } from './quizGrader';
 import { QuizDeckSummary, QuizPlayerState, QuizRoomState } from '../types';
 
@@ -110,10 +111,16 @@ export async function gradeAnswerViaVercelOrLocal(
   const controller = new AbortController();
   const abortTimer = window.setTimeout(() => controller.abort(), 5500);
   try {
+    const byok = getByokConfig();
     const res = await fetch('/api/quiz/grade', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, officialAnswer, studentAnswer: trimmed }),
+      body: JSON.stringify({
+        question,
+        officialAnswer,
+        studentAnswer: trimmed,
+        ...(byok ? { byok } : {}),
+      }),
       signal: controller.signal,
     });
     const contentType = res.headers.get('content-type') || '';

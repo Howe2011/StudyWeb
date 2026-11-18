@@ -130,7 +130,9 @@ export interface TimelineEventItem {
   date: string;
   title: string;
   detail: string;
+  significance?: string;
   era?: string;
+  keyEvent?: boolean;
 }
 
 export interface StructuredNoteData {
@@ -148,6 +150,7 @@ export interface StudyTopic {
   subjectId: string;
   name: string;
   specCode?: string;
+  tags?: string[];
   completed?: boolean;
   confidence?: 0 | 1 | 2 | 3; // 0=Not started, 1=Weak/Red, 2=Alright/Amber, 3=Mastered/Green
   notes: StructuredNoteData;

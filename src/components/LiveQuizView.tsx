@@ -24,6 +24,7 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
+import { getByokConfig, useByokConfig } from '../lib/byokStore';
 import {
   CloudPlayerDoc,
   CloudQuizCard,
@@ -188,6 +189,7 @@ export function LiveQuizView({
   defaultNickname,
   onRequestDecks,
 }: LiveQuizViewProps) {
+  const byokConfig = useByokConfig();
   const [subTab, setSubTab] = useState<QuizSubTab>('host');
   const [decks, setDecks] = useState<QuizDeckSummary[]>([]);
   const [loadingDecks, setLoadingDecks] = useState(true);
@@ -1183,6 +1185,7 @@ export function LiveQuizView({
     if (backendMode === 'server') {
       try {
         const ws = await connectWebSocket();
+        const byok = getByokConfig();
         ws.send(
           JSON.stringify(
             inlineCards
@@ -1192,6 +1195,7 @@ export function LiveQuizView({
                   inlineCards,
                   timerSeconds,
                   nickname: hostNickname.trim(),
+                  ...(byok ? { byok } : {}),
                 }
               : {
                   type: 'quiz:create',
@@ -1199,6 +1203,7 @@ export function LiveQuizView({
                   selectedSections: sectionsToUse,
                   timerSeconds,
                   nickname: hostNickname.trim(),
+                  ...(byok ? { byok } : {}),
                 }
           )
         );
@@ -1286,9 +1291,11 @@ export function LiveQuizView({
     if (currentMe?.hasSubmitted) return;
     playQuizTone('submit', muted);
     if (backendMode === 'server') {
+      const byok = getByokConfig();
       await sendWs({
         type: 'quiz:submit',
         answer: answerInput,
+        ...(byok ? { byok } : {}),
       });
       return;
     }
@@ -1985,7 +1992,18 @@ export function LiveQuizView({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--e3)]">
               <Gamepad2 className="h-4 w-4" aria-hidden="true" />
-              <span>Multiplayer Flashcard Arena · Smart + Gemini Flash-Lite Grading</span>
+              <span>
+                Multiplayer Flashcard Arena ·{' '}
+                {byokConfig
+                  ? `Marking with Your ${
+                      byokConfig.provider === 'gemini'
+                        ? 'Gemini'
+                        : byokConfig.provider === 'grok'
+                        ? 'Grok (xAI)'
+                        : 'Custom'
+                    } API Key`
+                  : 'Site Live Quiz Grading'}
+              </span>
             </div>
             <h1 className="font-display mt-1 text-2xl font-extrabold tracking-tight text-[var(--ink)]">
               Live Quiz
