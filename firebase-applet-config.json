@@ -1,9 +1,8 @@
 {
-  apiKey: "AIzaSyDyJYW0ZtMG7UzsUU0kTNbRWcrzv8mLCx0",
-  authDomain: "study-website-database-12345.firebaseapp.com",
-  projectId: "study-website-database-12345",
-  storageBucket: "study-website-database-12345.firebasestorage.app",
-  messagingSenderId: "885890541251",
-  appId: "1:885890541251:web:c6b3783bc4f072f768e476",
-  measurementId: "G-LZNCCC8WHM"
+  "apiKey": "AIzaSyDyJYW0ZtMG7UzsUU0kTNbRWcrzv8mLCx0",
+  "authDomain": "study-website-database-12345.firebaseapp.com",
+  "projectId": "study-website-database-12345",
+  "storageBucket": "study-website-database-12345.firebasestorage.app",
+  "messagingSenderId": "885890541251",
+  "appId": "1:885890541251:web:c6b3783bc4f072f768e476"
 }
