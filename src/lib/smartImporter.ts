@@ -1,5 +1,6 @@
-import { parseTextIntoStructuredNote } from './noteFormat';
-import { StructuredNoteData } from '../types';
+import { isNoteEmpty, parseTextIntoStructuredNote } from './noteFormat';
+import { convertLegacyEntriesToWorkspace, normalizeWorkspace } from './workspaceStore';
+import { StructuredNoteData, WorkspaceData } from '../types';
 
 export interface SmartImportPreview {
   sourceLabel: string;
@@ -8,6 +9,29 @@ export interface SmartImportPreview {
   note: StructuredNoteData;
   cards: Array<{ q: string; a: string; sectionName: string }>;
   legacyHtml?: string;
+}
+
+export interface BackupImportCounts {
+  subjects: number;
+  topics: number;
+  notes: number;
+  flashcards: number;
+  timelines: number;
+  timelineTopics: number;
+  planner: number;
+}
+
+export interface ParsedBackupBundle {
+  formatLabel: string;
+  workspace: WorkspaceData;
+  counts: BackupImportCounts;
+}
+
+export interface ParsedBulkTimelineNode {
+  date: string;
+  title: string;
+  detail: string;
+  era?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -52,7 +76,7 @@ function parseCsvLine(line: string): [string, string, string] | null {
 }
 
 /**
- * Pure-browser Word (.docx) OOXML reader returning formatted HTML and extracted text lines.
+ * Pure-browser Word (.docx) OOXML reader returning formatted HTML and cleanly structured Markdown text.
  */
 export async function parseDocxFile(
   arrayBuffer: ArrayBuffer
@@ -133,6 +157,13 @@ export async function parseDocxFile(
     return null;
   };
 
+  const isFlagEnabled = (prEl: Element | null, tagLocal: string): boolean => {
+    const flag = child(prEl, tagLocal);
+    if (!flag) return false;
+    const val = attr(flag, 'val');
+    return val !== '0' && val !== 'false';
+  };
+
   const textLines: string[] = [];
   const htmlParts: string[] = [];
 
@@ -140,15 +171,20 @@ export async function parseDocxFile(
     if (node.localName === 'p') {
       const pPr = child(node, 'pPr');
       const pStyle = attr(child(pPr, 'pStyle'), 'val') || '';
-      const hasNum = Boolean(child(pPr, 'numPr'));
+      const hasNum =
+        Boolean(child(pPr, 'numPr')) || /list|bullet|number/i.test(pStyle);
+
       let lineHtml = '';
       let lineText = '';
+      let markdownLine = '';
+      let allRunsBold = true;
+      let hasTextRun = false;
 
       for (const ch of Array.from(node.children)) {
         if (ch.localName === 'r') {
           const rPr = child(ch, 'rPr');
-          const isBold = Boolean(child(rPr, 'b'));
-          const isItal = Boolean(child(rPr, 'i'));
+          const isBold = isFlagEnabled(rPr, 'b');
+          const isItal = isFlagEnabled(rPr, 'i');
           let runTxt = '';
           for (const rn of Array.from(ch.children)) {
             if (rn.localName === 't') runTxt += rn.textContent || '';
@@ -156,7 +192,18 @@ export async function parseDocxFile(
             else if (rn.localName === 'br') runTxt += '\n';
           }
           if (runTxt) {
+            if (runTxt.trim()) {
+              hasTextRun = true;
+              if (!isBold) allRunsBold = false;
+            }
             lineText += runTxt;
+            if (isBold && runTxt.trim()) {
+              const leading = runTxt.match(/^\s*/)?.[0] || '';
+              const trailing = runTxt.match(/\s*$/)?.[0] || '';
+              markdownLine += `${leading}**${runTxt.trim()}**${trailing}`;
+            } else {
+              markdownLine += runTxt;
+            }
             let safe = escapeHtml(runTxt);
             if (isBold) safe = `<b>${safe}</b>`;
             if (isItal) safe = `<i>${safe}</i>`;
@@ -165,43 +212,82 @@ export async function parseDocxFile(
         }
       }
 
-      const cleanTxt = lineText.trim();
+      const cleanTxt = lineText.replace(/\*\*/g, '').trim();
+      const cleanMd = markdownLine
+        .replace(/\*\*\s*\*\*/g, ' ')
+        .trim();
       if (!cleanTxt) continue;
+
       const hm = pStyle.match(/heading\s*([1-6])/i);
-      if (hm) {
-        const lvl = Math.min(3, Math.max(1, Number(hm[1])));
+      const isTitleStyle = /^(?:title|subtitle)$/i.test(pStyle);
+      const isStandaloneBoldHeading =
+        !hm &&
+        !hasNum &&
+        hasTextRun &&
+        allRunsBold &&
+        cleanTxt.length >= 3 &&
+        cleanTxt.length <= 75 &&
+        !/[.!?]$/.test(cleanTxt);
+
+      if (hm || isTitleStyle) {
+        const lvl = isTitleStyle ? 1 : Math.min(3, Math.max(1, Number(hm?.[1] || 2)));
         textLines.push(`${'#'.repeat(lvl)} ${cleanTxt}`);
         htmlParts.push(`<h${lvl}>${lineHtml}</h${lvl}>`);
+      } else if (isStandaloneBoldHeading) {
+        textLines.push(`## ${cleanTxt}`);
+        htmlParts.push(`<h2>${lineHtml}</h2>`);
       } else if (hasNum) {
-        textLines.push(cleanTxt.startsWith('-') ? cleanTxt : `- ${cleanTxt}`);
+        textLines.push(cleanMd.startsWith('-') ? cleanMd : `- ${cleanMd}`);
         htmlParts.push(`<p>• ${lineHtml}</p>`);
       } else {
-        textLines.push(cleanTxt);
+        textLines.push(cleanMd);
         htmlParts.push(`<p>${lineHtml}</p>`);
       }
     } else if (node.localName === 'tbl') {
-      const rows: string[] = [];
+      const htmlRows: string[] = [];
+      const tableCells: string[][] = [];
       for (const tr of Array.from(node.children)) {
         if (tr.localName !== 'tr') continue;
         const cells: string[] = [];
         for (const tc of Array.from(tr.children)) {
           if (tc.localName !== 'tc') continue;
-          const cellText = Array.from(tc.getElementsByTagName('*'))
-            .filter((el) => el.localName === 't')
-            .map((el) => el.textContent || '')
-            .join('')
-            .trim();
+          const cellParagraphs = Array.from(tc.children)
+            .filter((el) => el.localName === 'p')
+            .map((pEl) =>
+              Array.from(pEl.getElementsByTagName('*'))
+                .filter((el) => el.localName === 't')
+                .map((el) => el.textContent || '')
+                .join('')
+                .trim()
+            )
+            .filter(Boolean);
+          const cellText = cellParagraphs.join('; ').replace(/\|/g, '/').trim();
           cells.push(cellText);
         }
-        if (cells.length >= 2 && cells[0] && cells[1]) {
-          textLines.push(`${cells[0]} | ${cells[1]}`);
-        } else if (cells.some(Boolean)) {
-          textLines.push(cells.filter(Boolean).join(' — '));
+        if (cells.some(Boolean)) {
+          tableCells.push(cells);
+          const tag = htmlRows.length === 0 ? 'th' : 'td';
+          htmlRows.push(
+            `<tr>${cells.map((c) => `<${tag}>${escapeHtml(c)}</${tag}>`).join('')}</tr>`
+          );
         }
-        rows.push(`<tr>${cells.map((c) => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`);
       }
-      if (rows.length) {
-        htmlParts.push(`<table><tbody>${rows.join('')}</tbody></table>`);
+      if (tableCells.length > 0) {
+        const colCount = tableCells.reduce((m, r) => Math.max(m, r.length), 1);
+        if (colCount >= 2) {
+          const pad = (r: string[]) =>
+            `| ${Array.from({ length: colCount }, (_, i) => r[i] || '').join(' | ')} |`;
+          textLines.push(pad(tableCells[0]));
+          textLines.push(`| ${Array.from({ length: colCount }, () => '---').join(' | ')} |`);
+          for (let r = 1; r < tableCells.length; r++) {
+            textLines.push(pad(tableCells[r]));
+          }
+        } else {
+          for (const r of tableCells) {
+            textLines.push(`- ${r[0]}`);
+          }
+        }
+        htmlParts.push(`<table><tbody>${htmlRows.join('')}</tbody></table>`);
       }
     }
   }
@@ -213,8 +299,8 @@ export async function parseDocxFile(
 }
 
 /**
- * Zero-AI smart importer: turns Quizlet TSV, Anki/CSV, Q:/A:, Markdown, or plain class notes
- * into Save My Exams-style structured notes AND active-recall flashcards in 0ms.
+ * Zero-AI smart importer: turns Quizlet TSV, Anki/CSV, Q:/A:, Markdown, Word tables, or plain class notes
+ * into Save My Exams-style structured notes AND optional active-recall flashcards in 0ms.
  */
 export function parseUniversalStudyImport(
   rawText: string,
@@ -224,13 +310,19 @@ export function parseUniversalStudyImport(
   const lines = cleanText.split('\n');
   const cards: Array<{ q: string; a: string; sectionName: string }> = [];
 
-  // 1. First scan explicitly for Q:/A: blocks, Quizlet tab-separated, pipe, ::, or pure CSV rows
+  // 1. Scan explicitly for Q:/A: blocks, Quizlet tab-separated, pipe, ::, or pure CSV flashcard rows
+  // NOTE: Skip Markdown pipe tables (lines starting AND ending with `|` or `| --- |`) so tables stay in structured notes!
   let pendingQ = '';
   let detectedPureFlashcards = 0;
 
   for (let idx = 0; idx < lines.length; idx++) {
     const t = lines[idx].trim();
     if (!t) continue;
+
+    // Skip Markdown table rows and separators
+    if (/^\|.+\|$/.test(t)) {
+      continue;
+    }
 
     // Skip CSV header
     if (idx === 0 && /^(?:question|q|term|front)\s*[,|\t]\s*(?:answer|a|definition|back)/i.test(t)) {
@@ -285,7 +377,6 @@ export function parseUniversalStudyImport(
       }
     }
 
-    // Quoted or simple CSV if line looks strongly like CSV and file/label is CSV or >50% of lines have single comma
     if (/\.csv$/i.test(opts?.sourceLabel || '') || (t.startsWith('"') && t.includes('","'))) {
       const csvRow = parseCsvLine(t);
       if (csvRow) {
@@ -295,13 +386,12 @@ export function parseUniversalStudyImport(
     }
   }
 
-  // 2. Also structure the text as Save My Exams notes (and auto-extract Term: Definition cards!)
+  // 2. Structure the text into Save My Exams sections (and extract Term: Definition pairs)
   const { note, extractedCards } = parseTextIntoStructuredNote(cleanText);
   if (opts?.legacyHtml && /<table[\s>]/i.test(opts.legacyHtml)) {
     note.legacyHtml = opts.legacyHtml;
   }
 
-  // Merge cards deduplicated by question
   const seenQ = new Set(cards.map((c) => c.q.toLowerCase()));
   for (const ec of extractedCards) {
     if (!seenQ.has(ec.q.toLowerCase())) {
@@ -329,4 +419,214 @@ export function parseUniversalStudyImport(
     cards,
     legacyHtml: opts?.legacyHtml,
   };
+}
+
+/**
+ * Parses StudyDeck v2, Revision Site v1 (`app: "revision-site", v: 1`), legacy v1, or Planner JSON backups
+ * into a unified WorkspaceData bundle with exact item counts.
+ */
+export function parseBackupJsonToWorkspace(rawJson: string): ParsedBackupBundle | null {
+  const trimmed = String(rawJson || '').replace(/^\uFEFF/, '').trim();
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
+    return null;
+  }
+
+  try {
+    const obj = JSON.parse(trimmed) as Record<string, unknown>;
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+
+    let formatLabel = 'StudyDeck Backup (.json)';
+    let parsedWs: WorkspaceData | null = null;
+
+    if (obj.app === 'studydeck' && obj.v === 2 && obj.workspace) {
+      formatLabel = 'StudyDeck v2 Full Backup';
+      parsedWs = normalizeWorkspace(obj.workspace);
+    } else if (obj.version === 2 && Array.isArray(obj.subjects)) {
+      formatLabel = 'StudyDeck Workspace Backup';
+      parsedWs = normalizeWorkspace(obj);
+    } else {
+      const rev: Record<string, string> = {};
+      const pln: Record<string, string> = {};
+
+      if (obj.app === 'studydeck') {
+        formatLabel = 'StudyDeck v1 Legacy Backup';
+        const rObj = (
+          obj.revision && typeof obj.revision === 'object' ? obj.revision : {}
+        ) as Record<string, unknown>;
+        const pObj = (
+          obj.planner && typeof obj.planner === 'object' ? obj.planner : {}
+        ) as Record<string, unknown>;
+        for (const [k, v] of Object.entries(rObj)) if (typeof v === 'string') rev[k] = v;
+        for (const [k, v] of Object.entries(pObj)) if (typeof v === 'string') pln[k] = v;
+      } else if (obj.app === 'revision-site' && obj.data && typeof obj.data === 'object') {
+        formatLabel = `Revision Site v${String(obj.v || 1)} Backup`;
+        for (const [k, v] of Object.entries(obj.data as Record<string, unknown>)) {
+          if (typeof v === 'string') rev[k] = v;
+          else if (v && typeof v === 'object') rev[k] = JSON.stringify(v);
+        }
+      } else if (
+        obj.app === 'mock-revision-planner' &&
+        obj.data &&
+        typeof obj.data === 'object'
+      ) {
+        formatLabel = 'Revision Planner Backup';
+        pln['mockplanner.v1'] = JSON.stringify(obj.data);
+      } else if (
+        Array.isArray(obj.subs) ||
+        Array.isArray(obj.todos) ||
+        Array.isArray(obj.blocks) ||
+        (obj.td && typeof obj.td === 'object')
+      ) {
+        formatLabel = 'Planner Backup';
+        pln['mockplanner.v1'] = JSON.stringify(obj);
+      }
+
+      const conv = convertLegacyEntriesToWorkspace(rev, pln);
+      if (conv.hadLegacyData) parsedWs = conv.workspace;
+    }
+
+    if (!parsedWs) return null;
+
+    const notesCount = parsedWs.topics.filter((t) => !isNoteEmpty(t.notes)).length;
+    const timelineTopics = parsedWs.topics.filter(
+      (t) => t.timelineEvents && t.timelineEvents.length > 0
+    ).length;
+    const timelinesCount = parsedWs.topics.reduce(
+      (acc, t) => acc + (t.timelineEvents?.length || 0),
+      0
+    );
+
+    return {
+      formatLabel,
+      workspace: parsedWs,
+      counts: {
+        subjects: parsedWs.subjects.length,
+        topics: parsedWs.topics.length,
+        notes: notesCount,
+        flashcards: parsedWs.flashcards.length,
+        timelines: timelinesCount,
+        timelineTopics,
+        planner: parsedWs.todos.length + parsedWs.calendarBlocks.length,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses multiple History timeline nodes from text (`Date | Title | Detail | Era`, `Date — Title: Detail`, TSV)
+ * or JSON (`edits-*`, array of event objects, or full backup timeline nodes).
+ */
+export function parseBulkTimelineNodes(rawText: string): ParsedBulkTimelineNode[] {
+  const trimmed = String(rawText || '').replace(/\r/g, '').trim();
+  if (!trimmed) return [];
+
+  // 1. JSON support (array or legacy edits-* object)
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const results: ParsedBulkTimelineNode[] = [];
+      const pushObj = (item: Record<string, unknown>, fallbackTitle?: string) => {
+        const date = String(item.date ?? item.d ?? '').trim();
+        const title = String(item.title ?? item.e ?? item.t ?? fallbackTitle ?? '').trim();
+        const detail = [item.detail, item.x, item.w]
+          .map((v) => String(v || '').trim())
+          .filter(Boolean)
+          .join(' — ');
+        const era = String(item.era ?? '').trim() || undefined;
+        if (title || detail) {
+          results.push({
+            date: date || 'Undated',
+            title: title || 'Historical Event',
+            detail,
+            era,
+          });
+        }
+      };
+
+      if (Array.isArray(parsed)) {
+        for (const el of parsed) {
+          if (el && typeof el === 'object') pushObj(el as Record<string, unknown>);
+        }
+        return results;
+      }
+
+      if (parsed && typeof parsed === 'object') {
+        const obj = parsed as Record<string, unknown>;
+        if (obj.mod && typeof obj.mod === 'object') {
+          for (const [k, v] of Object.entries(obj.mod as Record<string, unknown>)) {
+            if (v && typeof v === 'object') pushObj(v as Record<string, unknown>, k);
+          }
+        }
+        if (Array.isArray(obj.add)) {
+          for (const el of obj.add) {
+            if (el && typeof el === 'object') pushObj(el as Record<string, unknown>);
+          }
+        }
+        if (Array.isArray(obj.ne)) {
+          for (const el of obj.ne) {
+            if (el && typeof el === 'object') pushObj(el as Record<string, unknown>);
+          }
+        }
+        if (results.length > 0) return results;
+      }
+    } catch {
+      // Fall through to text parser
+    }
+  }
+
+  // 2. Multi-line text parser
+  const nodes: ParsedBulkTimelineNode[] = [];
+  for (const rawLine of trimmed.split('\n')) {
+    const line = rawLine.replace(/^(?:[-*•]\s*)/, '').trim();
+    if (!line) continue;
+    if (/^(?:date|year)\s*[\t|,]\s*(?:title|event)/i.test(line)) continue;
+
+    // Pipe or Tab separated: Date | Title | Detail | Era
+    if (line.includes('\t') || line.includes('|')) {
+      const parts = (line.includes('\t') ? line.split('\t') : line.split('|')).map((p) =>
+        p.trim()
+      );
+      if (parts.length >= 2 && (parts[0] || parts[1])) {
+        nodes.push({
+          date: parts[0] || 'Undated',
+          title: parts[1] || parts[0],
+          detail: parts[2] || '',
+          era: parts[3] || undefined,
+        });
+        continue;
+      }
+    }
+
+    // "1923 — Hyperinflation: Value dropped" or "3 Oct 1929 - Stresemann Dies — Lost key statesman"
+    const dashMatch = line.match(
+      /^([A-Za-z0-9 ,./'-]{2,28}?)\s*(?:—|–|->|::|\s-\s|:\s+)\s*(.+)$/
+    );
+    if (dashMatch) {
+      const date = dashMatch[1].trim();
+      const rest = dashMatch[2].trim();
+      const splitDetail = rest.match(/^(.+?)\s*(?::\s+|—|–|\s-\s)\s*(.+)$/);
+      nodes.push({
+        date,
+        title: splitDetail ? splitDetail[1].trim() : rest,
+        detail: splitDetail ? splitDetail[2].trim() : '',
+      });
+      continue;
+    }
+
+    // Year prefix e.g. "1918 Armistice Signed"
+    const yearStart = line.match(/^((?:c\.\s*)?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\.?\s*\d{3,4}(?:\s*(?:BC|BCE|AD))?)\s+(.+)$/i);
+    if (yearStart) {
+      const rest = yearStart[2].trim();
+      const splitDetail = rest.match(/^(.+?)\s*(?::\s+|—|–|\s-\s)\s*(.+)$/);
+      nodes.push({
+        date: yearStart[1].trim(),
+        title: splitDetail ? splitDetail[1].trim() : rest,
+        detail: splitDetail ? splitDetail[2].trim() : '',
+      });
+    }
+  }
+
+  return nodes;
 }

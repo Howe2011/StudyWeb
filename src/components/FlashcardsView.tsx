@@ -170,6 +170,7 @@ export function FlashcardsView({
   const [screen, setScreen] = useState<ViewScreen>('setup');
 
   // Setup filters & study options
+  const [selectedTopicFilter, setSelectedTopicFilter] = useState<string>('ALL');
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
   const [studyAlgo, setStudyAlgo] = useState<StudyAlgo>('smart');
   const [sessionLimit, setSessionLimit] = useState<number>(0); // 0 = All
@@ -205,14 +206,22 @@ export function FlashcardsView({
   const [editModalCardId, setEditModalCardId] = useState<string | null>(null);
   const [editQ, setEditQ] = useState<string>('');
   const [editA, setEditA] = useState<string>('');
+  const [editTopicId, setEditTopicId] = useState<string>('');
+  const [editSectionName, setEditSectionName] = useState<string>('');
 
   // Manage / Add form state
+  const [newTopicId, setNewTopicId] = useState<string>('');
+  const [newTopicCustomName, setNewTopicCustomName] = useState<string>('');
   const [newQ, setNewQ] = useState('');
   const [newA, setNewA] = useState('');
   const [newSec, setNewSec] = useState('Core Deck');
   const [quickBatchRaw, setQuickBatchRaw] = useState('');
   const [manageSearch, setManageSearch] = useState('');
+  const [manageTopicFilter, setManageTopicFilter] = useState<string>('ALL');
   const [manageFilter, setManageFilter] = useState<'all' | 'weak' | 'flagged' | 'mastered'>('all');
+  const [moveTargetTopicId, setMoveTargetTopicId] = useState<string>('');
+  const [moveNewTopicName, setMoveNewTopicName] = useState<string>('');
+  const [moveFeedback, setMoveFeedback] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -229,10 +238,75 @@ export function FlashcardsView({
     [workspace.subjects]
   );
 
+  const topicById = useMemo(
+    () => new Map(workspace.topics.map((t) => [t.id, t])),
+    [workspace.topics]
+  );
+
   const subjectCards = useMemo(() => {
     if (!selectedSubjectId || selectedSubjectId === 'ALL') return workspace.flashcards;
     return workspace.flashcards.filter((c) => c.subjectId === selectedSubjectId);
   }, [workspace.flashcards, selectedSubjectId]);
+
+  const subjectTopicsList = useMemo(() => {
+    if (!selectedSubjectId || selectedSubjectId === 'ALL') return workspace.topics;
+    return workspace.topics.filter((t) => t.subjectId === selectedSubjectId);
+  }, [workspace.topics, selectedSubjectId]);
+
+  // Reset topic filter when subject changes
+  useEffect(() => {
+    setSelectedTopicFilter('ALL');
+    setManageTopicFilter('ALL');
+    setMoveFeedback(null);
+  }, [selectedSubjectId]);
+
+  // Keep default topic selection synced for Add Card & Batch Move
+  useEffect(() => {
+    if (selectedTopicFilter !== 'ALL' && subjectTopicsList.some((t) => t.id === selectedTopicFilter)) {
+      setNewTopicId(selectedTopicFilter);
+    } else if (!newTopicId || (newTopicId !== '__new__' && !subjectTopicsList.some((t) => t.id === newTopicId))) {
+      setNewTopicId(subjectTopicsList[0]?.id || '__new__');
+    }
+    if (!moveTargetTopicId || (moveTargetTopicId !== '__new__' && !subjectTopicsList.some((t) => t.id === moveTargetTopicId))) {
+      setMoveTargetTopicId(subjectTopicsList[0]?.id || '__new__');
+    }
+  }, [selectedTopicFilter, subjectTopicsList, newTopicId, moveTargetTopicId]);
+
+  const topicCardsSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of subjectCards) {
+      const tid = topicById.has(c.topicId) ? c.topicId : '__unassigned__';
+      counts.set(tid, (counts.get(tid) || 0) + 1);
+    }
+    const items = subjectTopicsList
+      .map((t) => ({
+        topicId: t.id,
+        topicName: t.name,
+        subjectName: subjById.get(t.subjectId)?.name || 'General',
+        color: subjById.get(t.subjectId)?.color || '#2F5F8A',
+        count: counts.get(t.id) || 0,
+      }))
+      .filter((x) => x.count > 0);
+    const unassignedCount = counts.get('__unassigned__') || 0;
+    if (unassignedCount > 0) {
+      items.push({
+        topicId: '__unassigned__',
+        topicName: 'General / Unassigned',
+        subjectName: 'General',
+        color: '#6b7280',
+        count: unassignedCount,
+      });
+    }
+    return items;
+  }, [subjectCards, subjectTopicsList, topicById, subjById]);
+
+  const topicFilteredCards = useMemo(() => {
+    if (selectedTopicFilter === 'ALL') return subjectCards;
+    if (selectedTopicFilter === '__unassigned__') {
+      return subjectCards.filter((c) => !topicById.has(c.topicId));
+    }
+    return subjectCards.filter((c) => c.topicId === selectedTopicFilter);
+  }, [subjectCards, selectedTopicFilter, topicById]);
 
   const sectionBuckets = useMemo(() => {
     const map = new Map<
@@ -240,6 +314,8 @@ export function FlashcardsView({
       {
         key: string;
         name: string;
+        topicId: string;
+        topicName: string;
         subjectId: string;
         subjectName: string;
         color: string;
@@ -247,10 +323,13 @@ export function FlashcardsView({
       }
     >();
 
-    for (const c of subjectCards) {
+    for (const c of topicFilteredCards) {
       const s = subjById.get(c.subjectId);
+      const t = topicById.get(c.topicId);
+      const tId = t ? t.id : '__unassigned__';
+      const tName = t ? t.name : 'General / Unassigned';
       const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
-      const key = `${c.subjectId}:::${secName}`;
+      const key = `${c.subjectId}:::${tId}:::${secName}`;
       const existing = map.get(key);
       if (existing) {
         existing.cards.push(c);
@@ -258,6 +337,8 @@ export function FlashcardsView({
         map.set(key, {
           key,
           name: secName,
+          topicId: tId,
+          topicName: tName,
           subjectId: c.subjectId,
           subjectName: s?.name || 'General',
           color: s?.color || '#2F5F8A',
@@ -265,10 +346,43 @@ export function FlashcardsView({
         });
       }
     }
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [subjectCards, subjById]);
+    return Array.from(map.values()).sort(
+      (a, b) => a.topicName.localeCompare(b.topicName) || a.name.localeCompare(b.name)
+    );
+  }, [topicFilteredCards, subjById, topicById]);
 
-  // Auto-select sections cleanly when subject changes if none match
+  const topicGroupedBuckets = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        topicId: string;
+        topicName: string;
+        subjectName: string;
+        color: string;
+        buckets: typeof sectionBuckets;
+        totalCards: number;
+      }
+    >();
+    for (const b of sectionBuckets) {
+      const g = groups.get(b.topicId);
+      if (g) {
+        g.buckets.push(b);
+        g.totalCards += b.cards.length;
+      } else {
+        groups.set(b.topicId, {
+          topicId: b.topicId,
+          topicName: b.topicName,
+          subjectName: b.subjectName,
+          color: b.color,
+          buckets: [b],
+          totalCards: b.cards.length,
+        });
+      }
+    }
+    return Array.from(groups.values());
+  }, [sectionBuckets]);
+
+  // Auto-select sections cleanly when subject or topic filter changes
   useEffect(() => {
     const validKeys = new Set(sectionBuckets.map((b) => b.key));
     setSelectedSections((prev) => {
@@ -278,11 +392,13 @@ export function FlashcardsView({
     });
   }, [sectionBuckets]);
 
-  // Base pool of cards matching selected sections + filters
+  // Base pool of cards matching selected topic + sections + filters
   const basePool = useMemo(() => {
     const selSet = new Set(selectedSections);
-    return subjectCards.filter((c) => {
-      const key = `${c.subjectId}:::${(c.sectionName || 'Core Deck').trim() || 'Core Deck'}`;
+    return topicFilteredCards.filter((c) => {
+      const tId = topicById.has(c.topicId) ? c.topicId : '__unassigned__';
+      const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+      const key = `${c.subjectId}:::${tId}:::${secName}`;
       if (selSet.size > 0 && !selSet.has(key)) return false;
       if (optStarredOnly && !c.flagged) return false;
       if (optWeakOnly && c.box > 2) return false;
@@ -291,7 +407,7 @@ export function FlashcardsView({
       }
       return true;
     });
-  }, [subjectCards, selectedSections, optStarredOnly, optWeakOnly, selectedCategories]);
+  }, [topicFilteredCards, topicById, selectedSections, optStarredOnly, optWeakOnly, selectedCategories]);
 
   const categoryCounts = useMemo(() => {
     const selSet = new Set(selectedSections);
@@ -302,13 +418,15 @@ export function FlashcardsView({
       cause: 0,
       term: 0,
     };
-    subjectCards.forEach((c) => {
-      const key = `${c.subjectId}:::${(c.sectionName || 'Core Deck').trim() || 'Core Deck'}`;
+    topicFilteredCards.forEach((c) => {
+      const tId = topicById.has(c.topicId) ? c.topicId : '__unassigned__';
+      const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+      const key = `${c.subjectId}:::${tId}:::${secName}`;
       if (selSet.size > 0 && !selSet.has(key)) return;
       counts[detectCardCategory(c)] += 1;
     });
     return counts;
-  }, [subjectCards, selectedSections]);
+  }, [topicFilteredCards, topicById, selectedSections]);
 
   const nowMs = Date.now();
   const duePool = useMemo(() => basePool.filter((c) => c.dueAt <= nowMs), [basePool, nowMs]);
@@ -516,12 +634,84 @@ export function FlashcardsView({
     if (!editModalCardId || !editQ.trim() || !editA.trim()) return;
     onUpdateWorkspace((prev) => ({
       ...prev,
-      flashcards: prev.flashcards.map((c) =>
-        c.id === editModalCardId ? { ...c, q: editQ.trim(), a: editA.trim() } : c
-      ),
+      flashcards: prev.flashcards.map((c) => {
+        if (c.id !== editModalCardId) return c;
+        const resolvedTopic = editTopicId ? prev.topics.find((t) => t.id === editTopicId) : undefined;
+        return {
+          ...c,
+          q: editQ.trim(),
+          a: editA.trim(),
+          topicId: resolvedTopic ? resolvedTopic.id : editTopicId || c.topicId,
+          subjectId: resolvedTopic ? resolvedTopic.subjectId : c.subjectId,
+          sectionName: editSectionName.trim() || c.sectionName,
+        };
+      }),
       updatedAt: new Date().toISOString(),
     }));
     setEditModalCardId(null);
+  };
+
+  const resolveOrCreateTargetTopic = (
+    prev: WorkspaceData,
+    fallbackSubjId: string,
+    chosenTopicId: string,
+    customName: string
+  ): { nextSubjs: WorkspaceData['subjects']; nextTopics: WorkspaceData['topics']; subjId: string; topicId: string; topicName: string } => {
+    let nextSubjs = prev.subjects;
+    let nextTopics = prev.topics;
+    if (!nextSubjs.some((s) => s.id === fallbackSubjId)) {
+      nextSubjs = [
+        ...nextSubjs,
+        {
+          id: fallbackSubjId,
+          name: 'General',
+          examBoard: 'Revision',
+          color: '#2F5F8A',
+          examDate: '',
+          weight: 2,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+    }
+    if (chosenTopicId === '__new__' && customName.trim()) {
+      const existingByName = nextTopics.find(
+        (t) => t.subjectId === fallbackSubjId && t.name.toLowerCase() === customName.trim().toLowerCase()
+      );
+      if (existingByName) {
+        return { nextSubjs, nextTopics, subjId: existingByName.subjectId, topicId: existingByName.id, topicName: existingByName.name };
+      }
+      const createdId = makeId('top');
+      nextTopics = [
+        ...nextTopics,
+        {
+          id: createdId,
+          subjectId: fallbackSubjId,
+          name: customName.trim(),
+          completed: false,
+          notes: { summary: '', sections: [], keyTerms: [], examTip: '', workedExample: '', updatedAt: new Date().toISOString() },
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      return { nextSubjs, nextTopics, subjId: fallbackSubjId, topicId: createdId, topicName: customName.trim() };
+    }
+    const found = nextTopics.find((t) => t.id === chosenTopicId) || nextTopics.find((t) => t.subjectId === fallbackSubjId);
+    if (found) {
+      return { nextSubjs, nextTopics, subjId: found.subjectId, topicId: found.id, topicName: found.name };
+    }
+    const createdId = makeId('top');
+    const fallbackName = customName.trim() || 'Core Topic';
+    nextTopics = [
+      ...nextTopics,
+      {
+        id: createdId,
+        subjectId: fallbackSubjId,
+        name: fallbackName,
+        completed: false,
+        notes: { summary: '', sections: [], keyTerms: [], examTip: '', workedExample: '', updatedAt: new Date().toISOString() },
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    return { nextSubjs, nextTopics, subjId: fallbackSubjId, topicId: createdId, topicName: fallbackName };
   };
 
   const handleAddSingleCard = (e: FormEvent) => {
@@ -533,27 +723,12 @@ export function FlashcardsView({
         : workspace.subjects[0]?.id || makeId('subj');
 
     onUpdateWorkspace((prev) => {
-      let nextSubjs = prev.subjects;
-      if (!nextSubjs.some((s) => s.id === targetSubjId)) {
-        nextSubjs = [
-          ...nextSubjs,
-          {
-            id: targetSubjId,
-            name: 'General',
-            examBoard: 'Revision',
-            color: '#2F5F8A',
-            examDate: '',
-            weight: 2,
-            createdAt: new Date().toISOString(),
-          },
-        ];
-      }
-      const topic = prev.topics.find((t) => t.subjectId === targetSubjId);
+      const resolved = resolveOrCreateTargetTopic(prev, targetSubjId, newTopicId, newTopicCustomName);
       const card: StudyFlashcard = {
         id: makeId('fc'),
-        subjectId: targetSubjId,
-        topicId: topic?.id || makeId('top'),
-        sectionName: newSec.trim() || 'Core Deck',
+        subjectId: resolved.subjId,
+        topicId: resolved.topicId,
+        sectionName: newSec.trim() || resolved.topicName || 'Core Deck',
         q: newQ.trim(),
         a: newA.trim(),
         box: 1,
@@ -563,13 +738,15 @@ export function FlashcardsView({
       };
       return {
         ...prev,
-        subjects: nextSubjs,
+        subjects: resolved.nextSubjs,
+        topics: resolved.nextTopics,
         flashcards: [card, ...prev.flashcards],
         updatedAt: new Date().toISOString(),
       };
     });
     setNewQ('');
     setNewA('');
+    if (newTopicId === '__new__') setNewTopicCustomName('');
   };
 
   const handleQuickBatchPaste = (e: FormEvent) => {
@@ -600,27 +777,12 @@ export function FlashcardsView({
     if (!parsed.length) return;
 
     onUpdateWorkspace((prev) => {
-      let nextSubjs = prev.subjects;
-      if (!nextSubjs.some((s) => s.id === targetSubjId)) {
-        nextSubjs = [
-          ...nextSubjs,
-          {
-            id: targetSubjId,
-            name: 'General',
-            examBoard: 'Revision',
-            color: '#2F5F8A',
-            examDate: '',
-            weight: 2,
-            createdAt: new Date().toISOString(),
-          },
-        ];
-      }
-      const topic = prev.topics.find((t) => t.subjectId === targetSubjId);
+      const resolved = resolveOrCreateTargetTopic(prev, targetSubjId, newTopicId, newTopicCustomName);
       const added: StudyFlashcard[] = parsed.map((p) => ({
         id: makeId('fc'),
-        subjectId: targetSubjId,
-        topicId: topic?.id || makeId('top'),
-        sectionName: newSec.trim() || 'Core Deck',
+        subjectId: resolved.subjId,
+        topicId: resolved.topicId,
+        sectionName: newSec.trim() || resolved.topicName || 'Core Deck',
         q: p.q,
         a: p.a,
         box: 1,
@@ -630,12 +792,14 @@ export function FlashcardsView({
       }));
       return {
         ...prev,
-        subjects: nextSubjs,
+        subjects: resolved.nextSubjs,
+        topics: resolved.nextTopics,
         flashcards: [...added, ...prev.flashcards],
         updatedAt: new Date().toISOString(),
       };
     });
     setQuickBatchRaw('');
+    if (newTopicId === '__new__') setNewTopicCustomName('');
   };
 
   const deleteCard = (cardId: string) => {
@@ -650,13 +814,58 @@ export function FlashcardsView({
   const manageFilteredCards = useMemo(() => {
     const q = manageSearch.trim().toLowerCase();
     return subjectCards.filter((c) => {
+      if (manageTopicFilter === '__unassigned__' && topicById.has(c.topicId)) return false;
+      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unassigned__' && c.topicId !== manageTopicFilter) {
+        return false;
+      }
       if (manageFilter === 'weak' && c.box > 2) return false;
       if (manageFilter === 'flagged' && !c.flagged) return false;
       if (manageFilter === 'mastered' && c.box < 4) return false;
-      if (q && !(c.q + ' ' + c.a + ' ' + c.sectionName).toLowerCase().includes(q)) return false;
+      if (q) {
+        const tName = topicById.get(c.topicId)?.name || '';
+        if (!(c.q + ' ' + c.a + ' ' + c.sectionName + ' ' + tName).toLowerCase().includes(q)) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [subjectCards, manageSearch, manageFilter]);
+  }, [subjectCards, manageSearch, manageTopicFilter, manageFilter, topicById]);
+
+  const handleMoveFilteredToTopic = () => {
+    if (manageFilteredCards.length === 0) return;
+    if (moveTargetTopicId === '__new__' && !moveNewTopicName.trim()) return;
+    const idsToMove = new Set(manageFilteredCards.map((c) => c.id));
+    const fallbackSubjId =
+      selectedSubjectId && selectedSubjectId !== 'ALL'
+        ? selectedSubjectId
+        : manageFilteredCards[0]?.subjectId || workspace.subjects[0]?.id || makeId('subj');
+
+    let destTopicLabel = '';
+    onUpdateWorkspace((prev) => {
+      const resolved = resolveOrCreateTargetTopic(
+        prev,
+        fallbackSubjId,
+        moveTargetTopicId,
+        moveNewTopicName
+      );
+      destTopicLabel = resolved.topicName;
+      return {
+        ...prev,
+        subjects: resolved.nextSubjs,
+        topics: resolved.nextTopics,
+        flashcards: prev.flashcards.map((c) =>
+          idsToMove.has(c.id)
+            ? { ...c, subjectId: resolved.subjId, topicId: resolved.topicId }
+            : c
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setMoveFeedback(
+      `Moved ${idsToMove.size} card${idsToMove.size === 1 ? '' : 's'} into "${destTopicLabel || 'selected topic'}".`
+    );
+    if (moveTargetTopicId === '__new__') setMoveNewTopicName('');
+  };
 
   const clozeParts = useMemo(() => {
     if (!currentCard || optReverse || !optCloze) return null;
@@ -702,6 +911,24 @@ export function FlashcardsView({
                     </option>
                   ))}
                 </select>
+                {topicCardsSummary.length > 0 && (
+                  <select
+                    aria-label="Split by topic"
+                    value={selectedTopicFilter}
+                    onChange={(e) => {
+                      setSelectedTopicFilter(e.target.value);
+                      setSelectedSections([]);
+                    }}
+                    className="sd-input w-auto max-w-[230px] py-1.5 text-xs font-semibold"
+                  >
+                    <option value="ALL">All Topics ({subjectCards.length})</option>
+                    {topicCardsSummary.map((tp) => (
+                      <option key={tp.topicId} value={tp.topicId}>
+                        {tp.topicName} ({tp.count})
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   type="button"
                   onClick={() => setScreen('manage')}
@@ -870,18 +1097,18 @@ export function FlashcardsView({
                   </button>
                 </div>
 
-                {/* Sections Grid */}
-                <div className="sd-card p-5">
+                {/* Topic-Split & Sections Grid */}
+                <div className="sd-card space-y-4 p-5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h2 className="font-display text-base font-bold text-[var(--ink)]">
-                        Deck Sections
+                        Split by Topic &amp; Deck Sections
                       </h2>
                       <p className="text-xs text-[var(--mute)]">
-                        Select which sections to include in your next session.
+                        Pick a single topic (e.g. USA 1919–1941 in History) or mix specific sections.
                       </p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
                         onClick={() => setSelectedSections(sectionBuckets.map((b) => b.key))}
@@ -899,52 +1126,149 @@ export function FlashcardsView({
                     </div>
                   </div>
 
-                  <div className="mt-3 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                    {sectionBuckets.map((b) => {
-                      const active = selectedSections.includes(b.key);
-                      const mastered = b.cards.filter((c) => c.box >= 4).length;
-                      const pct = Math.round((mastered / Math.max(1, b.cards.length)) * 100);
+                  {/* Quick Topic Filter Strip */}
+                  {topicCardsSummary.length > 1 && (
+                    <div className="flex flex-wrap gap-1.5 border-b border-[var(--line)] pb-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTopicFilter('ALL');
+                          setSelectedSections([]);
+                        }}
+                        className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                          selectedTopicFilter === 'ALL'
+                            ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                            : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                        }`}
+                      >
+                        All Topics ({subjectCards.length})
+                      </button>
+                      {topicCardsSummary.map((tp) => {
+                        const active = selectedTopicFilter === tp.topicId;
+                        return (
+                          <button
+                            key={tp.topicId}
+                            type="button"
+                            onClick={() => {
+                              setSelectedTopicFilter(tp.topicId);
+                              setSelectedSections([]);
+                            }}
+                            className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                              active
+                                ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                                : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                            }`}
+                          >
+                            {tp.topicName}{' '}
+                            <span className="font-mono-num opacity-75">({tp.count})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Sections Grouped by Topic */}
+                  <div className="space-y-4">
+                    {topicGroupedBuckets.map((grp) => {
+                      const groupKeys = grp.buckets.map((b) => b.key);
+                      const allGroupSelected = groupKeys.every((k) => selectedSections.includes(k));
                       return (
-                        <button
-                          key={b.key}
-                          type="button"
-                          aria-pressed={active}
-                          onClick={() =>
-                            setSelectedSections((prev) =>
-                              prev.includes(b.key)
-                                ? prev.filter((x) => x !== b.key)
-                                : [...prev, b.key]
-                            )
-                          }
-                          style={{
-                            borderColor: active ? b.color : undefined,
-                            backgroundColor: active
-                              ? `color-mix(in srgb, ${b.color} 11%, var(--card))`
-                              : undefined,
-                          }}
-                          className="relative cursor-pointer overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-3 pb-4 text-left transition-colors"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="text-sm font-bold text-[var(--ink)]">{b.name}</span>
-                            {active && (
+                        <div key={grp.topicId} className="space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
                               <span
-                                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                                style={{ backgroundColor: b.color }}
-                              >
-                                ✓
+                                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                style={{ backgroundColor: grp.color }}
+                                aria-hidden="true"
+                              />
+                              <span className="font-display text-sm font-bold text-[var(--ink)]">
+                                {grp.topicName}
                               </span>
-                            )}
+                              <span className="font-mono-num text-xs text-[var(--mute)]">
+                                · {grp.subjectName} · {grp.totalCards} cards
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {topicGroupedBuckets.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedSections(groupKeys)}
+                                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                                >
+                                  Only this topic
+                                </button>
+                              )}
+                              <span className="text-[var(--line)]">·</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSelectedSections((prev) =>
+                                    allGroupSelected
+                                      ? prev.filter((k) => !groupKeys.includes(k))
+                                      : Array.from(new Set([...prev, ...groupKeys]))
+                                  )
+                                }
+                                className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:text-[var(--ink)] whitespace-nowrap"
+                              >
+                                {allGroupSelected ? 'Deselect' : 'Select'}
+                              </button>
+                            </div>
                           </div>
-                          <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
-                            {b.subjectName} · {b.cards.length} cards · {mastered} mastered
+
+                          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                            {grp.buckets.map((b) => {
+                              const active = selectedSections.includes(b.key);
+                              const mastered = b.cards.filter((c) => c.box >= 4).length;
+                              const pct = Math.round(
+                                (mastered / Math.max(1, b.cards.length)) * 100
+                              );
+                              return (
+                                <button
+                                  key={b.key}
+                                  type="button"
+                                  aria-pressed={active}
+                                  onClick={() =>
+                                    setSelectedSections((prev) =>
+                                      prev.includes(b.key)
+                                        ? prev.filter((x) => x !== b.key)
+                                        : [...prev, b.key]
+                                    )
+                                  }
+                                  style={{
+                                    borderColor: active ? b.color : undefined,
+                                    backgroundColor: active
+                                      ? `color-mix(in srgb, ${b.color} 11%, var(--card))`
+                                      : undefined,
+                                  }}
+                                  className="relative cursor-pointer overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-3 pb-4 text-left transition-colors"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <span className="text-sm font-bold text-[var(--ink)]">
+                                      {b.name}
+                                    </span>
+                                    {active && (
+                                      <span
+                                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                                        style={{ backgroundColor: b.color }}
+                                      >
+                                        ✓
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
+                                    {b.cards.length} cards · {mastered} mastered
+                                  </div>
+                                  <div className="absolute inset-x-0 bottom-0 h-1 bg-[var(--line)]">
+                                    <div
+                                      className="h-full bg-[var(--ok)] transition-[width] duration-300"
+                                      style={{ width: `${pct}%` }}
+                                    />
+                                  </div>
+                                </button>
+                              );
+                            })}
                           </div>
-                          <div className="absolute inset-x-0 bottom-0 h-1 bg-[var(--line)]">
-                            <div
-                              className="h-full bg-[var(--ok)] transition-[width] duration-300"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -1619,16 +1943,46 @@ export function FlashcardsView({
                 <h2 className="font-display text-lg font-bold text-[var(--ink)]">
                   Add Single Card
                 </h2>
-                <label className="block text-xs font-semibold text-[var(--mute)]">
-                  Section / Topic
-                  <input
-                    type="text"
-                    value={newSec}
-                    onChange={(e) => setNewSec(e.target.value)}
-                    placeholder="e.g. Cell Biology"
-                    className="sd-input mt-1 text-xs"
-                  />
-                </label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    Topic
+                    <select
+                      value={newTopicId}
+                      onChange={(e) => setNewTopicId(e.target.value)}
+                      className="sd-input mt-1 text-xs"
+                    >
+                      {subjectTopicsList.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                      <option value="__new__">+ New Topic…</option>
+                    </select>
+                  </label>
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    Section / Sub-deck
+                    <input
+                      type="text"
+                      value={newSec}
+                      onChange={(e) => setNewSec(e.target.value)}
+                      placeholder="e.g. Wall Street Crash"
+                      className="sd-input mt-1 text-xs"
+                    />
+                  </label>
+                </div>
+                {newTopicId === '__new__' && (
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    New Topic Name *
+                    <input
+                      type="text"
+                      required
+                      value={newTopicCustomName}
+                      onChange={(e) => setNewTopicCustomName(e.target.value)}
+                      placeholder="e.g. USA 1919–1941"
+                      className="sd-input mt-1 text-xs"
+                    />
+                  </label>
+                )}
                 <label className="block text-xs font-semibold text-[var(--mute)]">
                   Question / Front *
                   <input
@@ -1662,11 +2016,11 @@ export function FlashcardsView({
                   Quick Batch Add (Quizlet / Pipe / Tab)
                 </h2>
                 <p className="text-xs text-[var(--mute)]">
-                  Paste one card per line separated by <code>|</code>, <code>::</code>, or a Tab
-                  character.
+                  Saves into your selected Topic &amp; Section on the left. Paste one card per line
+                  separated by <code>|</code>, <code>::</code>, or Tab.
                 </p>
                 <textarea
-                  rows={5}
+                  rows={6}
                   value={quickBatchRaw}
                   onChange={(e) => setQuickBatchRaw(e.target.value)}
                   placeholder={
@@ -1686,11 +2040,25 @@ export function FlashcardsView({
                   All Matching Cards ({manageFilteredCards.length})
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    aria-label="Filter by topic"
+                    value={manageTopicFilter}
+                    onChange={(e) => setManageTopicFilter(e.target.value)}
+                    className="sd-input w-auto max-w-[190px] py-1 text-xs"
+                  >
+                    <option value="ALL">All Topics</option>
+                    {subjectTopicsList.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                    <option value="__unassigned__">General / Unassigned</option>
+                  </select>
                   <input
                     type="text"
                     value={manageSearch}
                     onChange={(e) => setManageSearch(e.target.value)}
-                    placeholder="Search cards…"
+                    placeholder="Search cards or section…"
                     className="sd-input w-44 py-1 text-xs"
                   />
                   <select
@@ -1708,51 +2076,109 @@ export function FlashcardsView({
                   </select>
                 </div>
               </div>
+
+              {/* Split / Reassign Matching Cards to a Topic */}
+              {manageFilteredCards.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-5 py-2.5 text-xs">
+                  <span className="font-semibold text-[var(--mute)]">
+                    Split / move these {manageFilteredCards.length} matching card
+                    {manageFilteredCards.length === 1 ? '' : 's'} into topic:
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      aria-label="Destination topic"
+                      value={moveTargetTopicId}
+                      onChange={(e) => setMoveTargetTopicId(e.target.value)}
+                      className="sd-input w-auto max-w-[200px] py-1 text-xs"
+                    >
+                      {subjectTopicsList.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                      <option value="__new__">+ New Topic…</option>
+                    </select>
+                    {moveTargetTopicId === '__new__' && (
+                      <input
+                        type="text"
+                        value={moveNewTopicName}
+                        onChange={(e) => setMoveNewTopicName(e.target.value)}
+                        placeholder="New topic name…"
+                        className="sd-input w-40 py-1 text-xs"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      disabled={moveTargetTopicId === '__new__' && !moveNewTopicName.trim()}
+                      onClick={handleMoveFilteredToTopic}
+                      className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
+                    >
+                      Move Matching Cards
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {moveFeedback && (
+                <div
+                  role="status"
+                  className="border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] px-5 py-2 text-xs font-semibold text-[var(--ink)]"
+                >
+                  {moveFeedback}
+                </div>
+              )}
+
               <div className="divide-y divide-[var(--line)]">
-                {manageFilteredCards.map((card) => (
-                  <div
-                    key={card.id}
-                    className="flex flex-wrap items-start justify-between gap-3 p-4 text-sm"
-                  >
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="font-semibold text-[var(--ink)]">{card.q}</div>
-                      <div className="text-xs text-[var(--mute)]">{card.a}</div>
-                      <div className="font-mono-num text-[11px] text-[var(--mute)]">
-                        {card.sectionName} · Box {card.box}/5
+                {manageFilteredCards.map((card) => {
+                  const topicName = topicById.get(card.topicId)?.name || 'General';
+                  return (
+                    <div
+                      key={card.id}
+                      className="flex flex-wrap items-start justify-between gap-3 p-4 text-sm"
+                    >
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="font-semibold text-[var(--ink)]">{card.q}</div>
+                        <div className="text-xs text-[var(--mute)]">{card.a}</div>
+                        <div className="font-mono-num text-[11px] text-[var(--mute)]">
+                          <span className="font-semibold text-[var(--e3)]">{topicName}</span> ·{' '}
+                          {card.sectionName} · Box {card.box}/5
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleFlagCard(card.id)}
+                          aria-label="Toggle flag"
+                          className={`sd-btn h-8 w-8 p-0 ${card.flagged ? 'text-[var(--e2)]' : ''}`}
+                        >
+                          <Flag className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditModalCardId(card.id);
+                            setEditQ(card.q);
+                            setEditA(card.a);
+                            setEditTopicId(card.topicId);
+                            setEditSectionName(card.sectionName);
+                          }}
+                          aria-label="Edit card"
+                          className="sd-btn h-8 w-8 p-0"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteCard(card.id)}
+                          aria-label="Delete card"
+                          className="sd-btn h-8 w-8 p-0 text-[var(--bad)]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => toggleFlagCard(card.id)}
-                        aria-label="Toggle flag"
-                        className={`sd-btn h-8 w-8 p-0 ${card.flagged ? 'text-[var(--e2)]' : ''}`}
-                      >
-                        <Flag className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditModalCardId(card.id);
-                          setEditQ(card.q);
-                          setEditA(card.a);
-                        }}
-                        aria-label="Edit card"
-                        className="sd-btn h-8 w-8 p-0"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteCard(card.id)}
-                        aria-label="Delete card"
-                        className="sd-btn h-8 w-8 p-0 text-[var(--bad)]"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {manageFilteredCards.length === 0 && (
                   <div className="p-6 text-center text-xs text-[var(--mute)]">
                     No cards match this filter.
@@ -1783,6 +2209,31 @@ export function FlashcardsView({
               >
                 <X className="h-4 w-4" aria-hidden="true" />
               </button>
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              <label className="block text-xs font-semibold text-[var(--mute)]">
+                Topic
+                <select
+                  value={editTopicId}
+                  onChange={(e) => setEditTopicId(e.target.value)}
+                  className="sd-input mt-1 text-xs"
+                >
+                  {workspace.topics.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {subjById.get(t.subjectId)?.name || 'Subject'} — {t.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs font-semibold text-[var(--mute)]">
+                Section
+                <input
+                  type="text"
+                  value={editSectionName}
+                  onChange={(e) => setEditSectionName(e.target.value)}
+                  className="sd-input mt-1 text-xs"
+                />
+              </label>
             </div>
             <label className="block text-xs font-semibold text-[var(--mute)]">
               Question

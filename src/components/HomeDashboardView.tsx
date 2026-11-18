@@ -39,11 +39,13 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { parseBackupJsonToWorkspace } from '../lib/smartImporter';
 import {
   addLoggedStudyMinutes,
   DEFAULT_HOME_LAYOUT,
   homeWidgetsFromLayout,
   makeId,
+  mergeWorkspaces,
 } from '../lib/workspaceStore';
 import {
   DailyStudyTaskItem,
@@ -418,6 +420,36 @@ export function HomeDashboardView({
   const [addDailyTopicId, setAddDailyTopicId] = useState('');
 
   const [shareCodeInput, setShareCodeInput] = useState('');
+  const [importingHowes, setImportingHowes] = useState(false);
+  const [howesImportMsg, setHowesImportMsg] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleImportHowesNotes = async () => {
+    setImportingHowes(true);
+    setHowesImportMsg(null);
+    try {
+      const resp = await fetch('/assets/aistudio/revision-backup-2026-11-17_b59c0c72.json');
+      if (!resp.ok) {
+        throw new Error(`Could not load backup file (HTTP ${resp.status}).`);
+      }
+      const raw = await resp.text();
+      const bundle = parseBackupJsonToWorkspace(raw);
+      if (!bundle) {
+        throw new Error('Failed to parse backup file.');
+      }
+      onUpdateWorkspace((prev) => mergeWorkspaces(prev, bundle.workspace));
+      setHowesImportMsg({
+        ok: true,
+        msg: `Imported Howe's notes: ${bundle.counts.notes} structured notes, ${bundle.counts.flashcards} flashcards, and ${bundle.counts.timelines} timeline nodes.`,
+      });
+    } catch (err) {
+      setHowesImportMsg({
+        ok: false,
+        msg: err instanceof Error ? err.message : "Failed to import Howe's notes.",
+      });
+    } finally {
+      setImportingHowes(false);
+    }
+  };
 
   const gridRef = useRef<HTMLDivElement | null>(null);
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -2921,8 +2953,17 @@ export function HomeDashboardView({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={onOpenImport}
+              disabled={importingHowes}
+              onClick={() => void handleImportHowesNotes()}
               className="sd-btn-pri px-3.5 py-2 text-xs whitespace-nowrap shrink-0"
+            >
+              <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{importingHowes ? "Importing Howe's notes…" : "Import Howe's notes"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenImport}
+              className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap shrink-0"
             >
               <Upload className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Import Notes / Quizlet</span>
@@ -2940,6 +2981,27 @@ export function HomeDashboardView({
             </button>
           </div>
         </div>
+
+        {howesImportMsg && (
+          <div
+            role="status"
+            className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-xs font-semibold ${
+              howesImportMsg.ok
+                ? 'border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] text-[var(--ink)]'
+                : 'border-[var(--bad)] bg-[var(--card)] text-[var(--bad)]'
+            }`}
+          >
+            <span>{howesImportMsg.msg}</span>
+            <button
+              type="button"
+              onClick={() => setHowesImportMsg(null)}
+              aria-label="Dismiss import message"
+              className="cursor-pointer p-1 text-[var(--mute)] hover:text-[var(--ink)]"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </div>
+        )}
 
         {/* Interactive Widget Customizer Tray with Categories */}
         {customizeOpen && (

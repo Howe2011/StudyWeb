@@ -28,12 +28,9 @@ import {
 } from '../lib/backupTemplates';
 import { getDeviceInfo, setCustomDeviceName } from '../lib/device';
 import { isNoteEmpty, structuredNoteToHtml } from '../lib/noteFormat';
+import { BackupImportCounts, parseBackupJsonToWorkspace } from '../lib/smartImporter';
 import { BOOTSTRAP_ADMIN_EMAIL } from '../lib/syncService';
-import {
-  convertLegacyEntriesToWorkspace,
-  createEmptyWorkspace,
-  normalizeWorkspace,
-} from '../lib/workspaceStore';
+import { createEmptyWorkspace } from '../lib/workspaceStore';
 import {
   DecryptedProfile,
   UserAccountDoc,
@@ -197,8 +194,10 @@ export function ProfileVaultView({
   const [importTextRaw, setImportTextRaw] = useState('');
   const [parsedBackup, setParsedBackup] = useState<{
     fileName: string;
+    formatLabel: string;
     workspace: WorkspaceData;
     available: Record<BackupCategory, boolean>;
+    counts: BackupImportCounts;
   } | null>(null);
   const [importCats, setImportCats] = useState<Record<BackupCategory, boolean>>({
     subjects: true,
@@ -413,67 +412,34 @@ export function ProfileVaultView({
       return;
     }
 
-    try {
-      const obj = JSON.parse(trimmed) as Record<string, unknown>;
-      let parsedWs: WorkspaceData | null = null;
-
-      if (obj && obj.app === 'studydeck' && obj.v === 2 && obj.workspace) {
-        parsedWs = normalizeWorkspace(obj.workspace);
-      } else if (obj && obj.version === 2 && Array.isArray(obj.subjects)) {
-        parsedWs = normalizeWorkspace(obj);
-      } else {
-        // Legacy v1 StudyDeck / revision-site / mock-revision-planner backup conversion
-        const rev: Record<string, string> = {};
-        const pln: Record<string, string> = {};
-        if (obj && obj.app === 'studydeck') {
-          const rObj = (obj.revision && typeof obj.revision === 'object' ? obj.revision : {}) as Record<string, unknown>;
-          const pObj = (obj.planner && typeof obj.planner === 'object' ? obj.planner : {}) as Record<string, unknown>;
-          for (const [k, v] of Object.entries(rObj)) if (typeof v === 'string') rev[k] = v;
-          for (const [k, v] of Object.entries(pObj)) if (typeof v === 'string') pln[k] = v;
-        } else if (obj && obj.app === 'revision-site' && obj.data && typeof obj.data === 'object') {
-          for (const [k, v] of Object.entries(obj.data as Record<string, unknown>)) {
-            if (typeof v === 'string') rev[k] = v;
-          }
-        } else if (obj && obj.app === 'mock-revision-planner' && obj.data && typeof obj.data === 'object') {
-          pln['mockplanner.v1'] = JSON.stringify(obj.data);
-        } else if (
-          obj &&
-          (Array.isArray(obj.subs) || Array.isArray(obj.todos) || Array.isArray(obj.blocks) || (obj.td && typeof obj.td === 'object'))
-        ) {
-          pln['mockplanner.v1'] = JSON.stringify(obj);
-        }
-
-        const conv = convertLegacyEntriesToWorkspace(rev, pln);
-        if (conv.hadLegacyData) parsedWs = conv.workspace;
-      }
-
-      if (!parsedWs) {
-        setParsedBackup(null);
-        setImportStatus({
-          ok: false,
-          msg: 'Unrecognized JSON format. Use a StudyDeck JSON backup or use Smart Note & Flashcard Import for text/Word/CSV.',
-        });
-        return;
-      }
-
-      const available: Record<BackupCategory, boolean> = {
-        subjects: parsedWs.subjects.length > 0 || parsedWs.topics.length > 0,
-        notes: parsedWs.topics.some((t) => !isNoteEmpty(t.notes)),
-        flashcards: parsedWs.flashcards.length > 0,
-        timelines: parsedWs.topics.some((t) => t.timelineEvents && t.timelineEvents.length > 0),
-        planner: parsedWs.todos.length > 0 || parsedWs.calendarBlocks.length > 0,
-      };
-
-      setParsedBackup({ fileName: sourceLabel, workspace: parsedWs, available });
-      setImportCats({ ...available });
-      setImportStatus(null);
-    } catch {
+    const bundle = parseBackupJsonToWorkspace(trimmed);
+    if (!bundle) {
       setParsedBackup(null);
       setImportStatus({
         ok: false,
-        msg: 'Invalid JSON syntax. To import notes, Markdown, CSV, or .docx files, click Smart Import.',
+        msg: 'Unrecognized or invalid JSON format. Use a StudyDeck / revision-site JSON backup, or use Smart Import for Word / Markdown / CSV.',
       });
+      return;
     }
+
+    const parsedWs = bundle.workspace;
+    const available: Record<BackupCategory, boolean> = {
+      subjects: bundle.counts.subjects > 0 || bundle.counts.topics > 0,
+      notes: bundle.counts.notes > 0,
+      flashcards: bundle.counts.flashcards > 0,
+      timelines: bundle.counts.timelines > 0,
+      planner: bundle.counts.planner > 0,
+    };
+
+    setParsedBackup({
+      fileName: sourceLabel,
+      formatLabel: bundle.formatLabel,
+      workspace: parsedWs,
+      available,
+      counts: bundle.counts,
+    });
+    setImportCats({ ...available });
+    setImportStatus(null);
   };
 
   const handleImportFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -488,9 +454,18 @@ export function ProfileVaultView({
     reader.readAsText(file);
   };
 
-  const handleRunImport = async () => {
+  const handleRunImport = async (importEverything = false) => {
     if (!parsedBackup) return;
-    const filtered = filterWorkspaceByCategories(parsedBackup.workspace, importCats);
+    const catsToUse = importEverything
+      ? {
+          subjects: true,
+          notes: true,
+          flashcards: true,
+          timelines: true,
+          planner: true,
+        }
+      : importCats;
+    const filtered = filterWorkspaceByCategories(parsedBackup.workspace, catsToUse);
     const hasAny =
       filtered.subjects.length > 0 ||
       filtered.topics.length > 0 ||
@@ -506,9 +481,12 @@ export function ProfileVaultView({
     setImportStatus(null);
     try {
       await onImportWorkspaceData(filtered, importMode);
+      const { counts } = parsedBackup;
       setImportStatus({
         ok: true,
-        msg: `Restored backup from ${parsedBackup.fileName} (${importMode} mode).`,
+        msg: importEverything
+          ? `Imported all ${counts.notes} notes, ${counts.flashcards} flashcards, and ${counts.timelines} timeline nodes from ${parsedBackup.fileName} (${importMode} mode).`
+          : `Restored selected sections from ${parsedBackup.fileName} (${importMode} mode).`,
       });
       setParsedBackup(null);
       setImportTextRaw('');
@@ -890,27 +868,51 @@ export function ProfileVaultView({
                   </div>
 
                   {parsedBackup && (
-                    <div className="mt-4 space-y-3">
-                      <div className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
-                        Sections found in {parsedBackup.fileName}
+                    <div className="mt-4 space-y-3 rounded-xl border border-[var(--e3)] bg-[var(--bg)] p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
+                          {parsedBackup.formatLabel} · {parsedBackup.fileName}
+                        </span>
+                        <span className="font-mono-num text-[11px] font-semibold text-[var(--mute)]">
+                          {parsedBackup.counts.notes} notes · {parsedBackup.counts.flashcards} cards ·{' '}
+                          {parsedBackup.counts.timelines} nodes
+                        </span>
                       </div>
+
                       <div className="space-y-1.5">
-                        {ALL_CATEGORIES.filter((c) => parsedBackup.available[c.id]).map((c) => (
-                          <label
-                            key={c.id}
-                            className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-xs font-semibold text-[var(--ink)]"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={importCats[c.id]}
-                              onChange={(e) =>
-                                setImportCats((prev) => ({ ...prev, [c.id]: e.target.checked }))
-                              }
-                              className="h-4 w-4 accent-[var(--e3)]"
-                            />
-                            <span>{c.label}</span>
-                          </label>
-                        ))}
+                        {ALL_CATEGORIES.filter((c) => parsedBackup.available[c.id]).map((c) => {
+                          const countLabel =
+                            c.id === 'subjects'
+                              ? `${parsedBackup.counts.subjects} subjects, ${parsedBackup.counts.topics} topics`
+                              : c.id === 'notes'
+                              ? `${parsedBackup.counts.notes} notes`
+                              : c.id === 'flashcards'
+                              ? `${parsedBackup.counts.flashcards} cards`
+                              : c.id === 'timelines'
+                              ? `${parsedBackup.counts.timelines} nodes`
+                              : `${parsedBackup.counts.planner} items`;
+                          return (
+                            <label
+                              key={c.id}
+                              className="flex cursor-pointer items-center justify-between gap-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-xs font-semibold text-[var(--ink)]"
+                            >
+                              <span className="flex items-center gap-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={importCats[c.id]}
+                                  onChange={(e) =>
+                                    setImportCats((prev) => ({ ...prev, [c.id]: e.target.checked }))
+                                  }
+                                  className="h-4 w-4 accent-[var(--e3)]"
+                                />
+                                <span>{c.label}</span>
+                              </span>
+                              <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                                {countLabel}
+                              </span>
+                            </label>
+                          );
+                        })}
                       </div>
 
                       <div className="pt-1">
@@ -937,11 +939,21 @@ export function ProfileVaultView({
                         <button
                           type="button"
                           disabled={importing}
-                          onClick={() => void handleRunImport()}
+                          onClick={() => void handleRunImport(true)}
                           className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                         >
                           <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>{importing ? 'Restoring...' : 'Apply backup'}</span>
+                          <span>
+                            {importing ? 'Importing…' : 'Import All Notes, Flashcards & Timeline'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={importing}
+                          onClick={() => void handleRunImport(false)}
+                          className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
+                        >
+                          <span>Apply Selected Only</span>
                         </button>
                         <button
                           type="button"

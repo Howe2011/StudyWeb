@@ -25,6 +25,7 @@ import {
   incrementSharedCopyCount,
   lookupSharedItemByCode,
 } from '../lib/communityService';
+import { groupSectionPoints } from '../lib/noteFormat';
 import {
   SharedItemType,
   SharedStudyItem,
@@ -109,11 +110,61 @@ function StructuredNoteReader({
               {sec.heading || 'Key Points'}
             </h3>
             {sec.points.length > 0 && (
-              <ul className="mt-2 list-disc space-y-1.5 pl-5 text-[13px] text-[var(--ink)]">
-                {sec.points.map((pt, i) => (
-                  <li key={i}>{renderInlineBold(pt)}</li>
-                ))}
-              </ul>
+              <div className="mt-2.5 space-y-2 text-[13px] text-[var(--ink)]">
+                {groupSectionPoints(sec.points).map((blk, i) => {
+                  if (blk.kind === 'subheading') {
+                    return (
+                      <h4 key={i} className="pt-1.5 text-xs font-bold uppercase tracking-wide text-[var(--e3)]">
+                        {renderInlineBold(blk.text)}
+                      </h4>
+                    );
+                  }
+                  if (blk.kind === 'table') {
+                    return (
+                      <div key={i} className="my-1.5 overflow-x-auto rounded-lg border border-[var(--line)]">
+                        <table className="w-full border-collapse text-left text-xs">
+                          <thead className="border-b border-[var(--line)] bg-[var(--card)]">
+                            <tr>
+                              {blk.headers.map((h, hi) => (
+                                <th key={hi} className="px-3 py-2 font-bold text-[var(--ink)]">
+                                  {renderInlineBold(h)}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[var(--line)]">
+                            {blk.rows.map((row, ri) => (
+                              <tr key={ri}>
+                                {row.map((cell, ci) => (
+                                  <td key={ci} className="px-3 py-1.5 align-top text-[var(--ink)]">
+                                    {renderInlineBold(cell)}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  }
+                  if (blk.kind === 'paragraph') {
+                    return (
+                      <p key={i} className="whitespace-pre-line leading-relaxed">
+                        {renderInlineBold(blk.text)}
+                      </p>
+                    );
+                  }
+                  return (
+                    <div key={i} className="flex items-start gap-2 pl-1">
+                      <span
+                        className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ink)]"
+                        aria-hidden="true"
+                      />
+                      <span>{renderInlineBold(blk.text)}</span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         );

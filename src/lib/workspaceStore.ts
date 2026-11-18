@@ -245,12 +245,55 @@ export function clearWorkspaceLocal(uid?: string | null): void {
   }
 }
 
-const LEGACY_SUBJECT_LABELS: Record<string, { name: string; color: string; hasTimeline?: boolean }> = {
+const LEGACY_SUBJECT_LABELS: Record<
+  string,
+  { name: string; color: string; hasTimeline?: boolean; topicTitle?: string }
+> = {
   h: { name: 'History', color: '#A8750C', hasTimeline: true },
   g: { name: 'Geography', color: '#4D6B2A' },
-  weimar: { name: 'History', color: '#A8750C', hasTimeline: true },
-  geo1: { name: 'Geography', color: '#4D6B2A' },
-  geo2: { name: 'Geography', color: '#4D6B2A' },
+  weimar: { name: 'History', color: '#A8750C', hasTimeline: true, topicTitle: 'Weimar & Nazi Germany (1918–1939)' },
+  germany: { name: 'History', color: '#A8750C', hasTimeline: true, topicTitle: 'Weimar & Nazi Germany (1918–1939)' },
+  usa: { name: 'History', color: '#A8750C', hasTimeline: true, topicTitle: 'USA 1919–1941' },
+  mideast: { name: 'History', color: '#A8750C', hasTimeline: true, topicTitle: 'Middle East Conflict' },
+  mideast2: { name: 'History', color: '#A8750C', hasTimeline: true, topicTitle: 'Middle East (1956–2005)' },
+  geo1: { name: 'Geography', color: '#4D6B2A', topicTitle: '1. Rivers & Drainage Basins' },
+  geo2: { name: 'Geography', color: '#4D6B2A', topicTitle: '2. Coasts & Marine Ecosystems' },
+  geo4: { name: 'Geography', color: '#4D6B2A', topicTitle: '4. Tectonic Hazards' },
+  geo6: { name: 'Geography', color: '#4D6B2A', topicTitle: '6. Population & Migration' },
+  geo7: { name: 'Geography', color: '#4D6B2A', topicTitle: '7. Urbanisation & Cities' },
+  geo8: { name: 'Geography', color: '#4D6B2A', topicTitle: '8. Development & Aid' },
+};
+
+const LEGACY_SECTION_ROUTE: Record<
+  string,
+  { subject: string; topicKey: string; sectionLabel: string }
+> = {
+  boom: { subject: 'History', topicKey: 'usa', sectionLabel: 'USA 1920s Boom' },
+  intol: { subject: 'History', topicKey: 'usa', sectionLabel: 'USA Intolerance & KKK' },
+  proh: { subject: 'History', topicKey: 'usa', sectionLabel: 'Prohibition & Gangsters' },
+  crash: { subject: 'History', topicKey: 'usa', sectionLabel: 'Wall Street Crash' },
+  newdeal: { subject: 'History', topicKey: 'usa', sectionLabel: 'New Deal' },
+  opp: { subject: 'History', topicKey: 'usa', sectionLabel: 'Opposition to New Deal' },
+  limits: { subject: 'History', topicKey: 'usa', sectionLabel: 'Limits of New Deal' },
+  g1: { subject: 'History', topicKey: 'germany', sectionLabel: 'Weimar Republic 1918–23' },
+  g2: { subject: 'History', topicKey: 'germany', sectionLabel: 'Stresemann Era 1924–29' },
+  g3: { subject: 'History', topicKey: 'germany', sectionLabel: 'Rise of the Nazis' },
+  g4: { subject: 'History', topicKey: 'germany', sectionLabel: 'Hitler Consolidates Power' },
+  g5: { subject: 'History', topicKey: 'germany', sectionLabel: 'Police State & Control' },
+  g6: { subject: 'History', topicKey: 'germany', sectionLabel: 'Nazi Economy & Life' },
+  e1: { subject: 'History', topicKey: 'mideast', sectionLabel: 'Palestine & 1948 War' },
+  e2: { subject: 'History', topicKey: 'mideast', sectionLabel: 'Creation of Israel' },
+  e3: { subject: 'History', topicKey: 'mideast', sectionLabel: 'Arab-Israeli Conflicts' },
+  geo1a: { subject: 'Geography', topicKey: 'geo1', sectionLabel: 'Belgian Floods 2021' },
+  geo1b: { subject: 'Geography', topicKey: 'geo1', sectionLabel: 'Three Gorges Dam' },
+  geo2a: { subject: 'Geography', topicKey: 'geo2', sectionLabel: 'Mappleton Coast' },
+  geo2b: { subject: 'Geography', topicKey: 'geo2', sectionLabel: 'Gardens of the Queen' },
+  geo4a: { subject: 'Geography', topicKey: 'geo4', sectionLabel: 'Sulawesi Earthquake 2018' },
+  geo4b: { subject: 'Geography', topicKey: 'geo4', sectionLabel: 'Grindavík Eruption 2023–25' },
+  geo6a: { subject: 'Geography', topicKey: 'geo6', sectionLabel: 'Japan Ageing Population' },
+  geo6b: { subject: 'Geography', topicKey: 'geo6', sectionLabel: 'Morocco–Spain Migration' },
+  geo7a: { subject: 'Geography', topicKey: 'geo7', sectionLabel: 'Nairobi Urban Growth' },
+  geo8a: { subject: 'Geography', topicKey: 'geo8', sectionLabel: 'Honduras Development' },
 };
 
 function findOrAddSubject(
@@ -277,7 +320,7 @@ function findOrAddSubject(
     color: opts?.color || catMatch?.color || '#2F5F8A',
     examDate: opts?.examDate || '',
     weight: opts?.weight || 2,
-    hasTimeline: opts?.hasTimeline ?? catMatch?.hasTimeline ?? false,
+    hasTimeline: opts?.hasTimeline ?? catMatch?.hasTimeline ?? /\bhistory\b/i.test(cleanName),
     createdAt: new Date().toISOString(),
   };
   ws.subjects.push(subj);
@@ -319,6 +362,26 @@ export function convertLegacyEntriesToWorkspace(
   const ws = seedWorkspace ? normalizeWorkspace(seedWorkspace) : createEmptyWorkspace();
   let hadLegacyData = false;
   const topicAliasMap = new Map<string, { subjectId: string; topicId: string }>();
+
+  const resolveLegacyTopicLink = (tid: string): { subjectId: string; topicId: string } => {
+    const existingLink = topicAliasMap.get(tid);
+    if (existingLink) return existingLink;
+    const lower = tid.toLowerCase();
+    const directMeta = LEGACY_SUBJECT_LABELS[lower];
+    const prefixMeta =
+      directMeta ||
+      (lower.startsWith('geo')
+        ? LEGACY_SUBJECT_LABELS.g
+        : /^(germany|weim|hist|usa|mideast)/.test(lower)
+        ? LEGACY_SUBJECT_LABELS.h
+        : undefined);
+    const subj = findOrAddSubject(ws, prefixMeta?.name || 'Study Notes', prefixMeta);
+    const topicTitle = directMeta?.topicTitle || tid;
+    const topic = findOrAddTopic(ws, subj.id, topicTitle);
+    const link = { subjectId: subj.id, topicId: topic.id };
+    topicAliasMap.set(tid, link);
+    return link;
+  };
 
   // 1. Parse planner ('mockplanner.v1')
   const rawPlanner = planner['mockplanner.v1'];
@@ -512,7 +575,7 @@ export function convertLegacyEntriesToWorkspace(
     }
   }
 
-  // 3. Parse legacy gdoc-* notes & edits-* timelines
+  // 3. Parse legacy gdoc-* notes, gn-* custom topic notes & edits-* timelines
   for (const [k, v] of Object.entries(revision)) {
     if (!v) continue;
     if (/^gdoc-/.test(k) && !/-cfg$/.test(k)) {
@@ -520,47 +583,80 @@ export function convertLegacyEntriesToWorkspace(
       const stripped = v.replace(/<[^>]+>/g, '').trim();
       if (!stripped) continue;
       hadLegacyData = true;
-      let link = topicAliasMap.get(tid);
-      if (!link) {
-        const prefixMeta = LEGACY_SUBJECT_LABELS[tid] ||
-          (tid.startsWith('geo') ? LEGACY_SUBJECT_LABELS.g : tid.startsWith('weim') || tid.startsWith('hist') ? LEGACY_SUBJECT_LABELS.h : undefined);
-        const subj = findOrAddSubject(ws, prefixMeta?.name || 'Study Notes', prefixMeta);
-        const topic = findOrAddTopic(ws, subj.id, tid);
-        link = { subjectId: subj.id, topicId: topic.id };
-        topicAliasMap.set(tid, link);
-      }
-      const targetTopic = ws.topics.find((t) => t.id === link!.topicId);
+      const link = resolveLegacyTopicLink(tid);
+      const targetTopic = ws.topics.find((t) => t.id === link.topicId);
       if (targetTopic) {
         targetTopic.notes = legacyHtmlToStructuredNote(v);
       }
+    } else if (/^gn-/.test(k) && v.trim()) {
+      const topicTitle = k.replace(/^gn-/, '').trim();
+      const stripped = v.replace(/<[^>]+>/g, '').trim();
+      if (!stripped) continue;
+      hadLegacyData = true;
+      const geoSubj = findOrAddSubject(ws, 'Geography', LEGACY_SUBJECT_LABELS.g);
+      const targetTopic = findOrAddTopic(ws, geoSubj.id, topicTitle);
+      targetTopic.notes = /<[a-z][\s\S]*>/i.test(v)
+        ? legacyHtmlToStructuredNote(v)
+        : createEmptyStructuredNote(stripped);
     } else if (/^edits-/.test(k)) {
       const tid = k.replace(/^edits-/, '');
       try {
         const ed = JSON.parse(v) as {
-          add?: Array<{ d?: string; t?: string; x?: string; era?: string }>;
+          mod?: Record<
+            string,
+            { d?: string; e?: string; t?: string; x?: string; w?: string; era?: string }
+          >;
+          add?: Array<{ d?: string; e?: string; t?: string; x?: string; w?: string; era?: string }>;
+          ne?: Array<{ d?: string; e?: string; t?: string; x?: string; w?: string; era?: string }>;
         };
-        if (Array.isArray(ed.add) && ed.add.length > 0) {
-          hadLegacyData = true;
-          let link = topicAliasMap.get(tid);
-          if (!link) {
-            const subj = findOrAddSubject(ws, 'History', { color: '#A8750C', hasTimeline: true });
-            const topic = findOrAddTopic(ws, subj.id, tid);
-            link = { subjectId: subj.id, topicId: topic.id };
-            topicAliasMap.set(tid, link);
+        const rawEvents: Array<{
+          d?: string;
+          e?: string;
+          t?: string;
+          x?: string;
+          w?: string;
+          era?: string;
+        }> = [];
+        if (ed.mod && typeof ed.mod === 'object') {
+          for (const [evKey, evVal] of Object.entries(ed.mod)) {
+            if (evVal && typeof evVal === 'object') {
+              rawEvents.push({ ...evVal, e: evVal.e || evVal.t || evKey });
+            }
           }
-          const targetTopic = ws.topics.find((t) => t.id === link!.topicId);
+        }
+        if (Array.isArray(ed.add)) rawEvents.push(...ed.add);
+        if (Array.isArray(ed.ne)) rawEvents.push(...ed.ne);
+
+        if (rawEvents.length > 0) {
+          hadLegacyData = true;
+          const link = resolveLegacyTopicLink(tid);
+          const parentSubj = ws.subjects.find((s) => s.id === link.subjectId);
+          if (parentSubj) parentSubj.hasTimeline = true;
+          const targetTopic = ws.topics.find((t) => t.id === link.topicId);
           if (targetTopic) {
-            const existing = targetTopic.timelineEvents || [];
-            const converted: TimelineEventItem[] = ed.add
-              .filter((ev) => ev.t || ev.x)
-              .map((ev) => ({
+            const existing = [...(targetTopic.timelineEvents || [])];
+            const existingKeys = new Set(
+              existing.map((ev) => `${ev.date.toLowerCase()}::${ev.title.toLowerCase()}`)
+            );
+            for (const ev of rawEvents) {
+              const title = String(ev.e || ev.t || '').trim();
+              const date = String(ev.d || '').trim();
+              if (!title && !ev.x) continue;
+              const dedupKey = `${date.toLowerCase()}::${title.toLowerCase()}`;
+              if (existingKeys.has(dedupKey)) continue;
+              existingKeys.add(dedupKey);
+              const detailParts = [String(ev.x || '').trim(), String(ev.w || '').trim()].filter(
+                Boolean
+              );
+              existing.push({
                 id: makeId('tl'),
-                date: String(ev.d || ''),
-                title: String(ev.t || ''),
-                detail: String(ev.x || ''),
-                era: ev.era,
-              }));
-            targetTopic.timelineEvents = [...existing, ...converted];
+                date,
+                title: title || 'Historical Event',
+                detail: detailParts.join(' — '),
+                era: ev.era?.trim() || undefined,
+              });
+            }
+            targetTopic.timelineEvents = existing;
           }
         }
       } catch {
@@ -569,45 +665,96 @@ export function convertLegacyEntriesToWorkspace(
     }
   }
 
-  // 4. Parse legacy fc-state flashcards
+  // 4. Parse legacy fc-state flashcards (both `add` custom cards AND `mod` edited cards + `prog`)
   const rawFc = revision['fc-state'];
   if (rawFc) {
     try {
       const fc = JSON.parse(rawFc) as {
         secs?: Array<{ id?: string; n?: string; topic?: string }>;
+        mod?: Record<string, { q?: string; a?: string; s?: string }>;
         add?: Array<{ id?: string; q?: string; a?: string; s?: string }>;
-        prog?: Record<string, { b?: number; d?: number }>;
+        prog?: Record<string, { b?: number; n?: number; d?: number; st?: boolean }>;
         fl?: Record<string, boolean>;
       };
       const secMetaMap = new Map((fc.secs || []).map((s) => [s.id || '', s]));
-      if (Array.isArray(fc.add) && fc.add.length > 0) {
+      const entries: Array<{ id?: string; q?: string; a?: string; s?: string }> = [];
+
+      if (fc.mod && typeof fc.mod === 'object') {
+        for (const [cid, cObj] of Object.entries(fc.mod)) {
+          if (cObj && cObj.q && cObj.a) {
+            entries.push({ id: cid, q: cObj.q, a: cObj.a, s: cObj.s });
+          }
+        }
+      }
+      if (Array.isArray(fc.add)) {
+        entries.push(...fc.add);
+      }
+
+      if (entries.length > 0) {
         hadLegacyData = true;
-        fc.add.forEach((c) => {
+        entries.forEach((c) => {
           if (!c.q || !c.a) return;
           const dup = ws.flashcards.some(
-            (existing) => existing.q.trim() === c.q!.trim() && existing.a.trim() === c.a!.trim()
+            (existing) =>
+              existing.q.trim().toLowerCase() === c.q!.trim().toLowerCase() &&
+              existing.a.trim().toLowerCase() === c.a!.trim().toLowerCase()
           );
           if (dup) return;
-          const secMeta = secMetaMap.get(c.s || '');
-          const tLink = secMeta?.topic ? topicAliasMap.get(secMeta.topic) : undefined;
-          const fallbackSubj = ws.subjects[0] || findOrAddSubject(ws, 'Imported Flashcards');
-          const subjectId = tLink?.subjectId || fallbackSubj.id;
-          const fallbackTopic =
-            ws.topics.find((t) => t.subjectId === subjectId) ||
-            findOrAddTopic(ws, subjectId, 'Core Topic');
-          const topicId = tLink?.topicId || fallbackTopic.id;
+
+          const secKey = (c.s || '').trim();
+          const secMeta = secMetaMap.get(secKey);
+          const builtinRoute = LEGACY_SECTION_ROUTE[secKey.toLowerCase()];
+
+          let subjectId = '';
+          let topicId = '';
+          let sectionName = secMeta?.n || builtinRoute?.sectionLabel || 'Core Deck';
+
+          if (secMeta?.topic && topicAliasMap.has(secMeta.topic)) {
+            const link = topicAliasMap.get(secMeta.topic)!;
+            subjectId = link.subjectId;
+            topicId = link.topicId;
+          } else if (builtinRoute) {
+            const subj = findOrAddSubject(
+              ws,
+              builtinRoute.subject,
+              builtinRoute.subject === 'History'
+                ? LEGACY_SUBJECT_LABELS.h
+                : LEGACY_SUBJECT_LABELS.g
+            );
+            const tMeta = LEGACY_SUBJECT_LABELS[builtinRoute.topicKey];
+            const topic = findOrAddTopic(
+              ws,
+              subj.id,
+              tMeta?.topicTitle || builtinRoute.sectionLabel
+            );
+            subjectId = subj.id;
+            topicId = topic.id;
+            topicAliasMap.set(builtinRoute.topicKey, { subjectId, topicId });
+          } else {
+            const prefixSubj = /^geo/i.test(secKey)
+              ? findOrAddSubject(ws, 'Geography', LEGACY_SUBJECT_LABELS.g)
+              : ws.subjects[0] || findOrAddSubject(ws, 'Imported Flashcards');
+            const fallbackTopic =
+              ws.topics.find((t) => t.subjectId === prefixSubj.id) ||
+              findOrAddTopic(ws, prefixSubj.id, sectionName || 'Core Topic');
+            subjectId = prefixSubj.id;
+            topicId = fallbackTopic.id;
+          }
+
           const p = c.id ? fc.prog?.[c.id] : undefined;
           const box = p?.b && p.b >= 1 && p.b <= 5 ? (p.b as 1 | 2 | 3 | 4 | 5) : 1;
+          const dueTs = p?.n ?? p?.d;
+
           ws.flashcards.push({
             id: makeId('fc'),
             subjectId,
             topicId,
-            sectionName: secMeta?.n || 'Core Deck',
+            sectionName,
             q: c.q.trim(),
             a: c.a.trim(),
             box,
-            dueAt: p?.d ? Number(p.d) : Date.now(),
-            flagged: Boolean(c.id && fc.fl?.[c.id]),
+            dueAt: dueTs ? Number(dueTs) : Date.now(),
+            flagged: Boolean(p?.st || (c.id && fc.fl?.[c.id])),
             createdAt: new Date().toISOString(),
           });
         });
@@ -638,7 +785,7 @@ export function migrateLegacyBrowserStorage(): {
       if (!val) continue;
       if (k === 'mockplanner.v1') {
         planner[k] = val;
-      } else if (/^(fc-state|user-subjects|gdoc-|edits-)/.test(k)) {
+      } else if (/^(fc-state|user-subjects|gdoc-|edits-|gn-)/.test(k)) {
         revision[k] = val;
       }
     }
@@ -668,7 +815,7 @@ export function detectHasGuestWorkspaceData(): boolean {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k) continue;
-      if (k === 'mockplanner.v1' || /^(edits-|gdoc-|fc-state|user-subjects)/.test(k)) {
+      if (k === 'mockplanner.v1' || /^(edits-|gdoc-|fc-state|user-subjects|gn-)/.test(k)) {
         return true;
       }
     }
@@ -704,6 +851,13 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
     if (match) {
       topicIdRemap.set(t.id, match.id);
       if (!match.notes.summary && t.notes.summary) match.notes.summary = t.notes.summary;
+      if (!match.notes.workedExample && t.notes.workedExample) {
+        match.notes.workedExample = t.notes.workedExample;
+      }
+      if (!match.notes.examTip && t.notes.examTip) match.notes.examTip = t.notes.examTip;
+      if (!match.notes.legacyHtml && t.notes.legacyHtml) {
+        match.notes.legacyHtml = t.notes.legacyHtml;
+      }
       if (t.notes.sections.some((sec) => sec.points.length > 0)) {
         const existingHeadings = new Set(match.notes.sections.map((sec) => sec.heading.toLowerCase()));
         for (const sec of t.notes.sections) {
@@ -719,6 +873,20 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
             match.notes.keyTerms.push({ ...kt, id: makeNoteId('term') });
           }
         }
+      }
+      if (t.timelineEvents && t.timelineEvents.length > 0) {
+        const curEvs = [...(match.timelineEvents || [])];
+        const existingEvKeys = new Set(
+          curEvs.map((ev) => `${ev.date.trim().toLowerCase()}::${ev.title.trim().toLowerCase()}`)
+        );
+        for (const ev of t.timelineEvents) {
+          const key = `${ev.date.trim().toLowerCase()}::${ev.title.trim().toLowerCase()}`;
+          if (!existingEvKeys.has(key)) {
+            existingEvKeys.add(key);
+            curEvs.push({ ...ev, id: makeId('tl') });
+          }
+        }
+        match.timelineEvents = curEvs;
       }
     } else {
       const cloned: StudyTopic = { ...t, subjectId: mappedSubjId };

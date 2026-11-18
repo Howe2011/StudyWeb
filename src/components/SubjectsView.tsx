@@ -1,10 +1,9 @@
 import { FormEvent, useMemo, useState } from 'react';
 import {
+  ArrowLeft,
   BookOpen,
   Calendar,
   Check,
-  ChevronDown,
-  ChevronUp,
   Edit3,
   Layers,
   ListChecks,
@@ -23,7 +22,6 @@ import {
 } from '../lib/subjectCatalog';
 import { makeId } from '../lib/workspaceStore';
 import {
-  StudyFlashcard,
   StudySubject,
   StudyTopic,
   WorkspaceData,
@@ -57,6 +55,10 @@ function getTopicConfidence(t: StudyTopic): 0 | 1 | 2 | 3 {
   return t.completed ? 3 : 0;
 }
 
+function isHistoryName(name: string): boolean {
+  return /\bhistory\b/i.test(name.trim());
+}
+
 export function SubjectsView({
   workspace,
   initialQuickAddOpen = false,
@@ -82,7 +84,6 @@ export function SubjectsView({
   const [customExamDate, setCustomExamDate] = useState('');
   const [customWeight, setCustomWeight] = useState<1 | 2 | 3>(2);
   const [customColor, setCustomColor] = useState<string>(SUBJECT_COLOR_SWATCHES[0]);
-  const [customHasTimeline, setCustomHasTimeline] = useState(false);
   const [customTopicsRaw, setCustomTopicsRaw] = useState('');
 
   // Inline edit state
@@ -90,8 +91,8 @@ export function SubjectsView({
   const [editForm, setEditForm] = useState<Partial<StudySubject>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // Topics & Subtopics drawer state
-  const [expandedTopicsSubjId, setExpandedTopicsSubjId] = useState<string | null>(null);
+  // Separate Topics sub-page state
+  const [activeTopicsSubjId, setActiveTopicsSubjId] = useState<string | null>(null);
   const [topicFilterConf, setTopicFilterConf] = useState<'all' | 0 | 1 | 2 | 3>('all');
   const [topicSearch, setTopicSearch] = useState('');
   const [newSubtopicName, setNewSubtopicName] = useState('');
@@ -118,6 +119,14 @@ export function SubjectsView({
       );
     });
   }, [categoryFilter, catalogSearch]);
+
+  const activeTopicsSubject = useMemo(
+    () =>
+      activeTopicsSubjId
+        ? workspace.subjects.find((s) => s.id === activeTopicsSubjId) || null
+        : null,
+    [workspace.subjects, activeTopicsSubjId]
+  );
 
   const openTemplatePicker = (tpl: CatalogSubjectTemplate) => {
     setSelectedTemplate(tpl);
@@ -148,20 +157,18 @@ export function SubjectsView({
               color: tpl.color,
               examDate: quickExamDate,
               weight: 2 as const,
-              hasTimeline: Boolean(tpl.hasTimeline),
+              hasTimeline: isHistoryName(tpl.name),
               createdAt: new Date().toISOString(),
             },
           ];
 
       const newTopics: StudyTopic[] = [];
-      const newCards: StudyFlashcard[] = [];
       const existingTopicNames = new Set(
         prev.topics.filter((t) => t.subjectId === subjId).map((t) => t.name.toLowerCase())
       );
 
       for (const ct of chosenTopics) {
         if (existingTopicNames.has(ct.name.toLowerCase())) continue;
-        const topicId = makeId('top');
         const note = createEmptyStructuredNote(ct.summary || '');
         if (ct.keyTerms && ct.keyTerms.length > 0) {
           note.keyTerms = ct.keyTerms.map((kt) => ({
@@ -169,24 +176,10 @@ export function SubjectsView({
             term: kt.term,
             definition: kt.definition,
           }));
-          ct.keyTerms.forEach((kt) => {
-            newCards.push({
-              id: makeId('fc'),
-              subjectId: subjId,
-              topicId,
-              sectionName: ct.name,
-              q: kt.term,
-              a: kt.definition,
-              box: 1,
-              dueAt: Date.now(),
-              flagged: false,
-              createdAt: new Date().toISOString(),
-            });
-          });
         }
 
         newTopics.push({
-          id: topicId,
+          id: makeId('top'),
           subjectId: subjId,
           name: ct.name,
           specCode: ct.specCode,
@@ -200,7 +193,6 @@ export function SubjectsView({
         ...prev,
         subjects: nextSubjects,
         topics: [...prev.topics, ...newTopics],
-        flashcards: [...prev.flashcards, ...newCards],
         updatedAt: new Date().toISOString(),
       };
     });
@@ -221,13 +213,11 @@ export function SubjectsView({
         color: tpl.color,
         examDate: '',
         weight: 2,
-        hasTimeline: Boolean(tpl.hasTimeline),
+        hasTimeline: isHistoryName(tpl.name),
         createdAt: new Date().toISOString(),
       };
       const newTopics: StudyTopic[] = [];
-      const newCards: StudyFlashcard[] = [];
       for (const ct of tpl.topics) {
-        const topicId = makeId('top');
         const note = createEmptyStructuredNote(ct.summary || '');
         if (ct.keyTerms && ct.keyTerms.length > 0) {
           note.keyTerms = ct.keyTerms.map((kt) => ({
@@ -235,23 +225,9 @@ export function SubjectsView({
             term: kt.term,
             definition: kt.definition,
           }));
-          ct.keyTerms.forEach((kt) => {
-            newCards.push({
-              id: makeId('fc'),
-              subjectId: subjId,
-              topicId,
-              sectionName: ct.name,
-              q: kt.term,
-              a: kt.definition,
-              box: 1,
-              dueAt: Date.now(),
-              flagged: false,
-              createdAt: new Date().toISOString(),
-            });
-          });
         }
         newTopics.push({
-          id: topicId,
+          id: makeId('top'),
           subjectId: subjId,
           name: ct.name,
           specCode: ct.specCode,
@@ -264,7 +240,6 @@ export function SubjectsView({
         ...prev,
         subjects: [...prev.subjects, subj],
         topics: [...prev.topics, ...newTopics],
-        flashcards: [...prev.flashcards, ...newCards],
         updatedAt: new Date().toISOString(),
       };
     });
@@ -289,7 +264,7 @@ export function SubjectsView({
         color: customColor,
         examDate: customExamDate,
         weight: customWeight,
-        hasTimeline: customHasTimeline,
+        hasTimeline: isHistoryName(cleanName),
         createdAt: new Date().toISOString(),
       };
       const topics: StudyTopic[] = (topicNames.length ? topicNames : ['Core Notes']).map((tName) => ({
@@ -327,7 +302,7 @@ export function SubjectsView({
               targetGrade: (editForm.targetGrade ?? s.targetGrade ?? '').trim(),
               weight: (editForm.weight as 1 | 2 | 3) || s.weight,
               color: editForm.color || s.color,
-              hasTimeline: editForm.hasTimeline ?? s.hasTimeline,
+              hasTimeline: isHistoryName(editForm.name || s.name),
             }
           : s
       ),
@@ -349,7 +324,7 @@ export function SubjectsView({
       updatedAt: new Date().toISOString(),
     }));
     setConfirmDeleteId(null);
-    if (expandedTopicsSubjId === subjId) setExpandedTopicsSubjId(null);
+    if (activeTopicsSubjId === subjId) setActiveTopicsSubjId(null);
   };
 
   const handleSetTopicConfidence = (topicId: string, confidence: 0 | 1 | 2 | 3) => {
@@ -453,6 +428,435 @@ export function SubjectsView({
     }));
   };
 
+  // =========================================================================
+  // DEDICATED SEPARATE TOPICS PAGE (when user clicks "Topics" on a subject)
+  // =========================================================================
+  if (activeTopicsSubject) {
+    const subj = activeTopicsSubject;
+    const topics = workspace.topics.filter((t) => t.subjectId === subj.id);
+    const cards = workspace.flashcards.filter((c) => c.subjectId === subj.id);
+    const confCounts = [0, 0, 0, 0];
+    let confSum = 0;
+    topics.forEach((t) => {
+      const c = getTopicConfidence(t);
+      confCounts[c] += 1;
+      confSum += c;
+    });
+    const readinessPct = topics.length > 0 ? Math.round((confSum / (topics.length * 3)) * 100) : 0;
+    const topicTotal = Math.max(1, topics.length);
+
+    const visibleTopics = topics.filter((t) => {
+      const c = getTopicConfidence(t);
+      if (topicFilterConf !== 'all' && c !== topicFilterConf) return false;
+      if (topicSearch.trim()) {
+        const q = topicSearch.trim().toLowerCase();
+        return (
+          t.name.toLowerCase().includes(q) ||
+          (t.specCode || '').toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
+    return (
+      <div className="h-full overflow-y-auto bg-[var(--bg)]">
+        <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
+          {/* Top Back Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setActiveTopicsSubjId(null)}
+              className="sd-btn px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap shrink-0"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>All Subjects</span>
+            </button>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onOpenSubjectNotes(subj.id)}
+                className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap shrink-0"
+              >
+                <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Open Study Notes</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenSubjectCards(subj.id)}
+                className="sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap shrink-0"
+              >
+                <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Flashcards ({cards.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onShareSubject(subj.id)}
+                className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0"
+              >
+                <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Share</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Subject Overview Header Card */}
+          <section className="sd-card space-y-4 p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="h-4 w-4 shrink-0 rounded-full"
+                    style={{ backgroundColor: subj.color }}
+                    aria-hidden="true"
+                  />
+                  <h1 className="font-display text-2xl font-extrabold text-[var(--ink)] sm:text-3xl">
+                    {subj.name} Topics
+                  </h1>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
+                  <span>{subj.examBoard || 'Revision'}</span>
+                  {subj.targetGrade && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>Target {subj.targetGrade}</span>
+                    </>
+                  )}
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono-num">
+                    {topics.length} topic{topics.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-xs font-semibold text-[var(--mute)]">
+                  <span>Exam date</span>
+                  <input
+                    type="date"
+                    value={subj.examDate || ''}
+                    onChange={(e) =>
+                      onUpdateWorkspace((prev) => ({
+                        ...prev,
+                        subjects: prev.subjects.map((s) =>
+                          s.id === subj.id ? { ...s, examDate: e.target.value } : s
+                        ),
+                        updatedAt: new Date().toISOString(),
+                      }))
+                    }
+                    className="sd-input w-auto py-1 text-xs"
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Confidence Summary Strip */}
+            <div className="space-y-2 border-t border-[var(--line)] pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="font-mono-num flex flex-wrap items-center gap-3 font-semibold">
+                  <span className="text-[var(--ink)]">{readinessPct}% readiness</span>
+                  <span className="text-[var(--ok)]">{confCounts[3]} Mastered</span>
+                  <span className="text-[var(--e2)]">{confCounts[2]} Alright</span>
+                  <span className="text-[var(--bad)]">{confCounts[1]} Weak</span>
+                  <span className="text-[var(--mute)]">{confCounts[0]} Unstarted</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBulkTopicsOpen((v) => !v)}
+                  className="sd-btn px-3 py-1 text-xs whitespace-nowrap shrink-0"
+                >
+                  {bulkTopicsOpen ? 'Hide Bulk Paste' : '+ Bulk Paste Topics'}
+                </button>
+              </div>
+
+              {topics.length > 0 && (
+                <div className="flex h-2 w-full overflow-hidden rounded-full bg-[var(--line)]">
+                  <div
+                    style={{
+                      width: `${(confCounts[3] / topicTotal) * 100}%`,
+                      backgroundColor: 'var(--ok)',
+                    }}
+                    title={`${confCounts[3]} Mastered`}
+                  />
+                  <div
+                    style={{
+                      width: `${(confCounts[2] / topicTotal) * 100}%`,
+                      backgroundColor: 'var(--e2)',
+                    }}
+                    title={`${confCounts[2]} Kinda alright`}
+                  />
+                  <div
+                    style={{
+                      width: `${(confCounts[1] / topicTotal) * 100}%`,
+                      backgroundColor: 'var(--bad)',
+                    }}
+                    title={`${confCounts[1]} Weak`}
+                  />
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Add Topic & Filters Card */}
+          <section className="sd-card space-y-4 p-5">
+            <form
+              onSubmit={(e) => handleAddSubtopic(e, subj.id)}
+              className="flex flex-wrap gap-2"
+            >
+              <input
+                type="text"
+                value={newSubtopicSpec}
+                onChange={(e) => setNewSubtopicSpec(e.target.value)}
+                placeholder="Spec (e.g. 1.2)"
+                className="sd-input w-28 py-2 text-xs"
+              />
+              <input
+                type="text"
+                value={newSubtopicName}
+                onChange={(e) => setNewSubtopicName(e.target.value)}
+                placeholder={`Add a new topic to ${subj.name}…`}
+                className="sd-input min-w-0 flex-1 py-2 text-sm"
+              />
+              <button
+                type="submit"
+                className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Add Topic</span>
+              </button>
+            </form>
+
+            {bulkTopicsOpen && (
+              <form
+                onSubmit={(e) => handleBulkAddSubtopics(e, subj.id)}
+                className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4"
+              >
+                <label className="block text-xs font-semibold text-[var(--mute)]">
+                  Paste topics (one per line · optionally separate summary with |)
+                  <textarea
+                    rows={4}
+                    value={bulkTopicsText}
+                    onChange={(e) => setBulkTopicsText(e.target.value)}
+                    placeholder={
+                      'Cell Structure | Eukaryotes vs prokaryotes\nTransport in Cells | Diffusion, osmosis and active transport'
+                    }
+                    className="sd-input mt-1.5 text-xs"
+                  />
+                </label>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBulkTopicsOpen(false)}
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap">
+                    Add All Topics
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-4">
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    ['all', `All (${topics.length})`],
+                    [0, `Unstarted (${confCounts[0]})`],
+                    [1, `Weak (${confCounts[1]})`],
+                    [2, `Alright (${confCounts[2]})`],
+                    [3, `Mastered (${confCounts[3]})`],
+                  ] as const
+                ).map(([val, label]) => (
+                  <button
+                    key={String(val)}
+                    type="button"
+                    onClick={() => setTopicFilterConf(val)}
+                    className={`cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
+                      topicFilterConf === val
+                        ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)]'
+                        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {topics.length > 3 && (
+                <div className="relative w-full sm:w-56">
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                    aria-hidden="true"
+                  />
+                  <input
+                    type="text"
+                    value={topicSearch}
+                    onChange={(e) => setTopicSearch(e.target.value)}
+                    placeholder="Filter topics…"
+                    className="sd-input py-1.5 pl-8 text-xs"
+                  />
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Topics List */}
+          {visibleTopics.length === 0 ? (
+            <div className="sd-card p-8 text-center text-sm text-[var(--mute)]">
+              {topics.length === 0
+                ? `No topics in ${subj.name} yet. Add your first syllabus topic above.`
+                : 'No topics match your current filter.'}
+            </div>
+          ) : (
+            <div className="sd-card divide-y divide-[var(--line)] overflow-hidden">
+              {visibleTopics.map((tp) => {
+                const conf = getTopicConfidence(tp);
+                const topicCardsCount = cards.filter((c) => c.topicId === tp.id).length;
+                const isEditingThisTopic = editingTopicId === tp.id;
+
+                return (
+                  <div
+                    key={tp.id}
+                    className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm transition-colors hover:bg-[var(--bg)]/60 sm:px-5"
+                  >
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSetTopicConfidence(
+                            tp.id,
+                            ((conf + 1) % 4) as 0 | 1 | 2 | 3
+                          )
+                        }
+                        title={`Status: ${CONFIDENCE_META[conf].label} (click to cycle)`}
+                        aria-label={`Cycle confidence for ${tp.name}`}
+                        className="h-4 w-4 shrink-0 cursor-pointer rounded-full border border-[var(--line)] transition-transform hover:scale-110"
+                        style={{ backgroundColor: CONFIDENCE_META[conf].color }}
+                      />
+
+                      {tp.specCode && (
+                        <span className="font-mono-num shrink-0 text-xs font-semibold text-[var(--mute)]">
+                          {tp.specCode}
+                        </span>
+                      )}
+
+                      {isEditingThisTopic ? (
+                        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <input
+                            type="text"
+                            autoFocus
+                            value={editingTopicName}
+                            onChange={(e) => setEditingTopicName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleRenameSubtopic(tp.id);
+                              } else if (e.key === 'Escape') {
+                                setEditingTopicId(null);
+                              }
+                            }}
+                            className="sd-input py-1 text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRenameSubtopic(tp.id)}
+                            className="sd-btn-pri px-2.5 py-1 text-xs whitespace-nowrap"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
+                          className="cursor-pointer truncate text-left font-semibold text-[var(--ink)] hover:text-[var(--e3)]"
+                          title={`Open notes for ${tp.name}`}
+                        >
+                          {tp.name}
+                        </button>
+                      )}
+
+                      {topicCardsCount > 0 && (
+                        <span className="font-mono-num shrink-0 text-xs text-[var(--mute)]">
+                          · {topicCardsCount} cards
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div
+                        className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--bg)] p-0.5"
+                        role="group"
+                        aria-label={`Confidence rating for ${tp.name}`}
+                      >
+                        {([1, 2, 3] as const).map((lvl) => (
+                          <button
+                            key={lvl}
+                            type="button"
+                            onClick={() =>
+                              handleSetTopicConfidence(tp.id, conf === lvl ? 0 : lvl)
+                            }
+                            title={CONFIDENCE_META[lvl].label}
+                            className={`cursor-pointer rounded px-2 py-0.5 text-[11px] font-bold transition-colors whitespace-nowrap ${
+                              conf === lvl
+                                ? 'text-white'
+                                : 'text-[var(--mute)] hover:text-[var(--ink)]'
+                            }`}
+                            style={
+                              conf === lvl
+                                ? { backgroundColor: CONFIDENCE_META[lvl].color }
+                                : undefined
+                            }
+                          >
+                            {CONFIDENCE_META[lvl].short}
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
+                        className="sd-btn px-2.5 py-1 text-xs text-[var(--e3)] whitespace-nowrap shrink-0"
+                      >
+                        Open Notes →
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingTopicId(tp.id);
+                          setEditingTopicName(tp.name);
+                        }}
+                        aria-label={`Rename ${tp.name}`}
+                        className="sd-btn h-7 w-7 p-0 text-[var(--mute)]"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSubtopic(tp.id)}
+                        aria-label={`Delete ${tp.name}`}
+                        className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // MAIN SUBJECTS OVERVIEW & QUICK ADD
+  // =========================================================================
   return (
     <div className="h-full overflow-y-auto bg-[var(--bg)]">
       <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6">
@@ -577,15 +981,6 @@ export function SubjectsView({
                     style={{ backgroundColor: col }}
                   />
                 ))}
-                <label className="ml-2 flex cursor-pointer items-center gap-2 text-xs text-[var(--mute)]">
-                  <input
-                    type="checkbox"
-                    checked={customHasTimeline}
-                    onChange={(e) => setCustomHasTimeline(e.target.checked)}
-                    className="accent-[var(--e3)]"
-                  />
-                  <span>Enable interactive Timeline tab in Notes</span>
-                </label>
               </div>
               <button type="submit" className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap">
                 Save Subject
@@ -658,7 +1053,7 @@ export function SubjectsView({
                           />
                           <span className="truncate">{tpl.name}</span>
                         </span>
-                        <span className="shrink-0 text-xs text-[var(--mute)]">
+                        <span className="font-mono-num shrink-0 text-xs text-[var(--mute)]">
                           {tpl.topics.length} topics
                         </span>
                       </div>
@@ -782,7 +1177,7 @@ export function SubjectsView({
                             className="sd-input mt-1 text-xs"
                           />
                         </label>
-                        <label className="text-xs font-semibold text-[var(--mute)]">
+                        <label className="text-xs font-semibold text-[var(--mute)] sm:col-span-2">
                           Planner Priority
                           <select
                             value={editForm.weight ?? subj.weight}
@@ -799,19 +1194,6 @@ export function SubjectsView({
                             <option value={3}>High priority</option>
                           </select>
                         </label>
-                        <div className="flex items-end pb-1.5">
-                          <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--ink)]">
-                            <input
-                              type="checkbox"
-                              checked={editForm.hasTimeline ?? Boolean(subj.hasTimeline)}
-                              onChange={(e) =>
-                                setEditForm({ ...editForm, hasTimeline: e.target.checked })
-                              }
-                              className="accent-[var(--e3)]"
-                            />
-                            <span>Enable Timeline tab</span>
-                          </label>
-                        </div>
                       </div>
 
                       <div className="flex items-center justify-between gap-3 pt-1">
@@ -842,38 +1224,27 @@ export function SubjectsView({
                   );
                 }
 
-                const topicsExpanded = expandedTopicsSubjId === subj.id;
                 const confCounts = [0, 0, 0, 0];
                 topics.forEach((t) => {
                   confCounts[getTopicConfidence(t)] += 1;
                 });
                 const topicTotal = Math.max(1, topics.length);
-                const visibleTopics = topicsExpanded
-                  ? topics.filter((t) => {
-                      const c = getTopicConfidence(t);
-                      if (topicFilterConf !== 'all' && c !== topicFilterConf) return false;
-                      if (topicSearch.trim()) {
-                        const q = topicSearch.trim().toLowerCase();
-                        return (
-                          t.name.toLowerCase().includes(q) ||
-                          (t.specCode || '').toLowerCase().includes(q)
-                        );
-                      }
-                      return true;
-                    })
-                  : [];
 
                 return (
-                  <div
-                    key={subj.id}
-                    className={`sd-card flex flex-col justify-between p-5 ${
-                      topicsExpanded ? 'md:col-span-2' : ''
-                    }`}
-                  >
+                  <div key={subj.id} className="sd-card flex flex-col justify-between p-5">
                     <div>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTopicsSubjId(subj.id);
+                              setTopicFilterConf('all');
+                              setTopicSearch('');
+                              setBulkTopicsOpen(false);
+                            }}
+                            className="flex cursor-pointer items-center gap-2.5 text-left hover:text-[var(--e3)]"
+                          >
                             <span
                               className="h-3.5 w-3.5 shrink-0 rounded-full"
                               style={{ backgroundColor: subj.color }}
@@ -881,7 +1252,7 @@ export function SubjectsView({
                             <h3 className="font-display truncate text-lg font-bold text-[var(--ink)]">
                               {subj.name}
                             </h3>
-                          </div>
+                          </button>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
                             <span>{subj.examBoard || 'Revision'}</span>
                             {subj.targetGrade && (
@@ -962,7 +1333,6 @@ export function SubjectsView({
                         </span>
                       </div>
 
-                      {/* Stacked 3-level confidence progress bar (Mastered / Alright / Weak / Unstarted) */}
                       {topics.length > 0 && (
                         <div className="mt-2.5 flex h-1.5 w-full overflow-hidden rounded-full bg-[var(--line)]">
                           <div
@@ -1009,323 +1379,18 @@ export function SubjectsView({
                       </button>
                       <button
                         type="button"
-                        aria-expanded={topicsExpanded}
                         onClick={() => {
-                          if (topicsExpanded) {
-                            setExpandedTopicsSubjId(null);
-                          } else {
-                            setExpandedTopicsSubjId(subj.id);
-                            setTopicFilterConf('all');
-                            setTopicSearch('');
-                            setBulkTopicsOpen(false);
-                          }
+                          setActiveTopicsSubjId(subj.id);
+                          setTopicFilterConf('all');
+                          setTopicSearch('');
+                          setBulkTopicsOpen(false);
                         }}
-                        className={`sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap ${
-                          topicsExpanded ? 'border-[var(--e3)] text-[var(--e3)]' : ''
-                        }`}
+                        className="sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap"
                       >
                         <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Topics ({topics.length})</span>
-                        {topicsExpanded ? (
-                          <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
-                        ) : (
-                          <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
-                        )}
                       </button>
                     </div>
-
-                    {/* Expanded Subtopics & Confidence Panel */}
-                    {topicsExpanded && (
-                      <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex flex-wrap items-center gap-3 text-xs">
-                            <span className="font-bold text-[var(--ink)]">
-                              Subtopics &amp; Confidence
-                            </span>
-                            <span className="font-mono-num text-[var(--ok)]">
-                              {confCounts[3]} Mastered
-                            </span>
-                            <span className="font-mono-num text-[var(--e2)]">
-                              {confCounts[2]} Alright
-                            </span>
-                            <span className="font-mono-num text-[var(--bad)]">
-                              {confCounts[1]} Weak
-                            </span>
-                            <span className="font-mono-num text-[var(--mute)]">
-                              {confCounts[0]} Unstarted
-                            </span>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => setBulkTopicsOpen((v) => !v)}
-                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                          >
-                            {bulkTopicsOpen ? 'Hide Bulk Paste' : '+ Bulk Paste Subtopics'}
-                          </button>
-                        </div>
-
-                        {/* Filter + Search */}
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex flex-wrap gap-1">
-                            {(
-                              [
-                                ['all', `All (${topics.length})`],
-                                [0, `Unstarted (${confCounts[0]})`],
-                                [1, `Weak (${confCounts[1]})`],
-                                [2, `Alright (${confCounts[2]})`],
-                                [3, `Mastered (${confCounts[3]})`],
-                              ] as const
-                            ).map(([val, label]) => (
-                              <button
-                                key={String(val)}
-                                type="button"
-                                onClick={() => setTopicFilterConf(val)}
-                                className={`cursor-pointer rounded-lg border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap ${
-                                  topicFilterConf === val
-                                    ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)]'
-                                    : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)]'
-                                }`}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-
-                          {topics.length > 4 && (
-                            <div className="relative w-full sm:w-52">
-                              <Search
-                                className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--mute)]"
-                                aria-hidden="true"
-                              />
-                              <input
-                                type="text"
-                                value={topicSearch}
-                                onChange={(e) => setTopicSearch(e.target.value)}
-                                placeholder="Filter subtopics…"
-                                className="sd-input py-1 pl-7 text-xs"
-                              />
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Add Single Subtopic */}
-                        <form
-                          onSubmit={(e) => handleAddSubtopic(e, subj.id)}
-                          className="flex flex-wrap gap-2"
-                        >
-                          <input
-                            type="text"
-                            value={newSubtopicSpec}
-                            onChange={(e) => setNewSubtopicSpec(e.target.value)}
-                            placeholder="Spec (e.g. 1.2)"
-                            className="sd-input w-28 py-1.5 text-xs"
-                          />
-                          <input
-                            type="text"
-                            value={newSubtopicName}
-                            onChange={(e) => setNewSubtopicName(e.target.value)}
-                            placeholder={`Add new subtopic to ${subj.name}…`}
-                            className="sd-input min-w-0 flex-1 py-1.5 text-xs"
-                          />
-                          <button
-                            type="submit"
-                            className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
-                          >
-                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                            <span>Add Subtopic</span>
-                          </button>
-                        </form>
-
-                        {/* Bulk Paste Subtopics */}
-                        {bulkTopicsOpen && (
-                          <form
-                            onSubmit={(e) => handleBulkAddSubtopics(e, subj.id)}
-                            className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3"
-                          >
-                            <label className="block text-[11px] font-semibold text-[var(--mute)]">
-                              Paste subtopics (one per line · optionally separate summary with |)
-                              <textarea
-                                rows={4}
-                                value={bulkTopicsText}
-                                onChange={(e) => setBulkTopicsText(e.target.value)}
-                                placeholder={
-                                  'Cell Structure | Eukaryotes vs prokaryotes\nTransport in Cells | Diffusion, osmosis and active transport'
-                                }
-                                className="sd-input mt-1 text-xs"
-                              />
-                            </label>
-                            <div className="flex justify-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setBulkTopicsOpen(false)}
-                                className="sd-btn px-2.5 py-1 text-xs"
-                              >
-                                Cancel
-                              </button>
-                              <button type="submit" className="sd-btn-pri px-3 py-1 text-xs">
-                                Add All Subtopics
-                              </button>
-                            </div>
-                          </form>
-                        )}
-
-                        {/* Subtopics List */}
-                        {visibleTopics.length === 0 ? (
-                          <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-center text-xs text-[var(--mute)]">
-                            {topics.length === 0
-                              ? 'No subtopics yet. Add one above.'
-                              : 'No subtopics match your current filter.'}
-                          </div>
-                        ) : (
-                          <div className="divide-y divide-[var(--line)] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)]">
-                            {visibleTopics.map((tp) => {
-                              const conf = getTopicConfidence(tp);
-                              const topicCardsCount = cards.filter((c) => c.topicId === tp.id).length;
-                              const isEditingThisTopic = editingTopicId === tp.id;
-
-                              return (
-                                <div
-                                  key={tp.id}
-                                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-xs"
-                                >
-                                  <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                                    {/* Clickable status dot cycles 0 -> 1 -> 2 -> 3 */}
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleSetTopicConfidence(
-                                          tp.id,
-                                          ((conf + 1) % 4) as 0 | 1 | 2 | 3
-                                        )
-                                      }
-                                      title={`Status: ${CONFIDENCE_META[conf].label} (click to cycle)`}
-                                      aria-label={`Cycle confidence for ${tp.name}`}
-                                      className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded-full border border-[var(--line)] transition-transform hover:scale-110"
-                                      style={{ backgroundColor: CONFIDENCE_META[conf].color }}
-                                    />
-
-                                    {tp.specCode && (
-                                      <span className="font-mono-num shrink-0 rounded bg-[var(--card)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--mute)]">
-                                        {tp.specCode}
-                                      </span>
-                                    )}
-
-                                    {isEditingThisTopic ? (
-                                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                                        <input
-                                          type="text"
-                                          autoFocus
-                                          value={editingTopicName}
-                                          onChange={(e) => setEditingTopicName(e.target.value)}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              e.preventDefault();
-                                              handleRenameSubtopic(tp.id);
-                                            } else if (e.key === 'Escape') {
-                                              setEditingTopicId(null);
-                                            }
-                                          }}
-                                          className="sd-input py-1 text-xs"
-                                        />
-                                        <button
-                                          type="button"
-                                          onClick={() => handleRenameSubtopic(tp.id)}
-                                          className="sd-btn-pri px-2 py-1 text-[11px]"
-                                        >
-                                          Save
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <span
-                                        onDoubleClick={() => {
-                                          setEditingTopicId(tp.id);
-                                          setEditingTopicName(tp.name);
-                                        }}
-                                        className="truncate font-semibold text-[var(--ink)]"
-                                        title={tp.name}
-                                      >
-                                        {tp.name}
-                                      </span>
-                                    )}
-
-                                    {topicCardsCount > 0 && (
-                                      <span className="font-mono-num shrink-0 text-[10px] text-[var(--mute)]">
-                                        {topicCardsCount} cards
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    {/* Direct Red / Amber / Green confidence buttons */}
-                                    <div
-                                      className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--card)] px-1.5 py-0.5"
-                                      role="group"
-                                      aria-label={`Confidence rating for ${tp.name}`}
-                                    >
-                                      {([1, 2, 3] as const).map((lvl) => (
-                                        <button
-                                          key={lvl}
-                                          type="button"
-                                          onClick={() =>
-                                            handleSetTopicConfidence(
-                                              tp.id,
-                                              conf === lvl ? 0 : lvl
-                                            )
-                                          }
-                                          title={CONFIDENCE_META[lvl].label}
-                                          className={`cursor-pointer rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
-                                            conf === lvl
-                                              ? 'text-white'
-                                              : 'text-[var(--mute)] hover:text-[var(--ink)]'
-                                          }`}
-                                          style={
-                                            conf === lvl
-                                              ? { backgroundColor: CONFIDENCE_META[lvl].color }
-                                              : undefined
-                                          }
-                                        >
-                                          {CONFIDENCE_META[lvl].short}
-                                        </button>
-                                      ))}
-                                    </div>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
-                                      className="sd-btn px-2 py-1 text-[11px] text-[var(--e3)] whitespace-nowrap"
-                                    >
-                                      Notes →
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setEditingTopicId(tp.id);
-                                        setEditingTopicName(tp.name);
-                                      }}
-                                      aria-label={`Rename ${tp.name}`}
-                                      className="sd-btn h-6 w-6 p-0 text-[var(--mute)]"
-                                    >
-                                      <Edit3 className="h-3 w-3" aria-hidden="true" />
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteSubtopic(tp.id)}
-                                      aria-label={`Delete ${tp.name}`}
-                                      className="sd-btn h-6 w-6 p-0 text-[var(--bad)]"
-                                    >
-                                      <Trash2 className="h-3 w-3" aria-hidden="true" />
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })}
