@@ -62,6 +62,7 @@ interface ProfileVaultViewProps {
   workspace: WorkspaceData;
   firebaseUser: User | null;
   account: UserAccountDoc | null;
+  accountError?: string | null;
   vaultUnlocked: boolean;
   profile: DecryptedProfile | null;
   devices: UserDeviceDoc[];
@@ -71,6 +72,7 @@ interface ProfileVaultViewProps {
   hasGuestData: boolean;
   initialSection?: VaultSection;
   onOpenAuth: () => void;
+  onRetryAccountLoad?: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onLockVault: () => Promise<void>;
   onSaveProfile: (profile: DecryptedProfile) => Promise<void>;
@@ -149,6 +151,7 @@ export function ProfileVaultView({
   workspace,
   firebaseUser,
   account,
+  accountError,
   vaultUnlocked,
   profile,
   devices,
@@ -158,6 +161,7 @@ export function ProfileVaultView({
   hasGuestData,
   initialSection = 'account',
   onOpenAuth,
+  onRetryAccountLoad,
   onSignOut,
   onLockVault,
   onSaveProfile,
@@ -1500,21 +1504,36 @@ export function ProfileVaultView({
                   <h2 className="font-display text-lg font-bold text-[var(--ink)]">
                     {!firebaseUser
                       ? 'Enable Encrypted Multi-Device Cloud Sync'
+                      : accountError
+                      ? 'Cloud Account Connection Issue'
                       : 'Your Vault Is Locked'}
                   </h2>
                   <p className="mt-1 max-w-2xl text-sm text-[var(--mute)]">
                     {!firebaseUser
                       ? 'Sign in with Google to protect your flashcards, structured notes, planner schedule, and private profile with client-side AES-256-GCM encryption across every device.'
+                      : accountError
+                      ? accountError
                       : 'Enter your sync passphrase or recovery code to decrypt your workspace and synchronize changes across devices.'}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={onOpenAuth}
-                  className="sd-btn-pri shrink-0 px-5 py-2.5 text-sm whitespace-nowrap"
-                >
-                  {!firebaseUser ? 'Sign in with Google' : 'Unlock Vault'}
-                </button>
+                {accountError && onRetryAccountLoad ? (
+                  <button
+                    type="button"
+                    onClick={() => void onRetryAccountLoad()}
+                    className="sd-btn-pri shrink-0 px-5 py-2.5 text-sm whitespace-nowrap"
+                  >
+                    <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                    <span>Retry connection</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onOpenAuth}
+                    className="sd-btn-pri shrink-0 px-5 py-2.5 text-sm whitespace-nowrap"
+                  >
+                    {!firebaseUser ? 'Sign in with Google' : 'Unlock Vault'}
+                  </button>
+                )}
               </div>
             </div>
 

@@ -9,8 +9,10 @@ interface AuthVaultModalProps {
   onClose: () => void;
   firebaseUser: User | null;
   account: UserAccountDoc | null;
+  accountError?: string | null;
   vaultUnlocked: boolean;
   hasGuestData: boolean;
+  onRetryAccountLoad?: () => Promise<void>;
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onCreateVault: (
@@ -33,8 +35,10 @@ export function AuthVaultModal({
   onClose,
   firebaseUser,
   account,
+  accountError,
   vaultUnlocked,
   hasGuestData,
+  onRetryAccountLoad,
   onSignInGoogle,
   onSignOut,
   onCreateVault,
@@ -181,6 +185,8 @@ export function AuthVaultModal({
                 ? 'Save Your Recovery Key'
                 : !firebaseUser
                 ? 'Sign In & Sync Across Devices'
+                : accountError
+                ? 'Cloud Account Unavailable'
                 : !account
                 ? 'Set Up Encrypted Cloud Vault'
                 : 'Unlock Your Encrypted Vault'}
@@ -304,6 +310,33 @@ export function AuthVaultModal({
               <LogIn className="h-4 w-4" aria-hidden="true" />
               <span>{busy ? 'Connecting...' : 'Continue with Google'}</span>
             </button>
+          </div>
+        ) : accountError ? (
+          <div className="mt-5 space-y-4">
+            <div className="rounded-xl border border-[var(--bad)] bg-[var(--bg)] p-3.5 text-xs leading-relaxed text-[var(--ink)]">
+              <div className="font-semibold text-[var(--bad)]">
+                Could not reach your cloud account on {firebaseProjectId}
+              </div>
+              <p className="mt-1 text-[var(--mute)]">{accountError}</p>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => void onSignOut()}
+                className="sd-btn px-3 py-2 text-xs"
+              >
+                Sign out
+              </button>
+              {onRetryAccountLoad && (
+                <button
+                  type="button"
+                  onClick={() => void onRetryAccountLoad()}
+                  className="sd-btn-pri px-4 py-2 text-xs"
+                >
+                  Retry connection
+                </button>
+              )}
+            </div>
           </div>
         ) : !account ? (
           <form onSubmit={handleCreate} className="mt-5 space-y-4">

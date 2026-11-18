@@ -167,6 +167,7 @@ export default function App() {
   const [chunkCount, setChunkCount] = useState(0);
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [accountLoadError, setAccountLoadError] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'synced' | 'error' | 'offline'>(
     navigator.onLine ? 'idle' : 'offline'
   );
@@ -336,12 +337,70 @@ export default function App() {
     [timerDurationMins]
   );
 
+  const formatAccountLoadError = useCallback((err: unknown): string => {
+    const raw = err instanceof Error ? err.message : String(err || '');
+    if (
+      raw.includes('firestore.googleapis.com') ||
+      raw.includes('Cloud Firestore API has not been used') ||
+      raw.includes('it is disabled')
+    ) {
+      return 'Cloud Firestore API is currently disabled or not provisioned on the active Firebase project. Your account data has not been deleted—reconnect or enable Firestore on your Firebase project to restore cloud sync.';
+    }
+    if (raw.includes('offline') || raw.includes('Failed to get document')) {
+      return 'Could not reach Cloud Firestore right now. Showing your local cached workspace until connection is restored.';
+    }
+    return 'Could not load your cloud account metadata right now. Please retry or check your Firebase project settings.';
+  }, []);
+
+  const loadSignedInAccount = useCallback(
+    async (user: User) => {
+      setAccountLoadError(null);
+      try {
+        let acc = await fetchUserAccount(user.uid);
+        acc = await ensureBootstrapAdminRole(user.uid, user.email, acc);
+        setAccount(acc);
+        if (!acc) {
+          setDek(null);
+          setHasGuestData(detectHasGuestWorkspaceData());
+          setAuthModalOpen(true);
+          return;
+        }
+        const cachedKey = await loadTrustedDeviceKey(user.uid);
+        if (cachedKey) {
+          try {
+            const prof = await loadEncryptedProfile(user.uid, cachedKey);
+            if (prof) setProfile(prof);
+            setDek(cachedKey);
+            return;
+          } catch (profErr) {
+            if (profErr instanceof DOMException && profErr.name === 'OperationError') {
+              await clearTrustedDeviceKey(user.uid);
+            } else {
+              console.warn('Could not load encrypted profile yet:', profErr);
+              setDek(cachedKey);
+              return;
+            }
+          }
+        }
+        setDek(null);
+        setAuthModalOpen(true);
+      } catch (err) {
+        console.error(err);
+        setSyncState('error');
+        setAccountLoadError(formatAccountLoadError(err));
+      }
+    },
+    [formatAccountLoadError]
+  );
+
   // Firebase Auth state listener
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
+    const unsub = onAuthStateChanged(auth, async (rawUser) => {
+      const user = rawUser && !rawUser.isAnonymous ? rawUser : null;
       resetSyncMemoryCache();
       cloudHydratedRef.current = false;
       setFirebaseUser(user);
+      setAccountLoadError(null);
       setProfile(null);
       setDevices([]);
       setActivity([]);
@@ -361,36 +420,10 @@ export default function App() {
         setWorkspace(cachedLocalUserWs);
       }
 
-      try {
-        let acc = await fetchUserAccount(user.uid);
-        acc = await ensureBootstrapAdminRole(user.uid, user.email, acc);
-        setAccount(acc);
-        if (!acc) {
-          setDek(null);
-          setHasGuestData(detectHasGuestWorkspaceData());
-          setAuthModalOpen(true);
-          return;
-        }
-        const cachedKey = await loadTrustedDeviceKey(user.uid);
-        if (cachedKey) {
-          try {
-            const prof = await loadEncryptedProfile(user.uid, cachedKey);
-            if (prof) setProfile(prof);
-            setDek(cachedKey);
-            return;
-          } catch {
-            await clearTrustedDeviceKey(user.uid);
-          }
-        }
-        setDek(null);
-        setAuthModalOpen(true);
-      } catch (err) {
-        console.error(err);
-        setSyncState('error');
-      }
+      await loadSignedInAccount(user);
     });
     return () => unsub();
-  }, []);
+  }, [loadSignedInAccount]);
 
   // Encrypted Firestore Sync & Device Subscriptions when unlocked
   useEffect(() => {
@@ -984,6 +1017,7 @@ export default function App() {
               workspace={workspace}
               firebaseUser={firebaseUser}
               account={account}
+              accountError={accountLoadError}
               vaultUnlocked={vaultUnlocked}
               profile={profile}
               devices={devices}
@@ -993,6 +1027,9 @@ export default function App() {
               hasGuestData={hasGuestData}
               initialSection={activeTab === 'admin' ? 'admin' : vaultSection}
               onOpenAuth={() => setAuthModalOpen(true)}
+              onRetryAccountLoad={
+                firebaseUser ? () => loadSignedInAccount(firebaseUser) : undefined
+              }
               onSignOut={handleSignOut}
               onLockVault={handleLockVault}
               onSaveProfile={handleSaveProfile}
@@ -1068,8 +1105,10 @@ export default function App() {
         onClose={() => setAuthModalOpen(false)}
         firebaseUser={firebaseUser}
         account={account}
+        accountError={accountLoadError}
         vaultUnlocked={vaultUnlocked}
         hasGuestData={hasGuestData}
+        onRetryAccountLoad={firebaseUser ? () => loadSignedInAccount(firebaseUser) : undefined}
         onSignInGoogle={handleSignInGoogle}
         onSignOut={handleSignOut}
         onCreateVault={handleCreateVault}

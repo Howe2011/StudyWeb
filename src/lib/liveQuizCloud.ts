@@ -149,6 +149,7 @@ export async function gradeAnswerViaVercelOrLocal(
 }
 
 export async function ensureQuizAuthUid(): Promise<string> {
+  await auth.authStateReady();
   if (auth.currentUser) {
     return auth.currentUser.uid;
   }
