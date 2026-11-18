@@ -1736,7 +1736,7 @@ export function UniversalImportModal({
                               onOpenApiKeySettings();
                             } else {
                               setErrorMsg(
-                                'Open Account & Data to paste your own Gemini or OpenAI-compatible API key.'
+                                'Open Account & Data to paste your own Gemini, Grok, or OpenAI-compatible API key.'
                               );
                             }
                           }}

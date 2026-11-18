@@ -625,70 +625,8 @@ export function ProfileVaultView({
       (Boolean(firebaseUser?.emailVerified) &&
         firebaseUser?.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL));
 
-  return (
-    <div className="h-full overflow-y-auto bg-[var(--bg)]">
-      <div className="mx-auto max-w-[1120px] space-y-6 px-4 py-7 sm:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-5">
-          <div>
-            <h1 className="font-display text-2xl font-extrabold text-[var(--ink)] sm:text-3xl">
-              Account &amp; Data
-            </h1>
-            <p className="mt-1 text-sm text-[var(--mute)]">
-              {firebaseUser
-                ? `${firebaseUser.email} · Role: ${account?.role ?? 'student'} · Key v${account?.keyVersion ?? 1}`
-                : 'Guest session · Selective backups, export tools & local browser storage'}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="sd-seg" role="tablist" aria-label="Account sections">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={section === 'account'}
-                aria-pressed={section === 'account'}
-                onClick={() => setSection('account')}
-                className="sd-seg-btn"
-              >
-                Account &amp; Sync
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={section === 'data'}
-                aria-pressed={section === 'data'}
-                onClick={() => setSection('data')}
-                className="sd-seg-btn"
-              >
-                Data &amp; Backups
-              </button>
-              {isAdmin && (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={section === 'admin'}
-                  aria-pressed={section === 'admin'}
-                  onClick={() => setSection('admin')}
-                  className="sd-seg-btn"
-                >
-                  Admin
-                </button>
-              )}
-            </div>
-            {firebaseUser && (
-              <button
-                type="button"
-                onClick={() => void onSignOut()}
-                className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
-              >
-                <LogOut className="h-4 w-4" aria-hidden="true" />
-                <span>Sign out</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {(section === 'account' || section === 'data') && (
-          <div className="sd-card p-6">
+  const byokCard = (
+    <div id="byok-api-key-card" className="sd-card p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
@@ -969,7 +907,69 @@ export function ProfileVaultView({
               )}
             </form>
           </div>
-        )}
+  );
+
+  return (
+    <div className="h-full overflow-y-auto bg-[var(--bg)]">
+      <div className="mx-auto max-w-[1120px] space-y-6 px-4 py-7 sm:px-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-5">
+          <div>
+            <h1 className="font-display text-2xl font-extrabold text-[var(--ink)] sm:text-3xl">
+              Account &amp; Data
+            </h1>
+            <p className="mt-1 text-sm text-[var(--mute)]">
+              {firebaseUser
+                ? `${firebaseUser.email} · Role: ${account?.role ?? 'student'} · Key v${account?.keyVersion ?? 1}`
+                : 'Guest session · Selective backups, export tools & local browser storage'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="sd-seg" role="tablist" aria-label="Account sections">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={section === 'account'}
+                aria-pressed={section === 'account'}
+                onClick={() => setSection('account')}
+                className="sd-seg-btn"
+              >
+                Account &amp; Sync
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={section === 'data'}
+                aria-pressed={section === 'data'}
+                onClick={() => setSection('data')}
+                className="sd-seg-btn"
+              >
+                Data &amp; Backups
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={section === 'admin'}
+                  aria-pressed={section === 'admin'}
+                  onClick={() => setSection('admin')}
+                  className="sd-seg-btn"
+                >
+                  Admin
+                </button>
+              )}
+            </div>
+            {firebaseUser && (
+              <button
+                type="button"
+                onClick={() => void onSignOut()}
+                className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap"
+              >
+                <LogOut className="h-4 w-4" aria-hidden="true" />
+                <span>Sign out</span>
+              </button>
+            )}
+          </div>
+        </div>
 
         {section === 'data' && (
           <div className="space-y-6">
@@ -1383,6 +1383,8 @@ export function ProfileVaultView({
               </div>
             </div>
 
+            {byokCard}
+
             {/* Compact Workspace Tools */}
             <div className="sd-card p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1488,7 +1490,9 @@ export function ProfileVaultView({
           </div>
         )}
 
-        {section === 'account' && (!firebaseUser || !vaultUnlocked ? (
+        {section === 'account' && (
+          <div className="space-y-6">
+            {!firebaseUser || !vaultUnlocked ? (
           <div className="space-y-6">
             <div className="sd-card p-6">
               <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
@@ -1865,7 +1869,10 @@ export function ProfileVaultView({
               </div>
             </section>
           </div>
-        ))}
+            )}
+            {byokCard}
+          </div>
+        )}
       </div>
     </div>
   );

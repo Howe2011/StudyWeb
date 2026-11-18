@@ -822,7 +822,7 @@ export default function App() {
         setActiveTab('vault');
         return;
       }
-      if (tab === 'vault') {
+      if (tab === 'vault' && !opts?.vaultSection) {
         setVaultSection('account');
       }
       setActiveTab(tab);
