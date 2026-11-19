@@ -157,6 +157,133 @@ export function getLocalWorkspaceStorageKey(uid?: string | null): string {
   return uid ? `${WORKSPACE_LOCAL_KEY}:${uid}` : WORKSPACE_LOCAL_KEY;
 }
 
+export function sanitizeTopicParents(topics: StudyTopic[]): StudyTopic[] {
+  const byId = new Map(topics.map((t) => [t.id, t]));
+  return topics.map((t) => {
+    const pid = typeof t.parentTopicId === 'string' ? t.parentTopicId.trim() : '';
+    if (!pid || pid === t.id) {
+      if (t.parentTopicId !== undefined) {
+        const { parentTopicId: _drop, ...rest } = t;
+        return rest;
+      }
+      return t;
+    }
+
+    const parent = byId.get(pid);
+    if (!parent || parent.subjectId !== t.subjectId) {
+      const { parentTopicId: _drop, ...rest } = t;
+      return rest;
+    }
+
+    // Cycle check walking up ancestors
+    const seen = new Set<string>([t.id]);
+    let cur: StudyTopic | undefined = parent;
+    let hasCycle = false;
+    while (cur) {
+      if (seen.has(cur.id)) {
+        hasCycle = true;
+        break;
+      }
+      seen.add(cur.id);
+      if (!cur.parentTopicId) break;
+      const nextParent = byId.get(cur.parentTopicId);
+      if (!nextParent || nextParent.subjectId !== t.subjectId) break;
+      cur = nextParent;
+    }
+
+    if (hasCycle) {
+      const { parentTopicId: _drop, ...rest } = t;
+      return rest;
+    }
+
+    return pid === t.parentTopicId ? t : { ...t, parentTopicId: pid };
+  });
+}
+
+export interface TopicTreeNode {
+  topic: StudyTopic;
+  depth: number;
+  parentTopic: StudyTopic | null;
+  childCount: number;
+  ancestors: StudyTopic[];
+}
+
+export function buildTopicTreeList(subjectTopics: StudyTopic[]): TopicTreeNode[] {
+  const safeTopics = sanitizeTopicParents(subjectTopics);
+  const byId = new Map(safeTopics.map((t) => [t.id, t]));
+  const childrenMap = new Map<string, StudyTopic[]>();
+
+  for (const t of safeTopics) {
+    const key = t.parentTopicId && byId.has(t.parentTopicId) ? t.parentTopicId : '__root__';
+    const list = childrenMap.get(key) || [];
+    list.push(t);
+    childrenMap.set(key, list);
+  }
+
+  const out: TopicTreeNode[] = [];
+  const walk = (parentId: string, depth: number, ancestors: StudyTopic[]) => {
+    const list = childrenMap.get(parentId) || [];
+    for (const topic of list) {
+      const children = childrenMap.get(topic.id) || [];
+      out.push({
+        topic,
+        depth,
+        parentTopic: ancestors.length > 0 ? ancestors[ancestors.length - 1] : null,
+        childCount: children.length,
+        ancestors,
+      });
+      if (children.length > 0) {
+        walk(topic.id, depth + 1, [...ancestors, topic]);
+      }
+    }
+  };
+
+  walk('__root__', 0, []);
+  return out;
+}
+
+export function getTopicDescendantIds(topics: StudyTopic[], rootTopicId: string): Set<string> {
+  const childrenMap = new Map<string, string[]>();
+  for (const t of topics) {
+    if (!t.parentTopicId) continue;
+    const list = childrenMap.get(t.parentTopicId) || [];
+    list.push(t.id);
+    childrenMap.set(t.parentTopicId, list);
+  }
+  const descendants = new Set<string>();
+  const stack = [...(childrenMap.get(rootTopicId) || [])];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (descendants.has(id) || id === rootTopicId) continue;
+    descendants.add(id);
+    for (const childId of childrenMap.get(id) || []) {
+      stack.push(childId);
+    }
+  }
+  return descendants;
+}
+
+export function deleteTopicPromotingChildren(
+  topics: StudyTopic[],
+  topicIdToDelete: string
+): StudyTopic[] {
+  const target = topics.find((t) => t.id === topicIdToDelete);
+  if (!target) return topics;
+  const promotedParentId = target.parentTopicId;
+  return sanitizeTopicParents(
+    topics
+      .filter((t) => t.id !== topicIdToDelete)
+      .map((t) => {
+        if (t.parentTopicId !== topicIdToDelete) return t;
+        if (promotedParentId) {
+          return { ...t, parentTopicId: promotedParentId };
+        }
+        const { parentTopicId: _drop, ...rest } = t;
+        return rest;
+      })
+  );
+}
+
 export function normalizeWorkspace(raw: unknown): WorkspaceData {
   const empty = createEmptyWorkspace();
   if (!raw || typeof raw !== 'object') return empty;
@@ -174,7 +301,7 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
   return {
     version: 2,
     subjects: Array.isArray(r.subjects) ? r.subjects : [],
-    topics: Array.isArray(r.topics) ? r.topics : [],
+    topics: sanitizeTopicParents(Array.isArray(r.topics) ? r.topics : []),
     flashcards: Array.isArray(r.flashcards) ? r.flashcards : [],
     todos: Array.isArray(r.todos) ? r.todos : [],
     calendarBlocks: Array.isArray(r.calendarBlocks) ? r.calendarBlocks : [],
@@ -842,6 +969,8 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
     }
   }
 
+  const pendingParentLinks: Array<{ mergedTopicId: string; rawIncomingParentId: string }> = [];
+
   for (const t of incoming.topics) {
     const mappedSubjId = subjIdRemap.get(t.subjectId) || t.subjectId;
     const match = next.topics.find(
@@ -849,6 +978,12 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
     );
     if (match) {
       topicIdRemap.set(t.id, match.id);
+      if (!match.parentTopicId && t.parentTopicId) {
+        pendingParentLinks.push({
+          mergedTopicId: match.id,
+          rawIncomingParentId: t.parentTopicId,
+        });
+      }
       if (!match.notes.summary && t.notes.summary) match.notes.summary = t.notes.summary;
       if (!match.notes.workedExample && t.notes.workedExample) {
         match.notes.workedExample = t.notes.workedExample;
@@ -891,7 +1026,30 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
       const cloned: StudyTopic = { ...t, subjectId: mappedSubjId };
       next.topics.push(cloned);
       topicIdRemap.set(t.id, cloned.id);
+      if (t.parentTopicId) {
+        pendingParentLinks.push({
+          mergedTopicId: cloned.id,
+          rawIncomingParentId: t.parentTopicId,
+        });
+      }
     }
+  }
+
+  if (pendingParentLinks.length > 0) {
+    const linkMap = new Map(
+      pendingParentLinks.map((p) => [
+        p.mergedTopicId,
+        topicIdRemap.get(p.rawIncomingParentId) || p.rawIncomingParentId,
+      ])
+    );
+    next.topics = sanitizeTopicParents(
+      next.topics.map((t) => {
+        const resolvedParentId = linkMap.get(t.id);
+        return resolvedParentId ? { ...t, parentTopicId: resolvedParentId } : t;
+      })
+    );
+  } else {
+    next.topics = sanitizeTopicParents(next.topics);
   }
 
   for (const c of incoming.flashcards) {

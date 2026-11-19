@@ -148,6 +148,7 @@ export interface StructuredNoteData {
 export interface StudyTopic {
   id: string;
   subjectId: string;
+  parentTopicId?: string;
   name: string;
   specCode?: string;
   tags?: string[];
@@ -354,6 +355,7 @@ export interface SharedSubjectPayload {
   };
   topics: Array<{
     name: string;
+    parentTopicName?: string;
     specCode?: string;
     notes: StructuredNoteData;
     timelineEvents?: TimelineEventItem[];

@@ -54,7 +54,12 @@ import {
   QuizletDelimiterMode,
 } from '../lib/smartImporter';
 import { SUBJECT_COLOR_SWATCHES } from '../lib/subjectCatalog';
-import { makeId, mergeWorkspaces, normalizeWorkspace } from '../lib/workspaceStore';
+import {
+  buildTopicTreeList,
+  makeId,
+  mergeWorkspaces,
+  normalizeWorkspace,
+} from '../lib/workspaceStore';
 import {
   KeyTermPair,
   NoteSectionBlock,
@@ -203,6 +208,7 @@ export function UniversalImportModal({
   const [targetSubjectId, setTargetSubjectId] = useState<string>(
     defaultSubjectId || workspace.subjects[0]?.id || '__new__'
   );
+  const [targetParentTopicId, setTargetParentTopicId] = useState<string>('');
   const [newSubjectName, setNewSubjectName] = useState('');
   const [topicNameOverride, setTopicNameOverride] = useState('');
   const [tagsInput, setTagsInput] = useState('');
@@ -740,10 +746,16 @@ export function UniversalImportModal({
             timelineEvents: mergedTimeline.length ? mergedTimeline : topic.timelineEvents,
           };
         } else {
+          const validParentId =
+            targetParentTopicId &&
+            nextTopics.some((t) => t.id === targetParentTopicId && t.subjectId === subj!.id)
+              ? targetParentTopicId
+              : undefined;
           resolvedTopicId = makeId('top');
           const createdTopic: StudyTopic = {
             id: resolvedTopicId,
             subjectId: subj.id,
+            ...(validParentId ? { parentTopicId: validParentId } : {}),
             name: finalTopicName,
             tags: parsedTags.length ? parsedTags : undefined,
             completed: false,
@@ -803,6 +815,7 @@ export function UniversalImportModal({
     setRawText('');
     setPreExtractedCards(undefined);
     setTopicNameOverride('');
+    setTargetParentTopicId('');
     setTagsInput('');
     setLegacyHtml(undefined);
     setIncludeCards(false);
@@ -1759,7 +1772,10 @@ export function UniversalImportModal({
                   Course / Subject
                   <select
                     value={targetSubjectId}
-                    onChange={(e) => setTargetSubjectId(e.target.value)}
+                    onChange={(e) => {
+                      setTargetSubjectId(e.target.value);
+                      setTargetParentTopicId('');
+                    }}
                     className="sd-input mt-1 text-sm"
                   >
                     {workspace.subjects.map((s) => (
@@ -1809,6 +1825,34 @@ export function UniversalImportModal({
                   />
                 </label>
               </div>
+
+              {targetSubjectId !== '__new__' &&
+                (() => {
+                  const subjTopics = workspace.topics.filter(
+                    (t) => t.subjectId === targetSubjectId
+                  );
+                  if (subjTopics.length === 0) return null;
+                  const tree = buildTopicTreeList(subjTopics);
+                  return (
+                    <label className="block text-xs font-semibold text-[var(--mute)]">
+                      Place Under Parent Topic (optional — leave as top-level or nest as a sub-topic)
+                      <select
+                        value={targetParentTopicId}
+                        onChange={(e) => setTargetParentTopicId(e.target.value)}
+                        className="sd-input mt-1 text-sm"
+                      >
+                        <option value="">Top-level topic</option>
+                        {tree.map((node) => (
+                          <option key={node.topic.id} value={node.topic.id}>
+                            {'\u00A0\u00A0'.repeat(node.depth)}
+                            {node.depth > 0 ? '↳ ' : ''}
+                            {node.topic.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })()}
 
               {targetSubjectId === '__new__' && (
                 <label className="block text-xs font-semibold text-[var(--mute)]">

@@ -232,8 +232,14 @@ interface NotionTopicEditorProps {
   topicId: string;
   topicName: string;
   specCode?: string;
+  parentTopicId?: string;
+  parentTopicOptions?: Array<{ id: string; label: string }>;
   notes: StructuredNoteData;
-  onChangeTopicMeta: (fields: { name?: string; specCode?: string }) => void;
+  onChangeTopicMeta: (fields: {
+    name?: string;
+    specCode?: string;
+    parentTopicId?: string;
+  }) => void;
   onChangeNotes: (nextNotes: StructuredNoteData) => void;
   onMakeFlashcards: () => void;
 }
@@ -242,6 +248,8 @@ export function NotionTopicEditor({
   topicId,
   topicName,
   specCode,
+  parentTopicId,
+  parentTopicOptions,
   notes,
   onChangeTopicMeta,
   onChangeNotes,
@@ -458,15 +466,34 @@ export function NotionTopicEditor({
       {/* Notion-style Borderless Page Header */}
       <div className="space-y-2 border-b border-[var(--line)] pb-5">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
-          <div className="flex items-center gap-2">
-            <span>Spec Code:</span>
-            <input
-              type="text"
-              value={specCode || ''}
-              onChange={(e) => onChangeTopicMeta({ specCode: e.target.value })}
-              placeholder="e.g. 4.1.2"
-              className="font-mono-num w-28 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-[var(--ink)] outline-none transition-colors hover:border-[var(--line)] focus:border-[var(--e3)] focus:bg-[var(--bg)]"
-            />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <span>Spec Code:</span>
+              <input
+                type="text"
+                value={specCode || ''}
+                onChange={(e) => onChangeTopicMeta({ specCode: e.target.value })}
+                placeholder="e.g. 4.1.2"
+                className="font-mono-num w-24 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-[var(--ink)] outline-none transition-colors hover:border-[var(--line)] focus:border-[var(--e3)] focus:bg-[var(--bg)]"
+              />
+            </div>
+            {parentTopicOptions && parentTopicOptions.length > 0 && (
+              <label className="flex items-center gap-1.5">
+                <span>Parent:</span>
+                <select
+                  value={parentTopicId || ''}
+                  onChange={(e) => onChangeTopicMeta({ parentTopicId: e.target.value })}
+                  className="max-w-[200px] cursor-pointer rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-medium text-[var(--ink)] outline-none transition-colors hover:border-[var(--line)] focus:border-[var(--e3)] focus:bg-[var(--bg)]"
+                >
+                  <option value="">Top-level topic</option>
+                  {parentTopicOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           <span className="text-[11px] text-[var(--mute)]">
             Type <kbd className="rounded border border-[var(--line)] px-1 font-mono-num">/</kbd> for

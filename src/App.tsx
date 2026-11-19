@@ -549,6 +549,9 @@ export default function App() {
           },
           topics: topics.map((t) => ({
             name: t.name,
+            ...(t.parentTopicId && topicNameMap.get(t.parentTopicId)
+              ? { parentTopicName: topicNameMap.get(t.parentTopicId) }
+              : {}),
             specCode: t.specCode,
             notes: t.notes,
             timelineEvents: t.timelineEvents,

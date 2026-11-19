@@ -4,6 +4,7 @@ import {
   BookOpen,
   Calendar,
   Check,
+  CornerDownRight,
   Edit3,
   Layers,
   ListChecks,
@@ -20,7 +21,11 @@ import {
   SUBJECT_CATEGORIES,
   SUBJECT_COLOR_SWATCHES,
 } from '../lib/subjectCatalog';
-import { makeId } from '../lib/workspaceStore';
+import {
+  buildTopicTreeList,
+  deleteTopicPromotingChildren,
+  makeId,
+} from '../lib/workspaceStore';
 import {
   StudySubject,
   StudyTopic,
@@ -97,6 +102,7 @@ export function SubjectsView({
   const [topicSearch, setTopicSearch] = useState('');
   const [newSubtopicName, setNewSubtopicName] = useState('');
   const [newSubtopicSpec, setNewSubtopicSpec] = useState('');
+  const [newParentTopicId, setNewParentTopicId] = useState('');
   const [bulkTopicsOpen, setBulkTopicsOpen] = useState(false);
   const [bulkTopicsText, setBulkTopicsText] = useState('');
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
@@ -347,9 +353,15 @@ export function SubjectsView({
     e.preventDefault();
     const clean = newSubtopicName.trim();
     if (!clean) return;
+    const validParent =
+      newParentTopicId &&
+      workspace.topics.some((t) => t.id === newParentTopicId && t.subjectId === subjId)
+        ? newParentTopicId
+        : undefined;
     const created: StudyTopic = {
       id: makeId('top'),
       subjectId: subjId,
+      ...(validParent ? { parentTopicId: validParent } : {}),
       name: clean,
       specCode: newSubtopicSpec.trim() || undefined,
       completed: false,
@@ -422,7 +434,7 @@ export function SubjectsView({
   const handleDeleteSubtopic = (topicId: string) => {
     onUpdateWorkspace((prev) => ({
       ...prev,
-      topics: prev.topics.filter((t) => t.id !== topicId),
+      topics: deleteTopicPromotingChildren(prev.topics, topicId),
       flashcards: prev.flashcards.filter((c) => c.topicId !== topicId),
       updatedAt: new Date().toISOString(),
     }));
@@ -445,7 +457,9 @@ export function SubjectsView({
     const readinessPct = topics.length > 0 ? Math.round((confSum / (topics.length * 3)) * 100) : 0;
     const topicTotal = Math.max(1, topics.length);
 
-    const visibleTopics = topics.filter((t) => {
+    const topicTree = buildTopicTreeList(topics);
+    const visibleTopicNodes = topicTree.filter((node) => {
+      const t = node.topic;
       const c = getTopicConfidence(t);
       if (topicFilterConf !== 'all' && c !== topicFilterConf) return false;
       if (topicSearch.trim()) {
@@ -603,6 +617,23 @@ export function SubjectsView({
               onSubmit={(e) => handleAddSubtopic(e, subj.id)}
               className="flex flex-wrap gap-2"
             >
+              {topicTree.length > 0 && (
+                <select
+                  value={newParentTopicId}
+                  onChange={(e) => setNewParentTopicId(e.target.value)}
+                  aria-label="Parent topic"
+                  className="sd-input w-44 py-2 text-xs"
+                >
+                  <option value="">Top-level topic</option>
+                  {topicTree.map((n) => (
+                    <option key={n.topic.id} value={n.topic.id}>
+                      {'\u00A0\u00A0'.repeat(n.depth)}
+                      {n.depth > 0 ? '↳ ' : ''}
+                      {n.topic.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <input
                 type="text"
                 value={newSubtopicSpec}
@@ -614,7 +645,13 @@ export function SubjectsView({
                 type="text"
                 value={newSubtopicName}
                 onChange={(e) => setNewSubtopicName(e.target.value)}
-                placeholder={`Add a new topic to ${subj.name}…`}
+                placeholder={
+                  newParentTopicId
+                    ? `Add sub-topic under ${
+                        topics.find((t) => t.id === newParentTopicId)?.name || 'parent'
+                      }…`
+                    : `Add a new topic to ${subj.name}…`
+                }
                 className="sd-input min-w-0 flex-1 py-2 text-sm"
               />
               <button
@@ -622,7 +659,7 @@ export function SubjectsView({
                 className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap shrink-0"
               >
                 <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Add Topic</span>
+                <span>{newParentTopicId ? 'Add Sub-topic' : 'Add Topic'}</span>
               </button>
             </form>
 
@@ -703,7 +740,7 @@ export function SubjectsView({
           </section>
 
           {/* Topics List */}
-          {visibleTopics.length === 0 ? (
+          {visibleTopicNodes.length === 0 ? (
             <div className="sd-card p-8 text-center text-sm text-[var(--mute)]">
               {topics.length === 0
                 ? `No topics in ${subj.name} yet. Add your first syllabus topic above.`
@@ -711,7 +748,8 @@ export function SubjectsView({
             </div>
           ) : (
             <div className="sd-card divide-y divide-[var(--line)] overflow-hidden">
-              {visibleTopics.map((tp) => {
+              {visibleTopicNodes.map((node) => {
+                const tp = node.topic;
                 const conf = getTopicConfidence(tp);
                 const topicCardsCount = cards.filter((c) => c.topicId === tp.id).length;
                 const isEditingThisTopic = editingTopicId === tp.id;
@@ -719,9 +757,21 @@ export function SubjectsView({
                 return (
                   <div
                     key={tp.id}
-                    className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm transition-colors hover:bg-[var(--bg)]/60 sm:px-5"
+                    className={`flex flex-wrap items-center justify-between gap-3 py-3 pr-4 text-sm transition-colors hover:bg-[var(--bg)]/60 sm:pr-5 ${
+                      node.depth === 0
+                        ? 'pl-4 sm:pl-5'
+                        : node.depth === 1
+                        ? 'pl-9 sm:pl-11'
+                        : 'pl-14 sm:pl-16'
+                    }`}
                   >
                     <div className="flex min-w-0 flex-1 items-center gap-3">
+                      {node.depth > 0 && (
+                        <CornerDownRight
+                          className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]"
+                          aria-hidden="true"
+                        />
+                      )}
                       <button
                         type="button"
                         onClick={() =>
@@ -778,6 +828,12 @@ export function SubjectsView({
                         </button>
                       )}
 
+                      {node.childCount > 0 && (
+                        <span className="font-mono-num shrink-0 text-xs text-[var(--e3)]">
+                          · {node.childCount} sub-topic{node.childCount === 1 ? '' : 's'}
+                        </span>
+                      )}
+
                       {topicCardsCount > 0 && (
                         <span className="font-mono-num shrink-0 text-xs text-[var(--mute)]">
                           · {topicCardsCount} cards
@@ -814,6 +870,16 @@ export function SubjectsView({
                           </button>
                         ))}
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setNewParentTopicId(tp.id)}
+                        title={`Add a sub-topic under ${tp.name}`}
+                        className="sd-btn px-2 py-1 text-xs whitespace-nowrap shrink-0"
+                      >
+                        <Plus className="h-3 w-3" aria-hidden="true" />
+                        <span>Sub-topic</span>
+                      </button>
 
                       <button
                         type="button"

@@ -406,6 +406,19 @@ export function copySharedItemIntoWorkspace(
       }
     }
 
+    // Re-link any sub-topics whose parentTopicName was shared
+    for (const tp of sp.topics) {
+      if (!tp.parentTopicName) continue;
+      const child = topicMap.get(tp.name.toLowerCase());
+      const parent = topicMap.get(tp.parentTopicName.toLowerCase());
+      if (child && parent && child.id !== parent.id && !child.parentTopicId) {
+        const idx = next.topics.findIndex((x) => x.id === child.id);
+        if (idx >= 0) {
+          next.topics[idx] = { ...next.topics[idx], parentTopicId: parent.id };
+        }
+      }
+    }
+
     let cardsAdded = 0;
     const existingQ = new Set(next.flashcards.map((c) => `${c.subjectId}::${c.q.toLowerCase()}`));
     for (const c of sp.cards) {

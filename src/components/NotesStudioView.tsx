@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowRight,
   ArrowUp,
   ArrowUpDown,
@@ -11,9 +12,11 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  CornerDownRight,
   Edit3,
   Eye,
   EyeOff,
+  FolderPlus,
   Globe,
   Layers,
   ListPlus,
@@ -33,7 +36,12 @@ import {
   groupSectionPoints,
 } from '../lib/noteFormat';
 import { parseBulkTimelineNodes } from '../lib/smartImporter';
-import { makeId } from '../lib/workspaceStore';
+import {
+  buildTopicTreeList,
+  deleteTopicPromotingChildren,
+  getTopicDescendantIds,
+  makeId,
+} from '../lib/workspaceStore';
 import {
   StructuredNoteData,
   StudyFlashcard,
@@ -178,6 +186,11 @@ export function NotesStudioView({
     [workspace.topics, activeSubject]
   );
 
+  const topicTreeNodes = useMemo(
+    () => buildTopicTreeList(subjectTopics),
+    [subjectTopics]
+  );
+
   const isHistorySubject = Boolean(
     activeSubject && /\bhistory\b/i.test(activeSubject.name.trim())
   );
@@ -194,6 +207,9 @@ export function NotesStudioView({
   const [viewMode, setViewMode] = useState<'read' | 'edit' | 'timeline'>('read');
   const [newTopicName, setNewTopicName] = useState('');
   const [addingTopic, setAddingTopic] = useState(false);
+  const [addingParentTopicId, setAddingParentTopicId] = useState<string | null>(null);
+  const [collapsedTopicIds, setCollapsedTopicIds] = useState<Set<string>>(() => new Set());
+  const [confirmDeleteTopicId, setConfirmDeleteTopicId] = useState<string | null>(null);
   const [cardsFeedback, setCardsFeedback] = useState<string | null>(null);
   const [showLegacyHtml, setShowLegacyHtml] = useState(false);
   const [glossaryExpanded, setGlossaryExpanded] = useState(false);
@@ -252,15 +268,56 @@ export function NotesStudioView({
   }, [activeSubject, selectedSubjectId, onSelectSubjectId]);
 
   const activeTopic = useMemo(() => {
-    if (!subjectTopics.length) return null;
-    return subjectTopics.find((t) => t.id === selectedTopicId) || subjectTopics[0];
-  }, [subjectTopics, selectedTopicId]);
+    if (!topicTreeNodes.length) return null;
+    return (
+      topicTreeNodes.find((n) => n.topic.id === selectedTopicId)?.topic ||
+      topicTreeNodes[0].topic
+    );
+  }, [topicTreeNodes, selectedTopicId]);
+
+  const activeTreeNode = useMemo(() => {
+    if (!activeTopic) return null;
+    return topicTreeNodes.find((n) => n.topic.id === activeTopic.id) || null;
+  }, [topicTreeNodes, activeTopic]);
+
+  const directChildTopics = useMemo(() => {
+    if (!activeTopic) return [];
+    return subjectTopics.filter((t) => t.parentTopicId === activeTopic.id);
+  }, [subjectTopics, activeTopic]);
+
+  const siblingTopics = useMemo(() => {
+    if (!activeTopic) return [];
+    const pid = activeTopic.parentTopicId || '';
+    return subjectTopics.filter((t) => (t.parentTopicId || '') === pid);
+  }, [subjectTopics, activeTopic]);
+
+  const parentTopicOptionsForEditor = useMemo(() => {
+    if (!activeTopic) return [];
+    const excluded = getTopicDescendantIds(subjectTopics, activeTopic.id);
+    excluded.add(activeTopic.id);
+    return topicTreeNodes
+      .filter((n) => !excluded.has(n.topic.id))
+      .map((n) => ({
+        id: n.topic.id,
+        label: `${'\u00A0\u00A0'.repeat(n.depth)}${n.depth > 0 ? '↳ ' : ''}${n.topic.name}`,
+      }));
+  }, [activeTopic, subjectTopics, topicTreeNodes]);
 
   useEffect(() => {
     if (activeTopic && activeTopic.id !== selectedTopicId) {
       setSelectedTopicId(activeTopic.id);
     }
+    if (activeTreeNode && activeTreeNode.ancestors.length > 0) {
+      setCollapsedTopicIds((prev) => {
+        const needsExpand = activeTreeNode.ancestors.some((a) => prev.has(a.id));
+        if (!needsExpand) return prev;
+        const next = new Set(prev);
+        for (const a of activeTreeNode.ancestors) next.delete(a.id);
+        return next;
+      });
+    }
     setCardsFeedback(null);
+    setConfirmDeleteTopicId(null);
     setShowLegacyHtml(false);
     setEditingEventId(null);
     setTimelineEraFilter('ALL');
@@ -271,7 +328,7 @@ export function NotesStudioView({
     if (viewMode === 'timeline' && !isHistorySubject) {
       setViewMode('read');
     }
-  }, [activeTopic, isHistorySubject, selectedTopicId, viewMode]);
+  }, [activeTopic, activeTreeNode, isHistorySubject, selectedTopicId, viewMode]);
 
   const updateTopic = (topicId: string, updater: (t: StudyTopic) => StudyTopic) => {
     onUpdateWorkspace((prev) => ({
@@ -292,12 +349,49 @@ export function NotesStudioView({
     }));
   };
 
+  const toggleTopicCollapsed = (topicId: string) => {
+    setCollapsedTopicIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(topicId)) next.delete(topicId);
+      else next.add(topicId);
+      return next;
+    });
+  };
+
+  const startAddingTopic = (parentId: string | null) => {
+    if (sidebarCompressed) {
+      setSidebarCompressed(false);
+      try {
+        localStorage.setItem('studydeck_notes_sidebar_collapsed', '0');
+      } catch {
+        // ignore
+      }
+    }
+    if (parentId) {
+      setCollapsedTopicIds((prev) => {
+        if (!prev.has(parentId)) return prev;
+        const next = new Set(prev);
+        next.delete(parentId);
+        return next;
+      });
+    }
+    setAddingParentTopicId(parentId);
+    setNewTopicName('');
+    setAddingTopic(true);
+  };
+
   const handleAddTopic = (e: FormEvent) => {
     e.preventDefault();
     if (!activeSubject || !newTopicName.trim()) return;
+    const validParentId =
+      addingParentTopicId &&
+      subjectTopics.some((t) => t.id === addingParentTopicId)
+        ? addingParentTopicId
+        : undefined;
     const created: StudyTopic = {
       id: makeId('top'),
       subjectId: activeSubject.id,
+      ...(validParentId ? { parentTopicId: validParentId } : {}),
       name: newTopicName.trim(),
       completed: false,
       notes: createEmptyStructuredNote(),
@@ -308,10 +402,37 @@ export function NotesStudioView({
       topics: [...prev.topics, created],
       updatedAt: new Date().toISOString(),
     }));
+    if (validParentId) {
+      setCollapsedTopicIds((prev) => {
+        if (!prev.has(validParentId)) return prev;
+        const next = new Set(prev);
+        next.delete(validParentId);
+        return next;
+      });
+    }
     setSelectedTopicId(created.id);
     setNewTopicName('');
+    setAddingParentTopicId(null);
     setAddingTopic(false);
     setViewMode('edit');
+  };
+
+  const handleDeleteTopic = (topicId: string) => {
+    const idx = topicTreeNodes.findIndex((n) => n.topic.id === topicId);
+    const nextFallback =
+      topicTreeNodes[idx + 1]?.topic.id ||
+      topicTreeNodes[idx - 1]?.topic.id ||
+      '';
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      topics: deleteTopicPromotingChildren(prev.topics, topicId),
+      flashcards: prev.flashcards.filter((c) => c.topicId !== topicId),
+      updatedAt: new Date().toISOString(),
+    }));
+    setConfirmDeleteTopicId(null);
+    if (selectedTopicId === topicId) {
+      setSelectedTopicId(nextFallback);
+    }
   };
 
   const handleMakeFlashcardsFromTerms = () => {
@@ -617,40 +738,40 @@ export function NotesStudioView({
             <div className="hidden h-px w-6 bg-[var(--line)] lg:block" />
 
             <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto lg:w-full lg:flex-col lg:overflow-x-visible">
-              {subjectTopics.map((tp, idx) => {
-                const selected = tp.id === activeTopic?.id;
-                return (
-                  <button
-                    key={tp.id}
-                    type="button"
-                    onClick={() => setSelectedTopicId(tp.id)}
-                    title={tp.name}
-                    aria-label={tp.name}
-                    className={`font-mono-num flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border text-xs font-bold transition-colors ${
-                      selected
-                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_15%,var(--bg))] text-[var(--e3)]'
-                        : tp.completed
-                        ? 'border-[var(--ok)]/50 bg-[var(--bg)] text-[var(--ok)]'
-                        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
-                    }`}
-                  >
-                    {idx + 1}
-                  </button>
-                );
-              })}
+              {(() => {
+                let rootCounter = 0;
+                return topicTreeNodes.map((node) => {
+                  const tp = node.topic;
+                  const selected = tp.id === activeTopic?.id;
+                  if (node.depth === 0) rootCounter += 1;
+                  const fullLabel = [...node.ancestors.map((a) => a.name), tp.name].join(' › ');
+                  return (
+                    <button
+                      key={tp.id}
+                      type="button"
+                      onClick={() => setSelectedTopicId(tp.id)}
+                      title={fullLabel}
+                      aria-label={fullLabel}
+                      className={`font-mono-num flex shrink-0 cursor-pointer items-center justify-center rounded-lg border font-bold transition-colors ${
+                        node.depth > 0 ? 'h-6 w-6 text-[10px]' : 'h-8 w-8 text-xs'
+                      } ${
+                        selected
+                          ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_15%,var(--bg))] text-[var(--e3)]'
+                          : tp.completed
+                          ? 'border-[var(--ok)]/50 bg-[var(--bg)] text-[var(--ok)]'
+                          : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                      }`}
+                    >
+                      {node.depth === 0 ? rootCounter : '↳'}
+                    </button>
+                  );
+                });
+              })()}
             </div>
 
             <button
               type="button"
-              onClick={() => {
-                setSidebarCompressed(false);
-                try {
-                  localStorage.setItem('studydeck_notes_sidebar_collapsed', '0');
-                } catch {
-                  // ignore
-                }
-                setAddingTopic(true);
-              }}
+              onClick={() => startAddingTopic(null)}
               title="Add new topic"
               aria-label="Expand and add topic"
               className="sd-btn-pri h-8 w-8 shrink-0 p-0"
@@ -704,7 +825,13 @@ export function NotesStudioView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAddingTopic((v) => !v)}
+                  onClick={() => {
+                    if (addingTopic && !addingParentTopicId) {
+                      setAddingTopic(false);
+                    } else {
+                      startAddingTopic(null);
+                    }
+                  }}
                   className="sd-btn-pri px-2 py-1 text-[11px] whitespace-nowrap"
                 >
                   <Plus className="h-3 w-3" aria-hidden="true" />
@@ -718,54 +845,147 @@ export function NotesStudioView({
                 onSubmit={handleAddTopic}
                 className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5"
               >
+                {topicTreeNodes.length > 0 && (
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                    Parent topic
+                    <select
+                      value={addingParentTopicId || ''}
+                      onChange={(e) => setAddingParentTopicId(e.target.value || null)}
+                      className="sd-input mt-1 py-1 text-xs font-medium normal-case tracking-normal"
+                    >
+                      <option value="">Top-level topic</option>
+                      {topicTreeNodes.map((n) => (
+                        <option key={n.topic.id} value={n.topic.id}>
+                          {'\u00A0\u00A0'.repeat(n.depth)}
+                          {n.depth > 0 ? '↳ ' : ''}
+                          {n.topic.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <input
                   type="text"
                   autoFocus
                   value={newTopicName}
                   onChange={(e) => setNewTopicName(e.target.value)}
-                  placeholder="Topic title…"
+                  placeholder={addingParentTopicId ? 'Sub-topic title…' : 'Topic title…'}
                   className="sd-input py-1.5 text-xs"
                 />
                 <div className="flex justify-end gap-1.5">
                   <button
                     type="button"
-                    onClick={() => setAddingTopic(false)}
+                    onClick={() => {
+                      setAddingTopic(false);
+                      setAddingParentTopicId(null);
+                    }}
                     className="sd-btn px-2 py-1 text-[11px]"
                   >
                     Cancel
                   </button>
                   <button type="submit" className="sd-btn-pri px-2.5 py-1 text-[11px]">
-                    Create
+                    {addingParentTopicId ? 'Add Sub-topic' : 'Create'}
                   </button>
                 </div>
               </form>
             )}
 
-            {/* Topic List */}
+            {/* Hierarchical Topic Tree List */}
             <div className="flex gap-1.5 overflow-x-auto pb-1 lg:flex-col lg:overflow-x-visible lg:pb-0">
-              {subjectTopics.map((tp) => {
-                const selected = tp.id === activeTopic?.id;
-                return (
-                  <button
-                    key={tp.id}
-                    type="button"
-                    onClick={() => setSelectedTopicId(tp.id)}
-                    className={`flex shrink-0 cursor-pointer items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-colors lg:w-full ${
-                      selected
-                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))] font-bold text-[var(--ink)]'
-                        : 'border-transparent bg-transparent font-semibold text-[var(--mute)] hover:bg-[var(--bg)] hover:text-[var(--ink)]'
-                    }`}
-                  >
-                    <span className="truncate">{tp.name}</span>
-                    {tp.completed && (
-                      <CheckCircle2
-                        className="h-3.5 w-3.5 shrink-0 text-[var(--ok)]"
-                        aria-label="Topic studied"
-                      />
-                    )}
-                  </button>
-                );
-              })}
+              {topicTreeNodes
+                .filter(
+                  (node) => !node.ancestors.some((anc) => collapsedTopicIds.has(anc.id))
+                )
+                .map((node) => {
+                  const tp = node.topic;
+                  const selected = tp.id === activeTopic?.id;
+                  const isCollapsed = collapsedTopicIds.has(tp.id);
+                  const indentClass =
+                    node.depth === 0
+                      ? ''
+                      : node.depth === 1
+                      ? 'lg:pl-4'
+                      : node.depth === 2
+                      ? 'lg:pl-7'
+                      : 'lg:pl-9';
+
+                  return (
+                    <div
+                      key={tp.id}
+                      className={`group flex shrink-0 items-center gap-1 rounded-xl border pr-1 transition-colors lg:w-full ${indentClass} ${
+                        selected
+                          ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))]'
+                          : 'border-transparent hover:bg-[var(--bg)]'
+                      }`}
+                    >
+                      {node.childCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleTopicCollapsed(tp.id)}
+                          aria-label={
+                            isCollapsed
+                              ? `Expand sub-topics of ${tp.name}`
+                              : `Collapse sub-topics of ${tp.name}`
+                          }
+                          className="ml-1 flex h-6 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-[var(--mute)] hover:text-[var(--ink)]"
+                        >
+                          {isCollapsed ? (
+                            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                          ) : (
+                            <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                      ) : node.depth > 0 ? (
+                        <CornerDownRight
+                          className="ml-1.5 h-3 w-3 shrink-0 text-[var(--mute)]/60"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <span className="hidden w-1.5 shrink-0 lg:block" aria-hidden="true" />
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTopicId(tp.id)}
+                        className={`flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-1.5 py-2 pr-1 text-left text-xs ${
+                          selected
+                            ? 'font-bold text-[var(--ink)]'
+                            : 'font-semibold text-[var(--mute)] hover:text-[var(--ink)]'
+                        }`}
+                      >
+                        <span className="truncate">{tp.name}</span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          {node.childCount > 0 && (
+                            <span
+                              title={`${node.childCount} sub-topic${node.childCount === 1 ? '' : 's'}`}
+                              className="font-mono-num rounded bg-[var(--bg)] px-1 py-0.5 text-[10px] font-semibold text-[var(--mute)]"
+                            >
+                              {node.childCount}
+                            </span>
+                          )}
+                          {tp.completed && (
+                            <CheckCircle2
+                              className="h-3.5 w-3.5 shrink-0 text-[var(--ok)]"
+                              aria-label="Topic studied"
+                            />
+                          )}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => startAddingTopic(tp.id)}
+                        title={`Add sub-topic under ${tp.name}`}
+                        aria-label={`Add sub-topic under ${tp.name}`}
+                        className={`hidden h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-lg text-[var(--mute)] transition-opacity hover:bg-[var(--card)] hover:text-[var(--e3)] lg:flex ${
+                          selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        }`}
+                      >
+                        <Plus className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    </div>
+                  );
+                })}
               {subjectTopics.length === 0 && (
                 <div className="rounded-xl border border-dashed border-[var(--line)] p-3 text-xs text-[var(--mute)]">
                   No topics in {activeSubject?.name}. Click &ldquo;+ Topic&rdquo; above.
@@ -798,18 +1018,32 @@ export function NotesStudioView({
             {/* Topic Header & Action Toolbar */}
             <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] pb-4">
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--mute)]">
                   {sidebarCompressed && (
-                    <button
-                      type="button"
-                      onClick={toggleSidebarCompressed}
-                      className="cursor-pointer font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
-                    >
-                      Show Topics ({subjectTopics.length})
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={toggleSidebarCompressed}
+                        className="cursor-pointer font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                      >
+                        Show Topics ({subjectTopics.length})
+                      </button>
+                      <span aria-hidden="true">·</span>
+                    </>
                   )}
-                  {sidebarCompressed && <span aria-hidden="true">·</span>}
                   <span>{activeSubject?.name}</span>
+                  {activeTreeNode?.ancestors.map((anc) => (
+                    <span key={anc.id} className="inline-flex items-center gap-1.5">
+                      <ChevronRight className="h-3 w-3 opacity-70" aria-hidden="true" />
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTopicId(anc.id)}
+                        className="cursor-pointer font-semibold text-[var(--e3)] hover:underline"
+                      >
+                        {anc.name}
+                      </button>
+                    </span>
+                  ))}
                   {activeTopic.specCode && (
                     <>
                       <span aria-hidden="true">·</span>
@@ -867,6 +1101,16 @@ export function NotesStudioView({
 
                 <button
                   type="button"
+                  onClick={() => startAddingTopic(activeTopic.id)}
+                  title={`Create a sub-topic under ${activeTopic.name}`}
+                  className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0"
+                >
+                  <FolderPlus className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                  <span>+ Sub-topic</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() =>
                     updateTopic(activeTopic.id, (t) => ({ ...t, completed: !t.completed }))
                   }
@@ -886,8 +1130,51 @@ export function NotesStudioView({
                   <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Share</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConfirmDeleteTopicId((cur) =>
+                      cur === activeTopic.id ? null : activeTopic.id
+                    )
+                  }
+                  title="Delete topic"
+                  aria-label={`Delete ${activeTopic.name}`}
+                  className="sd-btn h-8 w-8 p-0 text-[var(--bad)] shrink-0"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
               </div>
             </div>
+
+            {confirmDeleteTopicId === activeTopic.id && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--bad)]/40 bg-[color-mix(in_srgb,var(--bad)_7%,var(--card))] px-4 py-2.5 text-xs">
+                <span className="font-semibold text-[var(--ink)]">
+                  Delete &ldquo;{activeTopic.name}&rdquo;?
+                  {directChildTopics.length > 0
+                    ? ` Its ${directChildTopics.length} sub-topic${
+                        directChildTopics.length === 1 ? '' : 's'
+                      } will move up one level and stay safe.`
+                    : ' Any notes and flashcards linked to this topic will be removed.'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteTopicId(null)}
+                    className="sd-btn px-2.5 py-1 text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteTopic(activeTopic.id)}
+                    className="cursor-pointer rounded-lg bg-[var(--bad)] px-3 py-1 text-xs font-bold text-white hover:opacity-90"
+                  >
+                    Delete Topic
+                  </button>
+                </div>
+              </div>
+            )}
 
             {cardsFeedback && (
               <div
@@ -956,6 +1243,91 @@ export function NotesStudioView({
                       </p>
                     </section>
                   ) : null}
+
+                  {/* Nested Sub-topics Index Card */}
+                  {directChildTopics.length > 0 && (
+                    <section className="sd-card overflow-hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-5 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <CornerDownRight
+                            className="h-4 w-4 text-[var(--e3)]"
+                            aria-hidden="true"
+                          />
+                          <h2 className="font-display text-sm font-bold text-[var(--ink)] sm:text-base">
+                            Sub-topics ({directChildTopics.length})
+                          </h2>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {populatedSections.length === 0 && !activeTopic.notes.summary.trim() && (
+                            <button
+                              type="button"
+                              onClick={() => setViewMode('edit')}
+                              className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                            >
+                              <Edit3 className="h-3 w-3" aria-hidden="true" />
+                              <span>Write Overview</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => startAddingTopic(activeTopic.id)}
+                            className="sd-btn-pri px-2.5 py-1 text-xs whitespace-nowrap"
+                          >
+                            <Plus className="h-3 w-3" aria-hidden="true" />
+                            <span>Add Sub-topic</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid gap-px bg-[var(--line)] sm:grid-cols-2">
+                        {directChildTopics.map((child) => {
+                          const childSubCount = subjectTopics.filter(
+                            (t) => t.parentTopicId === child.id
+                          ).length;
+                          const secCount = child.notes.sections.filter(
+                            (s) => s.points.length > 0
+                          ).length;
+                          return (
+                            <button
+                              key={child.id}
+                              type="button"
+                              onClick={() => setSelectedTopicId(child.id)}
+                              className="flex cursor-pointer items-center justify-between gap-3 bg-[var(--card)] px-4 py-3 text-left transition-colors hover:bg-[var(--bg)]"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  {child.specCode && (
+                                    <span className="font-mono-num shrink-0 text-[11px] font-bold text-[var(--e3)]">
+                                      {child.specCode}
+                                    </span>
+                                  )}
+                                  <span className="truncate text-sm font-bold text-[var(--ink)]">
+                                    {child.name}
+                                  </span>
+                                  {child.completed && (
+                                    <CheckCircle2
+                                      className="h-3.5 w-3.5 shrink-0 text-[var(--ok)]"
+                                      aria-label="Studied"
+                                    />
+                                  )}
+                                </div>
+                                <div className="mt-0.5 truncate text-xs text-[var(--mute)]">
+                                  {child.notes.summary.trim()
+                                    ? child.notes.summary.trim()
+                                    : `${secCount} section${secCount === 1 ? '' : 's'} · ${estimateNoteReadingMinutes(child.notes)} min read${
+                                        childSubCount > 0 ? ` · ${childSubCount} sub-topic${childSubCount === 1 ? '' : 's'}` : ''
+                                      }`}
+                                </div>
+                              </div>
+                              <ArrowRight
+                                className="h-4 w-4 shrink-0 text-[var(--mute)]"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
 
                   {/* Specification Sections */}
                   {populatedSections.length > 0 ? (
@@ -1181,7 +1553,8 @@ export function NotesStudioView({
                     </div>
                   ) : !activeTopic.notes.summary.trim() &&
                     !activeTopic.notes.keyTerms.length &&
-                    !activeTopic.notes.legacyHtml ? (
+                    !activeTopic.notes.legacyHtml &&
+                    directChildTopics.length === 0 ? (
                     <div className="sd-card p-8 text-center">
                       <p className="text-sm text-[var(--mute)]">
                         This topic doesn&apos;t have structured notes yet.
@@ -1346,6 +1719,53 @@ export function NotesStudioView({
                       )}
                     </div>
                   )}
+                  {/* Parent / Sibling Navigation Strip for Sub-topics */}
+                  {(activeTreeNode?.parentTopic || siblingTopics.length > 1) && (() => {
+                    const sibIdx = siblingTopics.findIndex((t) => t.id === activeTopic.id);
+                    const prevSib = sibIdx > 0 ? siblingTopics[sibIdx - 1] : null;
+                    const nextSib =
+                      sibIdx >= 0 && sibIdx < siblingTopics.length - 1
+                        ? siblingTopics[sibIdx + 1]
+                        : null;
+                    return (
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-4 text-xs">
+                        <div>
+                          {activeTreeNode?.parentTopic && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTopicId(activeTreeNode.parentTopic!.id)}
+                              className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                            >
+                              <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>Back to {activeTreeNode.parentTopic.name}</span>
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {prevSib && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTopicId(prevSib.id)}
+                              className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                            >
+                              <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span className="max-w-[160px] truncate">{prevSib.name}</span>
+                            </button>
+                          )}
+                          {nextSib && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTopicId(nextSib.id)}
+                              className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                            >
+                              <span className="max-w-[160px] truncate">{nextSib.name}</span>
+                              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}
@@ -1356,13 +1776,25 @@ export function NotesStudioView({
                 topicId={activeTopic.id}
                 topicName={activeTopic.name}
                 specCode={activeTopic.specCode}
+                parentTopicId={activeTopic.parentTopicId}
+                parentTopicOptions={parentTopicOptionsForEditor}
                 notes={activeTopic.notes}
                 onChangeTopicMeta={(fields) =>
-                  updateTopic(activeTopic.id, (t) => ({
-                    ...t,
-                    ...(fields.name !== undefined ? { name: fields.name } : {}),
-                    ...(fields.specCode !== undefined ? { specCode: fields.specCode } : {}),
-                  }))
+                  updateTopic(activeTopic.id, (t) => {
+                    const next: StudyTopic = {
+                      ...t,
+                      ...(fields.name !== undefined ? { name: fields.name } : {}),
+                      ...(fields.specCode !== undefined ? { specCode: fields.specCode } : {}),
+                    };
+                    if (fields.parentTopicId !== undefined) {
+                      if (fields.parentTopicId) {
+                        next.parentTopicId = fields.parentTopicId;
+                      } else {
+                        delete next.parentTopicId;
+                      }
+                    }
+                    return next;
+                  })
                 }
                 onChangeNotes={replaceActiveNote}
                 onMakeFlashcards={handleMakeFlashcardsFromTerms}
