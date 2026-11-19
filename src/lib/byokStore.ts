@@ -7,13 +7,14 @@ export interface ByokConfig {
   apiKey: string;
   baseUrl?: string;
   model?: string;
+  verifiedModel?: string;
   updatedAt?: string;
 }
 
 const BYOK_STORAGE_KEY = 'studydeck_byok_config_v1';
 const BYOK_EVENT = 'studydeck:byok-changed';
 
-export const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-4-hydrogen';
+export const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-3.1-flash-lite';
 export const DEFAULT_GROK_BASE_URL = 'https://api.x.ai/v1';
 export const DEFAULT_GROK_MODEL = 'grok-3-mini';
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
@@ -37,6 +38,8 @@ export function getByokConfig(): ByokConfig | null {
       apiKey,
       baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl.trim() : '',
       model: typeof parsed.model === 'string' ? parsed.model.trim() : '',
+      verifiedModel:
+        typeof parsed.verifiedModel === 'string' ? parsed.verifiedModel.trim() : undefined,
       updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
     };
   } catch {
@@ -58,6 +61,7 @@ export function saveByokConfig(next: ByokConfig | null): void {
             ? (next.baseUrl || '').trim() || undefined
             : undefined,
         model: (next.model || '').trim() || undefined,
+        verifiedModel: (next.verifiedModel || '').trim() || undefined,
         updatedAt: new Date().toISOString(),
       };
       localStorage.setItem(BYOK_STORAGE_KEY, JSON.stringify(payload));

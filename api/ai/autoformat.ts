@@ -9,6 +9,10 @@ interface VercelRequest {
 interface VercelResponse {
   status(code: number): VercelResponse;
   json(data: unknown): void;
+  setHeader(name: string, value: string): void;
+  write(chunk: string): boolean;
+  end(chunk?: string): void;
+  flushHeaders?: () => void;
 }
 
 type UserAiProvider = 'gemini' | 'grok' | 'openai-compatible';
@@ -18,6 +22,7 @@ interface UserAiConfig {
   apiKey: string;
   baseUrl?: string;
   model?: string;
+  verifiedModel?: string;
 }
 
 interface RawCompactSchemaPayload {
@@ -31,12 +36,12 @@ interface RawCompactSchemaPayload {
   c?: Array<{ q?: string; a?: string; s?: string }>;
 }
 
-const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-4-hydrogen';
+const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-3.1-flash-lite';
 const BYOK_GEMINI_CANDIDATES = [
-  'gemini-4-hydrogen',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-4-hydrogen',
 ] as const;
 const DEFAULT_GROK_BASE_URL = 'https://api.x.ai/v1';
 const DEFAULT_GROK_MODEL = 'grok-3-mini';
@@ -80,6 +85,8 @@ function parseUserAiConfig(
     baseUrl:
       (typeof obj.baseUrl === 'string' ? obj.baseUrl.trim() : '') || hdrBaseUrl || undefined,
     model: (typeof obj.model === 'string' ? obj.model.trim() : '') || hdrModel || undefined,
+    verifiedModel:
+      typeof obj.verifiedModel === 'string' ? obj.verifiedModel.trim() || undefined : undefined,
   };
 }
 
@@ -90,18 +97,41 @@ function sanitizeAllowedModel(model: string | undefined, fallback: string): stri
   return m;
 }
 
+function buildGeminiCandidateList(config: UserAiConfig): string[] {
+  const customModel = config.model?.trim()
+    ? sanitizeAllowedModel(config.model, DEFAULT_GEMINI_FORMAT_MODEL)
+    : '';
+  if (customModel) return [customModel];
+
+  const list: string[] = [...BYOK_GEMINI_CANDIDATES];
+  const verified = config.verifiedModel?.trim();
+  if (verified && !/^gemini-(?:1\.5|2\.0|pro\b)/i.test(verified)) {
+    const filtered = list.filter((m) => m !== verified);
+    // Keep flash-lite first unless verifiedModel was already one of the fast models
+    if (verified !== 'gemini-4-hydrogen') {
+      return [verified, ...filtered];
+    }
+  }
+  return list;
+}
+
 function normalizeOpenAiBaseUrl(baseUrl?: string): string {
   const clean = (baseUrl || DEFAULT_OPENAI_BASE_URL).trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(clean)) return DEFAULT_OPENAI_BASE_URL;
   return clean;
 }
 
-function getGeminiThinkingConfig(model: string): { thinkingConfig?: { thinkingLevel: ThinkingLevel } } {
-  if (/^gemini-4-/i.test(model)) {
-    return { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } };
-  }
+function getGeminiThinkingConfig(model: string): {
+  thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
+} {
   if (/^gemini-3\./i.test(model)) {
     return { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } };
+  }
+  if (/^gemini-2\.5-/i.test(model)) {
+    return { thinkingConfig: { thinkingBudget: 0 } };
+  }
+  if (/^gemini-4-/i.test(model)) {
+    return { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } };
   }
   return {};
 }
@@ -193,8 +223,8 @@ function extractReadableErrorMessage(err: unknown, config: UserAiConfig): string
   if (/RESOURCE_EXHAUSTED|429|quota|rate limit|insufficient_quota/i.test(detail)) {
     return 'API quota or rate limit exceeded for this key. Wait a minute or check billing/credits on your provider account.';
   }
-  if (/TimeoutError|AbortError|timed out/i.test(detail)) {
-    return 'Connection to the AI provider timed out. Please try again.';
+  if (/TimeoutError|AbortError|timed out|aborted/i.test(detail)) {
+    return 'AI request timed out. Try shorter study text or retry in a moment.';
   }
   if (/fetch failed|ENOTFOUND|ECONNREFUSED/i.test(detail)) {
     return config.provider === 'openai-compatible'
@@ -227,19 +257,27 @@ function extractJsonPayload(rawText: string): RawCompactSchemaPayload {
   }
 }
 
-function compactInputForAi(rawText: string, maxChars = 18000): string {
+function compactInputForAi(rawText: string, maxChars = 11000): string {
   const noiseLine =
     /^(?:skip to (?:main )?content|cookie (?:policy|preferences|settings)|accept all cookies|sign in|log in|subscribe|advertisement|menu|breadcrumbs?|back to top|all rights reserved|©\s*\d{4}|table of contents|edit section|\[edit\]|jump to navigation|share this page|print page|related topics?)$/i;
 
+  const seen = new Set<string>();
   const lines = String(rawText || '')
     .replace(/\u200B|\uFEFF/g, '')
     .replace(/\r/g, '')
+    // Strip noisy markdown hyperlink URLs while keeping anchor labels
+    .replace(/\[([^\]\n]{1,120})\]\(https?:\/\/[^)\s]+\)/g, '$1')
     .split('\n')
     .map((l) => l.replace(/[ \t]{2,}/g, ' ').trimEnd())
     .filter((l) => {
       const t = l.trim();
       if (!t) return true;
       if (noiseLine.test(t)) return false;
+      if (t.length >= 16) {
+        const key = t.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+      }
       return true;
     });
 
@@ -255,14 +293,83 @@ function compactInputForAi(rawText: string, maxChars = 18000): string {
 function getPresetDirective(preset?: string): string {
   switch (preset) {
     case 'cornell':
-      return 'Preset:Cornell(u=1-2 sentence overview;s=top cues + indented sub-bullets ↳;k=key terms).';
+      return 'Preset:Cornell(u=1-2 sentence overview;s=cues + "↳ " sub-bullets;k=key terms).';
     case 'timeline-causal':
-      return 'Preset:Timeline&Causal(chronological sections,causal chains "⇒ A → B",populate dates array e).';
+      return 'Preset:Timeline&Causal(chronological s,causal "⇒ A → B",populate e).';
     case 'compact':
-      return 'Preset:Compact(ultra-concise high-yield bullet points,merge micro-points,max brevity).';
+      return 'Preset:Compact(ultra-concise high-yield bullets,max brevity).';
     default:
-      return 'Preset:SaveMyExams(clear topic sections h,concise **Term** bullets,nested "↳ " sub-points,Markdown "| A | B |" comparison tables where contrasting,x=Examiner Tip,w=Worked Example if present).';
+      return 'Preset:SaveMyExams(2-6 crisp sections h,<=18w **Term** bullets,"↳ " sub-points,"| A | B |" tables if contrasting,optional x=Exam Tip,w=Worked Example).';
   }
+}
+
+function buildAutoformatSchema(opts: { includeTimeline: boolean; includeCards: boolean }) {
+  const properties: Record<string, unknown> = {
+    t: { type: Type.STRING, description: 'Short title' },
+    u: { type: Type.STRING, description: '1-sentence summary' },
+    s: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          h: { type: Type.STRING },
+          p: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ['h', 'p'],
+      },
+    },
+    k: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          t: { type: Type.STRING },
+          d: { type: Type.STRING },
+        },
+        required: ['t', 'd'],
+      },
+    },
+    x: { type: Type.STRING },
+    w: { type: Type.STRING },
+  };
+
+  if (opts.includeTimeline) {
+    properties.e = {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          d: { type: Type.STRING },
+          t: { type: Type.STRING },
+          x: { type: Type.STRING },
+          g: { type: Type.STRING },
+          k: { type: Type.BOOLEAN },
+        },
+        required: ['d', 't', 'x'],
+      },
+    };
+  }
+
+  if (opts.includeCards) {
+    properties.c = {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          q: { type: Type.STRING },
+          a: { type: Type.STRING },
+          s: { type: Type.STRING },
+        },
+        required: ['q', 'a'],
+      },
+    };
+  }
+
+  return {
+    type: Type.OBJECT,
+    properties,
+    required: ['u', 's', 'k'],
+  };
 }
 
 function expandCompactPayload(raw: RawCompactSchemaPayload) {
@@ -370,17 +477,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const includeTimeline = body.includeTimeline !== false;
   const detectFlowDiagrams = body.detectFlowDiagrams !== false;
   const autoTables = body.autoTables !== false;
+  const wantsStream =
+    Boolean(body.stream) || readHeader(req.headers, 'accept').includes('text/event-stream');
 
   const ruleBits = [
     getPresetDirective(preset),
-    detectFlowDiagrams ? 'Use "⇒ A → B → C" for multi-step processes.' : '',
-    autoTables ? 'Use Markdown "| H1 | H2 |" rows for comparisons/pros-cons.' : '',
-    includeTimeline ? 'Extract dated historical events into e[].' : 'Leave e=[] empty.',
-    includeCards ? 'Generate 4-10 crisp Q/A cards in c[].' : 'Leave c=[] empty.',
-    'Do NOT invent facts. Bold key terms with **term**. Sub-bullets start with "↳ ". Short strings only.',
+    detectFlowDiagrams ? 'Use "⇒ A → B → C" for flows.' : '',
+    autoTables ? 'Use Markdown "| H1 | H2 |" rows for comparisons.' : '',
+    includeTimeline ? 'Extract dated events into e[].' : '',
+    includeCards ? 'Add 4-6 crisp Q/A cards in c[].' : '',
+    'Keep output fast & high-yield: 2-6 sections, 3-6 bullets each (<=18w/bullet), 3-8 key terms max. Bold **term**, sub-bullets start "↳ ". No invented facts.',
   ]
     .filter(Boolean)
     .join(' ');
+
+  const sendSse = (payload: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  if (wantsStream) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    sendSse({ type: 'status', message: 'Compacted notes. Connecting to AI…' });
+  }
 
   try {
     if (config.provider === 'gemini') {
@@ -390,80 +511,78 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           headers: { 'User-Agent': 'aistudio-build' },
         },
       });
-      const customModel = config.model?.trim()
-        ? sanitizeAllowedModel(config.model, DEFAULT_GEMINI_FORMAT_MODEL)
-        : '';
-      const candidates = customModel ? [customModel] : [...BYOK_GEMINI_CANDIDATES];
+      const candidates = buildGeminiCandidateList(config);
+      const responseSchema = buildAutoformatSchema({ includeTimeline, includeCards });
+      const systemInstruction = `Convert raw student notes into tight revision JSON. ${ruleBits}`;
 
       let lastErr: unknown = null;
       for (let i = 0; i < candidates.length; i++) {
         const model = candidates[i];
         try {
+          if (wantsStream) {
+            sendSse({ type: 'status', model, message: `Formatting with ${model}…` });
+            const stream = await ai.models.generateContentStream({
+              model,
+              contents: compacted,
+              config: {
+                systemInstruction,
+                ...getGeminiThinkingConfig(model),
+                maxOutputTokens: model === 'gemini-4-hydrogen' ? 2560 : 2048,
+                abortSignal: AbortSignal.timeout(18000),
+                responseMimeType: 'application/json',
+                responseSchema,
+              },
+            });
+
+            let fullText = '';
+            let lastEmit = 0;
+            let inputTokens = 0;
+            let outputTokens = 0;
+            let totalTokens = 0;
+
+            for await (const chunk of stream) {
+              const delta = extractGeminiResponseText(chunk);
+              if (delta) {
+                fullText += delta;
+                const now = Date.now();
+                if (now - lastEmit >= 180) {
+                  lastEmit = now;
+                  sendSse({ type: 'progress', model, chars: fullText.length });
+                }
+              }
+              if (chunk.usageMetadata) {
+                inputTokens = Number(chunk.usageMetadata.promptTokenCount || inputTokens);
+                outputTokens = Number(chunk.usageMetadata.candidatesTokenCount || outputTokens);
+                totalTokens = Number(chunk.usageMetadata.totalTokenCount || totalTokens);
+              }
+            }
+
+            const parsed = extractJsonPayload(fullText);
+            sendSse({
+              type: 'done',
+              formatted: expandCompactPayload(parsed),
+              usage: {
+                provider: 'gemini',
+                model,
+                inputTokens,
+                outputTokens,
+                totalTokens,
+              },
+            });
+            res.end();
+            return;
+          }
+
           const response = await ai.models.generateContent({
             model,
             contents: compacted,
             config: {
-              systemInstruction: `Convert raw student notes into tight revision JSON. ${ruleBits}`,
+              systemInstruction,
               ...getGeminiThinkingConfig(model),
+              maxOutputTokens: model === 'gemini-4-hydrogen' ? 2560 : 2048,
+              abortSignal: AbortSignal.timeout(18000),
               responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  t: { type: Type.STRING, description: 'Short topic title' },
-                  u: { type: Type.STRING, description: '1-sentence summary' },
-                  s: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        h: { type: Type.STRING },
-                        p: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      },
-                      required: ['h', 'p'],
-                    },
-                  },
-                  k: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        t: { type: Type.STRING },
-                        d: { type: Type.STRING },
-                      },
-                      required: ['t', 'd'],
-                    },
-                  },
-                  x: { type: Type.STRING, description: 'Examiner tip or empty' },
-                  w: { type: Type.STRING, description: 'Worked example or empty' },
-                  e: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        d: { type: Type.STRING },
-                        t: { type: Type.STRING },
-                        x: { type: Type.STRING },
-                        g: { type: Type.STRING },
-                        k: { type: Type.BOOLEAN },
-                      },
-                      required: ['d', 't', 'x'],
-                    },
-                  },
-                  c: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        q: { type: Type.STRING },
-                        a: { type: Type.STRING },
-                        s: { type: Type.STRING },
-                      },
-                      required: ['q', 'a'],
-                    },
-                  },
-                },
-                required: ['u', 's', 'k'],
-              },
+              responseSchema,
             },
           });
 
@@ -497,16 +616,126 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       (config.model || (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL)).trim() ||
       (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL);
 
-    const sysPrompt =
-      `Return ONLY strict JSON with compact keys: ` +
-      `{"t":"title","u":"1-sentence summary","s":[{"h":"Section","p":["**Term**: fact","↳ sub-point"]}],` +
-      `"k":[{"t":"term","d":"def"}],"x":"examiner tip or empty","w":"worked example or empty",` +
-      `"e":[{"d":"date","t":"event","x":"detail","g":"significance","k":false}],"c":[{"q":"question","a":"answer","s":"section"}]}. ` +
-      ruleBits;
+    const schemaHint = [
+      '"t":"title"',
+      '"u":"1-sentence summary"',
+      '"s":[{"h":"Section","p":["**Term**: fact","↳ sub-point"]}]',
+      '"k":[{"t":"term","d":"def"}]',
+      '"x":"exam tip or empty"',
+      '"w":"worked example or empty"',
+      includeTimeline ? '"e":[{"d":"date","t":"event","x":"detail","g":"sig","k":false}]' : '',
+      includeCards ? '"c":[{"q":"question","a":"answer","s":"section"}]' : '',
+    ]
+      .filter(Boolean)
+      .join(',');
+
+    const sysPrompt = `Return ONLY strict JSON {${schemaHint}}. ${ruleBits}`;
+
+    if (wantsStream) {
+      sendSse({ type: 'status', model, message: `Formatting with ${model}…` });
+      const callStream = async (withJsonFormat: boolean) => {
+        const bodyObj: Record<string, unknown> = {
+          model,
+          stream: true,
+          max_tokens: 2048,
+          messages: [
+            { role: 'system', content: sysPrompt },
+            { role: 'user', content: compacted },
+          ],
+        };
+        if (withJsonFormat) {
+          bodyObj.response_format = { type: 'json_object' };
+        }
+        return fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(22000),
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${config.apiKey}`,
+          },
+          body: JSON.stringify(bodyObj),
+        });
+      };
+
+      let apiRes = await callStream(true);
+      if (!apiRes.ok) {
+        const errText = await apiRes.text().catch(() => '');
+        if (apiRes.status === 400 && /response_format|json_object|unsupported/i.test(errText)) {
+          apiRes = await callStream(false);
+        } else {
+          throw new Error(`HTTP ${apiRes.status}: ${errText}`);
+        }
+      }
+      if (!apiRes.ok || !apiRes.body) {
+        const errText = await apiRes.text().catch(() => '');
+        throw new Error(`HTTP ${apiRes.status}: ${errText}`);
+      }
+
+      const reader = apiRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let fullContent = '';
+      let lastEmit = 0;
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let totalTokens = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const parsedChunk = JSON.parse(payload) as {
+              choices?: Array<{ delta?: { content?: string } }>;
+              usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+            };
+            const piece = parsedChunk.choices?.[0]?.delta?.content || '';
+            if (piece) {
+              fullContent += piece;
+              const now = Date.now();
+              if (now - lastEmit >= 180) {
+                lastEmit = now;
+                sendSse({ type: 'progress', model, chars: fullContent.length });
+              }
+            }
+            if (parsedChunk.usage) {
+              inputTokens = Number(parsedChunk.usage.prompt_tokens || inputTokens);
+              outputTokens = Number(parsedChunk.usage.completion_tokens || outputTokens);
+              totalTokens = Number(parsedChunk.usage.total_tokens || totalTokens);
+            }
+          } catch {
+            // ignore partial SSE line
+          }
+        }
+      }
+
+      const parsed = extractJsonPayload(fullContent);
+      sendSse({
+        type: 'done',
+        formatted: expandCompactPayload(parsed),
+        usage: {
+          provider: config.provider,
+          model,
+          inputTokens,
+          outputTokens,
+          totalTokens,
+        },
+      });
+      res.end();
+      return;
+    }
 
     const callChat = async (withJsonResponseFormat: boolean) => {
       const bodyObj: Record<string, unknown> = {
         model,
+        max_tokens: 2048,
         messages: [
           { role: 'system', content: sysPrompt },
           { role: 'user', content: compacted },
@@ -517,7 +746,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       return fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(22000),
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${config.apiKey}`,
@@ -558,6 +787,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     });
   } catch (err) {
-    res.status(502).json({ error: extractReadableErrorMessage(err, config) });
+    const msg = extractReadableErrorMessage(err, config);
+    if (wantsStream) {
+      sendSse({ type: 'error', error: msg });
+      res.end();
+      return;
+    }
+    res.status(502).json({ error: msg });
   }
 }

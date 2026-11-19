@@ -618,7 +618,10 @@ export function ProfileVaultView({
       if (!res.ok || !data.ok) {
         throw new Error(data.error || `Key verification failed (HTTP ${res.status}).`);
       }
-      saveByokConfig(payload);
+      saveByokConfig({
+        ...payload,
+        verifiedModel: data.model || undefined,
+      });
       setByokStatus({
         ok: true,
         msg: `Verified and saved (${data.model || DEFAULT_GEMINI_FORMAT_MODEL}). Ready for AI Autoformat & Live Quiz marking.`,

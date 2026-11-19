@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Calendar,
@@ -214,6 +214,9 @@ export function UniversalImportModal({
   const [fetchingUrl, setFetchingUrl] = useState(false);
   const [aiFormatting, setAiFormatting] = useState(false);
   const [aiFormattedApplied, setAiFormattedApplied] = useState(false);
+  const [aiProgressText, setAiProgressText] = useState<string | null>(null);
+  const [aiElapsedMs, setAiElapsedMs] = useState(0);
+  const aiAbortRef = useRef<AbortController | null>(null);
 
   // Google Docs state (in-memory token only)
   const [hasGoogleToken, setHasGoogleToken] = useState<boolean>(() =>
@@ -810,6 +813,32 @@ export function UniversalImportModal({
     }
   };
 
+  useEffect(() => {
+    if (!aiFormatting) {
+      setAiElapsedMs(0);
+      return;
+    }
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      setAiElapsedMs(Date.now() - started);
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [aiFormatting]);
+
+  useEffect(() => {
+    if (!open && aiAbortRef.current) {
+      aiAbortRef.current.abort();
+      aiAbortRef.current = null;
+    }
+  }, [open]);
+
+  const handleCancelAiAutoformat = () => {
+    if (aiAbortRef.current) {
+      aiAbortRef.current.abort();
+      aiAbortRef.current = null;
+    }
+  };
+
   const handleAiAutoformat = async () => {
     if (!byokConfig) {
       setErrorMsg(
@@ -819,7 +848,14 @@ export function UniversalImportModal({
     }
     if (!rawText.trim()) return;
 
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    const clientTimeout = window.setTimeout(() => controller.abort('timeout'), 35000);
+    const startedAt = Date.now();
+
     setAiFormatting(true);
+    setAiProgressText('Compacting notes & connecting…');
     setErrorMsg(null);
     setStatusNote(null);
 
@@ -833,7 +869,11 @@ export function UniversalImportModal({
 
       const res = await fetch('/api/ai/autoformat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream, application/json',
+        },
         body: JSON.stringify({
           rawText,
           preset: formatOptions.preset || 'save-my-exams',
@@ -841,42 +881,106 @@ export function UniversalImportModal({
           includeTimeline: wantsTimeline,
           detectFlowDiagrams: formatOptions.detectFlowDiagrams !== false,
           autoTables: formatOptions.autoTables !== false,
+          stream: true,
           byok: byokConfig,
         }),
       });
 
-      const data = await parseJsonResponseSafe<{
-        formatted?: {
-          title?: string;
-          summary: string;
-          sections: Array<{ heading: string; points: string[] }>;
-          keyTerms: Array<{ term: string; definition: string }>;
-          examTip: string;
-          workedExample: string;
-          timelineEvents: Array<{
-            date: string;
-            title: string;
-            detail: string;
-            significance?: string;
-            era?: string;
-            keyEvent?: boolean;
-          }>;
-          cards: Array<{ q: string; a: string; sectionName: string }>;
-        };
-        usage?: {
-          model: string;
-          inputTokens: number;
-          outputTokens: number;
-          totalTokens: number;
-        };
-        error?: string;
-      }>(res, 'AI Autoformat');
+      type FormattedData = {
+        title?: string;
+        summary: string;
+        sections: Array<{ heading: string; points: string[] }>;
+        keyTerms: Array<{ term: string; definition: string }>;
+        examTip: string;
+        workedExample: string;
+        timelineEvents: Array<{
+          date: string;
+          title: string;
+          detail: string;
+          significance?: string;
+          era?: string;
+          keyEvent?: boolean;
+        }>;
+        cards: Array<{ q: string; a: string; sectionName: string }>;
+      };
+      type UsageData = {
+        model: string;
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+      };
 
-      if (!res.ok || !data.formatted) {
-        throw new Error(data.error || `AI Autoformat failed (HTTP ${res.status}).`);
+      let formattedResult: FormattedData | undefined;
+      let usageResult: UsageData | undefined;
+
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('text/event-stream') && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() || '';
+          for (const frame of frames) {
+            const dataLines = frame
+              .split('\n')
+              .map((l) => l.trim())
+              .filter((l) => l.startsWith('data:'))
+              .map((l) => l.slice(5).trim());
+            if (!dataLines.length) continue;
+            const rawJson = dataLines.join('');
+            let ev: {
+              type?: string;
+              message?: string;
+              model?: string;
+              chars?: number;
+              formatted?: FormattedData;
+              usage?: UsageData;
+              error?: string;
+            } = {};
+            try {
+              ev = JSON.parse(rawJson);
+            } catch {
+              continue;
+            }
+
+            if (ev.type === 'status' && ev.message) {
+              setAiProgressText(ev.message);
+            } else if (ev.type === 'progress') {
+              setAiProgressText(
+                `Streaming from ${ev.model || 'AI'} (${ev.chars || 0} chars)…`
+              );
+            } else if (ev.type === 'error') {
+              throw new Error(ev.error || 'AI Autoformat failed.');
+            } else if (ev.type === 'done') {
+              formattedResult = ev.formatted;
+              usageResult = ev.usage;
+            }
+          }
+        }
+      } else {
+        const data = await parseJsonResponseSafe<{
+          formatted?: FormattedData;
+          usage?: UsageData;
+          error?: string;
+        }>(res, 'AI Autoformat');
+
+        if (!res.ok || !data.formatted) {
+          throw new Error(data.error || `AI Autoformat failed (HTTP ${res.status}).`);
+        }
+        formattedResult = data.formatted;
+        usageResult = data.usage;
       }
 
-      const f = data.formatted;
+      if (!formattedResult) {
+        throw new Error('AI Autoformat finished without formatted output. Please try again.');
+      }
+
+      const f = formattedResult;
       if (f.title && !topicNameOverride.trim()) {
         setTopicNameOverride(f.title);
       }
@@ -924,16 +1028,30 @@ export function UniversalImportModal({
       }
 
       setAiFormattedApplied(true);
-      const u = data.usage;
+      const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+      const u = usageResult;
       setStatusNote(
         u
-          ? `AI Autoformatted (${u.model} · ${u.inputTokens} in + ${u.outputTokens} out = ${u.totalTokens} tokens).`
-          : 'AI Autoformatted notes using your personal API key.'
+          ? `AI Autoformatted in ${elapsedSec}s (${u.model}${u.totalTokens ? ` · ${u.totalTokens} tokens` : ''}).`
+          : `AI Autoformatted in ${elapsedSec}s using your personal API key.`
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'AI Autoformat failed.');
+      if (controller.signal.aborted) {
+        setErrorMsg(
+          controller.signal.reason === 'timeout'
+            ? 'AI Autoformat timed out after 35s. Try shorter text or check your API key.'
+            : 'AI Autoformat cancelled.'
+        );
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : 'AI Autoformat failed.');
+      }
     } finally {
+      window.clearTimeout(clientTimeout);
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null;
+      }
       setAiFormatting(false);
+      setAiProgressText(null);
     }
   };
 
@@ -1769,25 +1887,36 @@ export function UniversalImportModal({
                         </button>
                       )}
                       {byokConfig ? (
-                        <button
-                          type="button"
-                          disabled={aiFormatting}
-                          onClick={() => void handleAiAutoformat()}
-                          className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
-                        >
-                          {aiFormatting ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                          ) : (
-                            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                        <>
+                          <button
+                            type="button"
+                            disabled={aiFormatting}
+                            onClick={() => void handleAiAutoformat()}
+                            className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            {aiFormatting ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                            <span className="font-mono-num">
+                              {aiFormatting
+                                ? `Formatting… ${(aiElapsedMs / 1000).toFixed(1)}s`
+                                : aiFormattedApplied
+                                ? 'Re-run AI Autoformat'
+                                : 'AI Autoformat (Your Key)'}
+                            </span>
+                          </button>
+                          {aiFormatting && (
+                            <button
+                              type="button"
+                              onClick={handleCancelAiAutoformat}
+                              className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                            >
+                              Cancel
+                            </button>
                           )}
-                          <span>
-                            {aiFormatting
-                              ? 'AI Formatting…'
-                              : aiFormattedApplied
-                              ? 'Re-run AI Autoformat'
-                              : 'AI Autoformat (Your Key)'}
-                          </span>
-                        </button>
+                        </>
                       ) : (
                         <button
                           type="button"
@@ -1808,6 +1937,14 @@ export function UniversalImportModal({
                       )}
                     </div>
                   </div>
+                  {aiFormatting && aiProgressText && (
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--e3)]/40 bg-[var(--bg)] px-3 py-1.5 text-xs text-[var(--ink)]">
+                      <span className="truncate font-medium">{aiProgressText}</span>
+                      <span className="font-mono-num shrink-0 font-semibold text-[var(--e3)]">
+                        {(aiElapsedMs / 1000).toFixed(1)}s
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 

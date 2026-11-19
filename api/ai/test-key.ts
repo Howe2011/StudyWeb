@@ -20,12 +20,12 @@ interface UserAiConfig {
   model?: string;
 }
 
-const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-4-hydrogen';
+const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-3.1-flash-lite';
 const BYOK_GEMINI_CANDIDATES = [
-  'gemini-4-hydrogen',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-4-hydrogen',
 ] as const;
 const DEFAULT_GROK_BASE_URL = 'https://api.x.ai/v1';
 const DEFAULT_GROK_MODEL = 'grok-3-mini';
@@ -85,12 +85,17 @@ function normalizeOpenAiBaseUrl(baseUrl?: string): string {
   return clean;
 }
 
-function getGeminiThinkingConfig(model: string): { thinkingConfig?: { thinkingLevel: ThinkingLevel } } {
+function getGeminiThinkingConfig(model: string): {
+  thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
+} {
   if (/^gemini-4-/i.test(model)) {
     return { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } };
   }
   if (/^gemini-3\./i.test(model)) {
     return { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } };
+  }
+  if (/^gemini-2\.5-/i.test(model)) {
+    return { thinkingConfig: { thinkingBudget: 0 } };
   }
   return {};
 }
@@ -251,6 +256,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               systemInstruction: 'Reply with only: OK',
               ...getGeminiThinkingConfig(model),
               maxOutputTokens: 512,
+              abortSignal: AbortSignal.timeout(10000),
             },
           });
           const text = extractGeminiResponseText(response);
