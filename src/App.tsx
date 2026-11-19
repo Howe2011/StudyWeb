@@ -16,6 +16,7 @@ import { ShareItemModal, ShareTargetConfig } from './components/ShareItemModal';
 import { Sidebar } from './components/Sidebar';
 import { SubjectsView } from './components/SubjectsView';
 import { TopBar } from './components/TopBar';
+import { OfflineIndicator } from './components/PwaControls';
 import { UniversalImportModal } from './components/UniversalImportModal';
 import {
   clearTrustedDeviceKey,
@@ -1115,6 +1116,8 @@ export default function App() {
         onUnlockWithPassphrase={handleUnlockWithPassphrase}
         onUnlockWithRecovery={handleUnlockWithRecovery}
       />
+
+      <OfflineIndicator />
     </div>
   );
 }

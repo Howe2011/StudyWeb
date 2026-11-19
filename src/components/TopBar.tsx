@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { getDeviceInfo } from '../lib/device';
 import { BOOTSTRAP_ADMIN_EMAIL } from '../lib/syncService';
+import { PWAInstallButton } from './PwaControls';
 import {
   DecryptedProfile,
   LiveTimerState,
@@ -198,6 +199,8 @@ export function TopBar({
             <span>{liveTimer.text}</span>
           </button>
         )}
+
+        <PWAInstallButton />
 
         {onOpenImport && (
           <button
