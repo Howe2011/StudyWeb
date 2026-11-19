@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 interface VercelRequest {
@@ -36,6 +37,17 @@ interface RawCompactSchemaPayload {
   c?: Array<{ q?: string; a?: string; s?: string }>;
 }
 
+interface ExplicitCacheEntry {
+  calls: number;
+  cacheName?: string;
+  unsupported?: boolean;
+  expiresAt: number;
+}
+
+const explicitCacheRegistry = new Map<string, ExplicitCacheEntry>();
+const EXPLICIT_CACHE_TTL_MS = 280_000;
+const EXPLICIT_CACHE_MIN_CHARS = 4200;
+
 const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-3.1-flash-lite';
 const BYOK_GEMINI_CANDIDATES = [
   'gemini-3.1-flash-lite',
@@ -47,6 +59,29 @@ const DEFAULT_GROK_BASE_URL = 'https://api.x.ai/v1';
 const DEFAULT_GROK_MODEL = 'grok-3-mini';
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+
+/**
+ * 100% invariant static system prompt prefix — never changes across presets or toggles,
+ * maximizing implicit prefix prompt caching (and shared across explicit context caches).
+ */
+const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
+  'You are StudyDeck AI, an elite academic note synthesizer. Convert raw study material or scraped webpage text into concise, visually balanced revision JSON.',
+  'SELECTIVE EXTRACTION: Source text often comes from webpages. IGNORE navigation bars, author bios, filler intros ("In this guide..."), repetition, anecdotes, off-topic tangents, and redundant examples. Extract ONLY core examinable concepts, mechanisms, definitions, data/dates, comparisons, and formulas.',
+  'BLOCK GRAMMAR inside section points p[]:',
+  '- "### Subheading" to break long sections with clean visual hierarchy & breathing room.',
+  '- "¶ Short 1-2 sentence explanatory paragraph." (never long walls of prose).',
+  '- "**Term**: concise point (<=18 words)." and "↳ sub-point" for nested details (avoid monotonous bullet walls).',
+  '- "📌 Title | Key stat, formula, or standout fact" for inline Fact Boxes.',
+  '- "| Col 1 | Col 2 |" Markdown table rows for contrasts, pros/cons, or comparisons.',
+  '- "⇒ Step 1 → Step 2 → Step 3" for sequential processes or cause-effect chains.',
+  'Never invent facts not grounded in the source.',
+].join('\n');
+
+const STATIC_OPENAI_SYSTEM_INSTRUCTION =
+  `${STATIC_GEMINI_SYSTEM_INSTRUCTION}\n` +
+  'Return ONLY strict JSON with compact keys: ' +
+  '{"t":"title","u":"1-sentence summary","s":[{"h":"Section Heading","p":["¶ Short framing overview.","### Subheading","**Term**: crisp fact","↳ nested detail","📌 Key Fact | High-yield takeaway","| A | B |","⇒ Step 1 → Step 2"]}],"k":[{"t":"term","d":"def"}],"x":"examiner tip or empty","w":"worked example or empty","e":[{"d":"date","t":"event","x":"detail","g":"significance","k":false}],"c":[{"q":"question","a":"answer","s":"section"}]}. ' +
+  'Omit e[] or c[] if disabled in [OPT].';
 
 function readHeader(
   headers: VercelRequest['headers'],
@@ -105,12 +140,8 @@ function buildGeminiCandidateList(config: UserAiConfig): string[] {
 
   const list: string[] = [...BYOK_GEMINI_CANDIDATES];
   const verified = config.verifiedModel?.trim();
-  if (verified && !/^gemini-(?:1\.5|2\.0|pro\b)/i.test(verified)) {
-    const filtered = list.filter((m) => m !== verified);
-    // Keep flash-lite first unless verifiedModel was already one of the fast models
-    if (verified !== 'gemini-4-hydrogen') {
-      return [verified, ...filtered];
-    }
+  if (verified && !/^gemini-(?:1\.5|2\.0|pro\b)/i.test(verified) && verified !== 'gemini-4-hydrogen') {
+    return [verified, ...list.filter((m) => m !== verified)];
   }
   return list;
 }
@@ -121,19 +152,116 @@ function normalizeOpenAiBaseUrl(baseUrl?: string): string {
   return clean;
 }
 
-function getGeminiThinkingConfig(model: string): {
+/**
+ * Model-specific parameter tuning: minimizes latency & output token waste per model family
+ * while honoring SDK constraints (e.g., no temperature/topP/thinkingBudget on Gemini 4).
+ */
+function getGeminiModelTuning(model: string): {
   thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
+  maxOutputTokens: number;
+  temperature?: number;
+  topP?: number;
+  seed?: number;
 } {
   if (/^gemini-3\./i.test(model)) {
-    return { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } };
+    return {
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+      maxOutputTokens: 2048,
+      seed: 42,
+    };
+  }
+  if (/^gemini-2\.5-flash-lite/i.test(model)) {
+    return {
+      thinkingConfig: { thinkingBudget: 0 },
+      maxOutputTokens: 2048,
+      temperature: 0.15,
+      topP: 0.85,
+    };
   }
   if (/^gemini-2\.5-/i.test(model)) {
-    return { thinkingConfig: { thinkingBudget: 0 } };
+    return {
+      thinkingConfig: { thinkingBudget: 0 },
+      maxOutputTokens: 2048,
+      temperature: 0.2,
+      topP: 0.9,
+    };
   }
   if (/^gemini-4-/i.test(model)) {
-    return { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } };
+    return {
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      maxOutputTokens: 2560,
+      seed: 42,
+    };
   }
-  return {};
+  return { maxOutputTokens: 2048, temperature: 0.2 };
+}
+
+function getOpenAiModelTuning(
+  provider: UserAiProvider,
+  model: string
+): { temperature: number; max_tokens: number; reasoning_effort?: 'low' } {
+  if (provider === 'grok' && /grok-3-mini/i.test(model)) {
+    return { temperature: 0.2, max_tokens: 2048, reasoning_effort: 'low' };
+  }
+  return { temperature: 0.2, max_tokens: 2048 };
+}
+
+async function resolveExplicitGeminiCache(
+  ai: GoogleGenAI,
+  apiKey: string,
+  model: string,
+  compacted: string
+): Promise<string | undefined> {
+  if (compacted.length < EXPLICIT_CACHE_MIN_CHARS) return undefined;
+
+  const now = Date.now();
+  for (const [k, v] of explicitCacheRegistry.entries()) {
+    if (v.expiresAt < now) explicitCacheRegistry.delete(k);
+  }
+  if (explicitCacheRegistry.size > 80) {
+    const oldestKey = explicitCacheRegistry.keys().next().value;
+    if (oldestKey) explicitCacheRegistry.delete(oldestKey);
+  }
+
+  const hash = createHash('sha256')
+    .update(`${apiKey.slice(-12)}|${model}|${compacted}`)
+    .digest('hex');
+
+  const existing = explicitCacheRegistry.get(hash);
+  if (!existing) {
+    // First call on this document: use implicit prefix cache without paying explicit cache creation overhead
+    explicitCacheRegistry.set(hash, {
+      calls: 1,
+      expiresAt: now + EXPLICIT_CACHE_TTL_MS,
+    });
+    return undefined;
+  }
+
+  existing.calls += 1;
+  if (existing.unsupported) return undefined;
+  if (existing.cacheName && existing.expiresAt > now + 15_000) {
+    return existing.cacheName;
+  }
+
+  // Second+ call (preset switch / re-format / toggle cards): promote document to explicit Gemini context cache
+  try {
+    const created = await ai.caches.create({
+      model,
+      config: {
+        systemInstruction: STATIC_GEMINI_SYSTEM_INSTRUCTION,
+        contents: compacted,
+        ttl: '300s',
+      },
+    });
+    if (created.name) {
+      existing.cacheName = created.name;
+      existing.expiresAt = now + EXPLICIT_CACHE_TTL_MS;
+      return created.name;
+    }
+  } catch {
+    existing.unsupported = true;
+  }
+  return undefined;
 }
 
 function extractGeminiResponseText(response: {
@@ -257,31 +385,52 @@ function extractJsonPayload(rawText: string): RawCompactSchemaPayload {
   }
 }
 
+/**
+ * Smart pre-filter for webpages & raw notes: strips trailing Reference/See-Also sections,
+ * Wikipedia footnotes, media captions, conversational filler, URLs, and duplicate lines
+ * BEFORE sending tokens to the AI.
+ */
 function compactInputForAi(rawText: string, maxChars = 11000): string {
   const noiseLine =
-    /^(?:skip to (?:main )?content|cookie (?:policy|preferences|settings)|accept all cookies|sign in|log in|subscribe|advertisement|menu|breadcrumbs?|back to top|all rights reserved|©\s*\d{4}|table of contents|edit section|\[edit\]|jump to navigation|share this page|print page|related topics?)$/i;
+    /^(?:skip to (?:main )?content|cookie (?:policy|preferences|settings)|accept all cookies|sign in|log in|subscribe|advertisement|sponsored|menu|breadcrumbs?|back to top|all rights reserved|©\s*\d{4}|table of contents|edit section|\[edit\]|jump to navigation|share this page|print page|related topics?|did this page help you\??|yes\s*no|test yourself|join now|sign up|download pdf|view all topics)$/i;
+  const webFluffPrefix =
+    /^(?:image\s+(?:source|caption)|video\s+caption|media\s+caption|watch:|listen:|play\s+video|read\s+more:|related:|in\s+this\s+(?:article|guide|page),?\s+we\s+(?:will|are\s+going\s+to)|welcome\s+to\s+this|click\s+here\s+to|scroll\s+down\s+to)/i;
+  const trailingJunkHeading =
+    /^(?:#{1,4}\s*)?(?:see\s+also|references?|external\s+links?|further\s+reading|bibliography|notes\s+and\s+references|citations|related\s+(?:topics?|articles?|guides?|resources?)|more\s+on\s+this\s+topic|watch\s+and\s+listen)$/i;
 
   const seen = new Set<string>();
-  const lines = String(rawText || '')
+  const rawLines = String(rawText || '')
     .replace(/\u200B|\uFEFF/g, '')
     .replace(/\r/g, '')
-    // Strip noisy markdown hyperlink URLs while keeping anchor labels
     .replace(/\[([^\]\n]{1,120})\]\(https?:\/\/[^)\s]+\)/g, '$1')
-    .split('\n')
-    .map((l) => l.replace(/[ \t]{2,}/g, ' ').trimEnd())
-    .filter((l) => {
-      const t = l.trim();
-      if (!t) return true;
-      if (noiseLine.test(t)) return false;
-      if (t.length >= 16) {
-        const key = t.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-      }
-      return true;
-    });
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\[(?:\d+|citation needed|edit|note\s*\d*)\]/gi, '')
+    .split('\n');
 
-  const collapsed = lines
+  const kept: string[] = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const cleanedLine = rawLines[i].replace(/[ \t]{2,}/g, ' ').trimEnd();
+    const t = cleanedLine.trim();
+    if (!t) {
+      if (kept.length > 0 && kept[kept.length - 1] !== '') kept.push('');
+      continue;
+    }
+
+    // Stop ingesting trailing website reference/link appendices
+    if (kept.length >= 6 && trailingJunkHeading.test(t.replace(/[:*]/g, '').trim())) {
+      break;
+    }
+
+    if (noiseLine.test(t) || webFluffPrefix.test(t)) continue;
+    if (t.length >= 16) {
+      const key = t.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    kept.push(cleanedLine);
+  }
+
+  const collapsed = kept
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -292,15 +441,42 @@ function compactInputForAi(rawText: string, maxChars = 11000): string {
 
 function getPresetDirective(preset?: string): string {
   switch (preset) {
+    case 'save-my-exams':
+      return 'Style=ExamRevision(clear syllabus headings h,concise **Term** bullets,nested "↳ " points,"| A | B |" comparison tables,x=Examiner Tip,w=Worked Example).';
     case 'cornell':
-      return 'Preset:Cornell(u=1-2 sentence overview;s=cues + "↳ " sub-bullets;k=key terms).';
+      return 'Style=SummaryCues(u=strong big-picture summary;s=cue subheadings ### + indented "↳ " details;k=essential glossary).';
     case 'timeline-causal':
-      return 'Preset:Timeline&Causal(chronological s,causal "⇒ A → B",populate e).';
+      return 'Style=TimelineCauseEffect(chronological s,"⇒ Cause → Effect" flow chains,populate dated events e[]).';
     case 'compact':
-      return 'Preset:Compact(ultra-concise high-yield bullets,max brevity).';
+      return 'Style=QuickCheatSheet(minimum words,high-yield cram bullets,essential terms only).';
+    case 'balanced-visual':
     default:
-      return 'Preset:SaveMyExams(2-6 crisp sections h,<=18w **Term** bullets,"↳ " sub-points,"| A | B |" tables if contrasting,optional x=Exam Tip,w=Worked Example).';
+      return (
+        'Style=PrettyBalanced(' +
+        'Airy clear hierarchy—NEVER walls of prose and NEVER walls of only bullets! ' +
+        'For each major section h: start with a short 1-2 sentence "¶ " overview paragraph when helpful, ' +
+        'group ideas under "### Subheading" labels, mix concise **Term** bullets + "↳ " sub-points (2-4 per group), ' +
+        'add at least 1-2 "📌 Label | Key stat/formula/fact" Fact Boxes, ' +
+        '"| Col1 | Col2 |" tables for comparisons, and "⇒ A → B → C" arrow diagrams for processes).'
+      );
   }
+}
+
+function buildCompactOptionsLine(params: {
+  preset?: string;
+  includeTimeline: boolean;
+  includeCards: boolean;
+  detectFlowDiagrams: boolean;
+  autoTables: boolean;
+}): string {
+  return [
+    `[OPT] ${getPresetDirective(params.preset)}`,
+    params.detectFlowDiagrams ? 'Flows=ON("⇒ A → B → C").' : 'Flows=OFF.',
+    params.autoTables ? 'Tables=ON("| H1 | H2 |").' : 'Tables=OFF.',
+    params.includeTimeline ? 'Dates=ON(extract dated events into e[]).' : 'Dates=OFF.',
+    params.includeCards ? 'Cards=ON(add 4-6 crisp Q/A cards in c[]).' : 'Cards=OFF.',
+    'Limits: 2-6 sections, <=18 words/bullet, 3-8 key terms max.',
+  ].join(' ');
 }
 
 function buildAutoformatSchema(opts: { includeTimeline: boolean; includeCards: boolean }) {
@@ -468,11 +644,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const compacted = compactInputForAi(String(body.rawText || '').trim());
   if (!compacted) {
-    res.status(400).json({ error: 'Provide study text or fetch a page before running AI Autoformat.' });
+    res.status(400).json({
+      error: 'No useful study content found after filtering webpage navigation/noise. Paste study notes directly.',
+    });
     return;
   }
 
-  const preset = typeof body.preset === 'string' ? body.preset : undefined;
+  const preset = typeof body.preset === 'string' ? body.preset : 'balanced-visual';
   const includeCards = Boolean(body.includeCards);
   const includeTimeline = body.includeTimeline !== false;
   const detectFlowDiagrams = body.detectFlowDiagrams !== false;
@@ -480,16 +658,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const wantsStream =
     Boolean(body.stream) || readHeader(req.headers, 'accept').includes('text/event-stream');
 
-  const ruleBits = [
-    getPresetDirective(preset),
-    detectFlowDiagrams ? 'Use "⇒ A → B → C" for flows.' : '',
-    autoTables ? 'Use Markdown "| H1 | H2 |" rows for comparisons.' : '',
-    includeTimeline ? 'Extract dated events into e[].' : '',
-    includeCards ? 'Add 4-6 crisp Q/A cards in c[].' : '',
-    'Keep output fast & high-yield: 2-6 sections, 3-6 bullets each (<=18w/bullet), 3-8 key terms max. Bold **term**, sub-bullets start "↳ ". No invented facts.',
-  ]
-    .filter(Boolean)
-    .join(' ');
+  const optionsLine = buildCompactOptionsLine({
+    preset,
+    includeTimeline,
+    includeCards,
+    detectFlowDiagrams,
+    autoTables,
+  });
 
   const sendSse = (payload: Record<string, unknown>) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -500,7 +675,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
-    sendSse({ type: 'status', message: 'Compacted notes. Connecting to AI…' });
+    sendSse({ type: 'status', message: 'Filtered webpage noise. Connecting to AI…' });
   }
 
   try {
@@ -513,25 +688,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       const candidates = buildGeminiCandidateList(config);
       const responseSchema = buildAutoformatSchema({ includeTimeline, includeCards });
-      const systemInstruction = `Convert raw student notes into tight revision JSON. ${ruleBits}`;
 
       let lastErr: unknown = null;
       for (let i = 0; i < candidates.length; i++) {
         const model = candidates[i];
+        const tuning = getGeminiModelTuning(model);
         try {
+          const cachedContent = await resolveExplicitGeminiCache(
+            ai,
+            config.apiKey.trim(),
+            model,
+            compacted
+          );
+          const userContents = cachedContent
+            ? optionsLine
+            : `${optionsLine}\n\n[SOURCE]\n${compacted}`;
+          const genConfig = {
+            ...(cachedContent
+              ? { cachedContent }
+              : { systemInstruction: STATIC_GEMINI_SYSTEM_INSTRUCTION }),
+            ...tuning,
+            abortSignal: AbortSignal.timeout(18000),
+            responseMimeType: 'application/json',
+            responseSchema,
+          };
+
           if (wantsStream) {
-            sendSse({ type: 'status', model, message: `Formatting with ${model}…` });
+            sendSse({
+              type: 'status',
+              model,
+              message: cachedContent
+                ? `Formatting with ${model} (cached context)…`
+                : `Formatting with ${model}…`,
+            });
             const stream = await ai.models.generateContentStream({
               model,
-              contents: compacted,
-              config: {
-                systemInstruction,
-                ...getGeminiThinkingConfig(model),
-                maxOutputTokens: model === 'gemini-4-hydrogen' ? 2560 : 2048,
-                abortSignal: AbortSignal.timeout(18000),
-                responseMimeType: 'application/json',
-                responseSchema,
-              },
+              contents: userContents,
+              config: genConfig,
             });
 
             let fullText = '';
@@ -539,6 +732,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let inputTokens = 0;
             let outputTokens = 0;
             let totalTokens = 0;
+            let cachedTokens = 0;
 
             for await (const chunk of stream) {
               const delta = extractGeminiResponseText(chunk);
@@ -554,6 +748,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 inputTokens = Number(chunk.usageMetadata.promptTokenCount || inputTokens);
                 outputTokens = Number(chunk.usageMetadata.candidatesTokenCount || outputTokens);
                 totalTokens = Number(chunk.usageMetadata.totalTokenCount || totalTokens);
+                cachedTokens = Number(chunk.usageMetadata.cachedContentTokenCount || cachedTokens);
               }
             }
 
@@ -567,6 +762,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 inputTokens,
                 outputTokens,
                 totalTokens,
+                cachedTokens,
               },
             });
             res.end();
@@ -575,15 +771,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           const response = await ai.models.generateContent({
             model,
-            contents: compacted,
-            config: {
-              systemInstruction,
-              ...getGeminiThinkingConfig(model),
-              maxOutputTokens: model === 'gemini-4-hydrogen' ? 2560 : 2048,
-              abortSignal: AbortSignal.timeout(18000),
-              responseMimeType: 'application/json',
-              responseSchema,
-            },
+            contents: userContents,
+            config: genConfig,
           });
 
           const parsed = extractJsonPayload(extractGeminiResponseText(response));
@@ -596,6 +785,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               inputTokens: Number(usageMeta?.promptTokenCount || 0),
               outputTokens: Number(usageMeta?.candidatesTokenCount || 0),
               totalTokens: Number(usageMeta?.totalTokenCount || 0),
+              cachedTokens: Number(usageMeta?.cachedContentTokenCount || 0),
             },
           });
           return;
@@ -615,57 +805,72 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const model =
       (config.model || (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL)).trim() ||
       (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL);
+    const tuning = getOpenAiModelTuning(config.provider, model);
+    const userMsg = `${optionsLine}\n\n[SOURCE]\n${compacted}`;
 
-    const schemaHint = [
-      '"t":"title"',
-      '"u":"1-sentence summary"',
-      '"s":[{"h":"Section","p":["**Term**: fact","↳ sub-point"]}]',
-      '"k":[{"t":"term","d":"def"}]',
-      '"x":"exam tip or empty"',
-      '"w":"worked example or empty"',
-      includeTimeline ? '"e":[{"d":"date","t":"event","x":"detail","g":"sig","k":false}]' : '',
-      includeCards ? '"c":[{"q":"question","a":"answer","s":"section"}]' : '',
-    ]
-      .filter(Boolean)
-      .join(',');
-
-    const sysPrompt = `Return ONLY strict JSON {${schemaHint}}. ${ruleBits}`;
-
-    if (wantsStream) {
-      sendSse({ type: 'status', model, message: `Formatting with ${model}…` });
-      const callStream = async (withJsonFormat: boolean) => {
-        const bodyObj: Record<string, unknown> = {
-          model,
-          stream: true,
-          max_tokens: 2048,
-          messages: [
-            { role: 'system', content: sysPrompt },
-            { role: 'user', content: compacted },
-          ],
-        };
-        if (withJsonFormat) {
-          bodyObj.response_format = { type: 'json_object' };
-        }
-        return fetch(`${baseUrl}/chat/completions`, {
-          method: 'POST',
-          signal: AbortSignal.timeout(22000),
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.apiKey}`,
-          },
-          body: JSON.stringify(bodyObj),
-        });
+    const sendChatCompletion = async (opts: {
+      stream: boolean;
+      withJsonFormat: boolean;
+      withReasoningEffort: boolean;
+    }) => {
+      const bodyObj: Record<string, unknown> = {
+        model,
+        stream: opts.stream,
+        temperature: tuning.temperature,
+        max_tokens: tuning.max_tokens,
+        messages: [
+          { role: 'system', content: STATIC_OPENAI_SYSTEM_INSTRUCTION },
+          { role: 'user', content: userMsg },
+        ],
       };
+      if (opts.withJsonFormat) {
+        bodyObj.response_format = { type: 'json_object' };
+      }
+      if (opts.withReasoningEffort && tuning.reasoning_effort) {
+        bodyObj.reasoning_effort = tuning.reasoning_effort;
+      }
+      if (opts.stream) {
+        bodyObj.stream_options = { include_usage: true };
+      }
+      return fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(22000),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(bodyObj),
+      });
+    };
 
-      let apiRes = await callStream(true);
-      if (!apiRes.ok) {
+    const callWithCompatFallback = async (stream: boolean) => {
+      let useJson = true;
+      let useReasoning = Boolean(tuning.reasoning_effort);
+      let apiRes = await sendChatCompletion({
+        stream,
+        withJsonFormat: useJson,
+        withReasoningEffort: useReasoning,
+      });
+      if (!apiRes.ok && apiRes.status === 400) {
         const errText = await apiRes.text().catch(() => '');
-        if (apiRes.status === 400 && /response_format|json_object|unsupported/i.test(errText)) {
-          apiRes = await callStream(false);
+        if (/response_format|json_object|stream_options|reasoning_effort|unsupported|unknown/i.test(errText)) {
+          if (/response_format|json_object/i.test(errText)) useJson = false;
+          if (/reasoning_effort/i.test(errText)) useReasoning = false;
+          apiRes = await sendChatCompletion({
+            stream,
+            withJsonFormat: useJson,
+            withReasoningEffort: useReasoning,
+          });
         } else {
           throw new Error(`HTTP ${apiRes.status}: ${errText}`);
         }
       }
+      return apiRes;
+    };
+
+    if (wantsStream) {
+      sendSse({ type: 'status', model, message: `Formatting with ${model}…` });
+      const apiRes = await callWithCompatFallback(true);
       if (!apiRes.ok || !apiRes.body) {
         const errText = await apiRes.text().catch(() => '');
         throw new Error(`HTTP ${apiRes.status}: ${errText}`);
@@ -679,6 +884,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let inputTokens = 0;
       let outputTokens = 0;
       let totalTokens = 0;
+      let cachedTokens = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -694,7 +900,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           try {
             const parsedChunk = JSON.parse(payload) as {
               choices?: Array<{ delta?: { content?: string } }>;
-              usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+              usage?: {
+                prompt_tokens?: number;
+                completion_tokens?: number;
+                total_tokens?: number;
+                prompt_tokens_details?: { cached_tokens?: number };
+              };
             };
             const piece = parsedChunk.choices?.[0]?.delta?.content || '';
             if (piece) {
@@ -709,6 +920,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               inputTokens = Number(parsedChunk.usage.prompt_tokens || inputTokens);
               outputTokens = Number(parsedChunk.usage.completion_tokens || outputTokens);
               totalTokens = Number(parsedChunk.usage.total_tokens || totalTokens);
+              cachedTokens = Number(
+                parsedChunk.usage.prompt_tokens_details?.cached_tokens || cachedTokens
+              );
             }
           } catch {
             // ignore partial SSE line
@@ -726,45 +940,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           inputTokens,
           outputTokens,
           totalTokens,
+          cachedTokens,
         },
       });
       res.end();
       return;
     }
 
-    const callChat = async (withJsonResponseFormat: boolean) => {
-      const bodyObj: Record<string, unknown> = {
-        model,
-        max_tokens: 2048,
-        messages: [
-          { role: 'system', content: sysPrompt },
-          { role: 'user', content: compacted },
-        ],
-      };
-      if (withJsonResponseFormat) {
-        bodyObj.response_format = { type: 'json_object' };
-      }
-      return fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(22000),
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.apiKey}`,
-        },
-        body: JSON.stringify(bodyObj),
-      });
-    };
-
-    let apiRes = await callChat(true);
-    if (!apiRes.ok) {
-      const errText = await apiRes.text().catch(() => '');
-      if (apiRes.status === 400 && /response_format|json_object|unsupported/i.test(errText)) {
-        apiRes = await callChat(false);
-      } else {
-        throw new Error(`HTTP ${apiRes.status}: ${errText}`);
-      }
-    }
-
+    const apiRes = await callWithCompatFallback(false);
     if (!apiRes.ok) {
       const errText = await apiRes.text().catch(() => '');
       throw new Error(`HTTP ${apiRes.status}: ${errText}`);
@@ -772,7 +955,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const data = (await apiRes.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      };
     };
     const parsed = extractJsonPayload((data.choices?.[0]?.message?.content || '').trim());
 
@@ -784,6 +972,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         inputTokens: Number(data.usage?.prompt_tokens || 0),
         outputTokens: Number(data.usage?.completion_tokens || 0),
         totalTokens: Number(data.usage?.total_tokens || 0),
+        cachedTokens: Number(data.usage?.prompt_tokens_details?.cached_tokens || 0),
       },
     });
   } catch (err) {

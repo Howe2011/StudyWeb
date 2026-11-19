@@ -6,6 +6,7 @@ import {
 } from '../types';
 
 export type NoteFormatPreset =
+  | 'balanced-visual'
   | 'save-my-exams'
   | 'cornell'
   | 'timeline-causal'
@@ -221,7 +222,7 @@ function preprocessPlainStudyText(
 }
 
 function tryBuildSequentialFlow(line: string): string | null {
-  const clean = line.replace(/\*\*/g, '').trim();
+  const clean = line.replace(/\*\*/g, '').replace(/^⇒\s*/, '').trim();
   // Explicit arrows (A -> B -> C or A => B => C or A → B → C)
   const arrowParts = clean.split(/\s*(?:->|=>|→)\s*/).filter(Boolean);
   if (arrowParts.length >= 3 && arrowParts.every((p) => p.length <= 90)) {
@@ -312,7 +313,7 @@ export function parseTextIntoStructuredNote(
   note: StructuredNoteData;
   extractedCards: Array<{ q: string; a: string; sectionName: string }>;
 } {
-  const preset: NoteFormatPreset = options.preset || 'save-my-exams';
+  const preset: NoteFormatPreset = options.preset || 'balanced-visual';
   const allowKeyTerms = options.extractKeyTerms !== false;
   const detectFlows = options.detectFlowDiagrams !== false || preset === 'timeline-causal';
   const buildAutoTables = options.autoTables !== false;
@@ -406,6 +407,19 @@ export function parseTextIntoStructuredNote(
     if (exMatch) {
       const val = exMatch[1].trim();
       workedExample = workedExample ? `${workedExample}\n${val}` : val;
+      continue;
+    }
+
+    // Inline Fact Box detection (`📌 Title | Fact`, `> Fact: ...`, `Key Fact: ...`)
+    const factBoxMatch =
+      line.match(/^📌\s*(.+)$/) ||
+      line.match(/^(?:>\s*)?(?:\*\*)?(key\s*fact|quick\s*fact|did\s*you\s*know|fact\s*box|formula\s*box)(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    if (factBoxMatch) {
+      if (line.startsWith('📌')) {
+        currentSec.points.push(`📌 ${factBoxMatch[1].trim()}`);
+      } else {
+        currentSec.points.push(`📌 ${factBoxMatch[1].trim()} | ${factBoxMatch[2].trim()}`);
+      }
       continue;
     }
 
@@ -691,6 +705,10 @@ export function parseTextIntoStructuredNote(
       currentSec.points.push(`↳ ${formattedPoint}`);
     } else if (isExplicitBullet || preset === 'compact') {
       currentSec.points.push(formattedPoint);
+    } else if (preset === 'balanced-visual') {
+      currentSec.points.push(
+        formattedPoint.length >= 90 ? `¶ ${formattedPoint}` : formattedPoint
+      );
     } else {
       currentSec.points.push(
         formattedPoint.length > 135 ? `¶ ${formattedPoint}` : formattedPoint
@@ -746,6 +764,34 @@ export function parseTextIntoStructuredNote(
 
   if (buildAutoTables) {
     convertBalancedProsConsToTables(cleanedSections);
+  }
+
+  // Pretty & Balanced: ensure long bullet walls get subtle ### sub-group breaks if needed
+  if (preset === 'balanced-visual') {
+    for (const sec of cleanedSections) {
+      const hasSubheadings = sec.points.some((p) => p.startsWith('### '));
+      const hasFactBox = sec.points.some((p) => p.startsWith('📌 '));
+      if (!hasFactBox && sec.points.length >= 4) {
+        const statIdx = sec.points.findIndex(
+          (p) =>
+            !p.startsWith('### ') &&
+            !p.startsWith('|') &&
+            !p.startsWith('⇒ ') &&
+            !p.startsWith('↳ ') &&
+            /\b\d+(?:\.\d+)?%|\b\d{4}\b|=/.test(p)
+        );
+        if (statIdx >= 0) {
+          const raw = sec.points[statIdx].replace(/^¶\s*/, '').trim();
+          sec.points[statIdx] = `📌 Key Fact | ${raw}`;
+        }
+      }
+      if (!hasSubheadings && sec.points.length >= 8) {
+        const mid = Math.floor(sec.points.length / 2);
+        if (!sec.points[mid].startsWith('↳ ') && !sec.points[mid].startsWith('|')) {
+          sec.points.splice(mid, 0, '### Key Details');
+        }
+      }
+    }
   }
 
   if (cleanedSections.length === 0) {
@@ -1025,7 +1071,11 @@ export function structuredNoteToHtml(title: string, note: StructuredNoteData): s
     if (sec.points.length > 0) {
       parts.push(
         `<ul>${sec.points
-          .map((p) => `<li>${fmt(p.replace(/^↳\s*/, '').replace(/^¶\s*/, ''))}</li>`)
+          .map((p) =>
+            p.startsWith('📌 ')
+              ? `<li><strong>Fact:</strong> ${fmt(p.slice(2).replace('|', ' — ').trim())}</li>`
+              : `<li>${fmt(p.replace(/^↳\s*/, '').replace(/^¶\s*/, ''))}</li>`
+          )
           .join('')}</ul>`
       );
     }
@@ -1050,6 +1100,7 @@ export type SectionRenderBlock =
   | { kind: 'subheading'; text: string }
   | { kind: 'paragraph'; text: string }
   | { kind: 'bullet'; text: string; indent?: number }
+  | { kind: 'factbox'; title?: string; text: string }
   | { kind: 'flow'; label?: string; steps: string[] }
   | { kind: 'table'; headers: string[]; rows: string[][] };
 
@@ -1122,6 +1173,24 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
         const rows = tableRows.slice(1).map(padRow);
         blocks.push({ kind: 'table', headers, rows });
       }
+      continue;
+    }
+
+    if (raw.startsWith('📌 ') || /^>\s*fact\s*:/i.test(raw)) {
+      const cleaned = raw.startsWith('📌 ')
+        ? raw.slice(2).trim()
+        : raw.replace(/^>\s*fact\s*:\s*/i, '').trim();
+      const pipeIdx = cleaned.indexOf('|');
+      if (pipeIdx > 0 && pipeIdx < 42) {
+        blocks.push({
+          kind: 'factbox',
+          title: cleaned.slice(0, pipeIdx).replace(/\*\*/g, '').trim() || 'Key Fact',
+          text: cleaned.slice(pipeIdx + 1).trim(),
+        });
+      } else {
+        blocks.push({ kind: 'factbox', title: 'Key Fact', text: cleaned });
+      }
+      i++;
       continue;
     }
 

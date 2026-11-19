@@ -114,9 +114,24 @@ function StructuredNoteReader({
                 {groupSectionPoints(sec.points).map((blk, i) => {
                   if (blk.kind === 'subheading') {
                     return (
-                      <h4 key={i} className="pt-1.5 text-xs font-bold uppercase tracking-wide text-[var(--e3)]">
+                      <h4 key={i} className="pt-2 text-xs font-bold uppercase tracking-wide text-[var(--e3)]">
                         {renderInlineBold(blk.text)}
                       </h4>
+                    );
+                  }
+                  if (blk.kind === 'factbox') {
+                    return (
+                      <div
+                        key={i}
+                        className="my-1.5 rounded-lg border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] px-3 py-2"
+                      >
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                          {blk.title || 'Key Fact'}
+                        </div>
+                        <div className="mt-0.5 text-xs leading-relaxed text-[var(--ink)]">
+                          {renderInlineBold(blk.text)}
+                        </div>
+                      </div>
                     );
                   }
                   if (blk.kind === 'table') {

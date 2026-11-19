@@ -42,6 +42,7 @@ import {
 import {
   AutoFormatOptions,
   createEmptyStructuredNote,
+  groupSectionPoints,
   makeNoteId,
   NoteFormatPreset,
 } from '../lib/noteFormat';
@@ -120,26 +121,44 @@ const GIZMO_CLOZE_SAMPLE = `- In photosynthesis, {{chlorophyll}} absorbs light e
 - During {{mitosis}}, one parent cell divides to produce {{two genetically identical}} daughter cells.
 - The {{Treaty of Versailles}} forced Germany to pay {{£6.6 billion}} in reparations in 1919.`;
 
+function renderPreviewBold(text: string) {
+  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, idx) =>
+    part.startsWith('**') && part.endsWith('**') ? (
+      <strong key={idx} className="font-semibold text-[var(--ink)]">
+        {part.slice(2, -2)}
+      </strong>
+    ) : (
+      <span key={idx}>{part}</span>
+    )
+  );
+}
+
 const FORMAT_PRESETS: Array<{ id: NoteFormatPreset; label: string; hint: string }> = [
   {
+    id: 'balanced-visual',
+    label: 'Pretty & Balanced',
+    hint: 'Clear headings, short paragraphs, bullets, tables, fact boxes & arrow diagrams with clean spacing',
+  },
+  {
     id: 'save-my-exams',
-    label: 'Save My Exams',
-    hint: 'Exam headings, clean bullets, bold terms, tips & tables',
+    label: 'Exam Revision',
+    hint: 'Mark-scheme structure: bold key terms, concise points, tables & examiner tips',
   },
   {
     id: 'cornell',
-    label: 'Cornell',
-    hint: 'Top key summary + structured detail hierarchy & cues',
+    label: 'Summary & Cues',
+    hint: 'Big-picture top summary with cue headings, indented details & glossary terms',
   },
   {
     id: 'timeline-causal',
-    label: 'Timeline & Causal',
-    hint: 'Chronological dates, causes/effects & turning points',
+    label: 'Timeline & Cause-Effect',
+    hint: 'Chronological stages, date highlights, causal arrow chains & turning points',
   },
   {
     id: 'compact',
-    label: 'Compact',
-    hint: 'Condensed high-yield bullet points for fast revision',
+    label: 'Quick Cheat Sheet',
+    hint: 'Condensed high-yield cram points & essential terms only',
   },
 ];
 
@@ -172,7 +191,7 @@ export function UniversalImportModal({
 
   // Autoformatter & Quizlet/Gizmo options
   const [formatOptions, setFormatOptions] = useState<AutoFormatOptions>({
-    preset: 'save-my-exams',
+    preset: 'balanced-visual',
     extractKeyTerms: true,
     detectFlowDiagrams: true,
     autoTables: true,
@@ -192,6 +211,7 @@ export function UniversalImportModal({
   const [includeCards, setIncludeCards] = useState(false);
   const [includeTimeline, setIncludeTimeline] = useState(false);
   const [previewTab, setPreviewTab] = useState<PreviewEditorTab>('notes');
+  const [previewNotesMode, setPreviewNotesMode] = useState<'visual' | 'edit'>('visual');
 
   // Editable Pre-Save Drafts (hydrated from parsed structure + entities)
   const [draftSummary, setDraftSummary] = useState('');
@@ -876,7 +896,7 @@ export function UniversalImportModal({
         },
         body: JSON.stringify({
           rawText,
-          preset: formatOptions.preset || 'save-my-exams',
+          preset: formatOptions.preset || 'balanced-visual',
           includeCards,
           includeTimeline: wantsTimeline,
           detectFlowDiagrams: formatOptions.detectFlowDiagrams !== false,
@@ -908,6 +928,7 @@ export function UniversalImportModal({
         inputTokens: number;
         outputTokens: number;
         totalTokens: number;
+        cachedTokens?: number;
       };
 
       let formattedResult: FormattedData | undefined;
@@ -1028,11 +1049,13 @@ export function UniversalImportModal({
       }
 
       setAiFormattedApplied(true);
+      setPreviewNotesMode('visual');
       const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
       const u = usageResult;
+      const cacheNote = u?.cachedTokens ? ` · ${u.cachedTokens} cached` : '';
       setStatusNote(
         u
-          ? `AI Autoformatted in ${elapsedSec}s (${u.model}${u.totalTokens ? ` · ${u.totalTokens} tokens` : ''}).`
+          ? `AI Autoformatted in ${elapsedSec}s (${u.model}${u.totalTokens ? ` · ${u.totalTokens} tokens` : ''}${cacheNote}).`
           : `AI Autoformatted in ${elapsedSec}s using your personal API key.`
       );
     } catch (err) {
@@ -2032,146 +2055,327 @@ export function UniversalImportModal({
                   </button>
                 </div>
 
-                {/* Preview Tab 1: Editable Structured Sections */}
+                {/* Preview Tab 1: Visual Pretty Preview OR Editable Structured Sections */}
                 {previewTab === 'notes' && (
                   <div className="mt-4 space-y-3">
-                    <label className="block text-[11px] font-semibold text-[var(--mute)]">
-                      Topic Overview / Summary
-                      <textarea
-                        rows={2}
-                        value={draftSummary}
-                        onChange={(e) => setDraftSummary(e.target.value)}
-                        placeholder="Optional 1–2 sentence overview..."
-                        className="sd-input mt-1 text-xs"
-                      />
-                    </label>
-
-                    <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
-                      {draftSections.map((sec, sIdx) => (
-                        <div
-                          key={sec.id}
-                          className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-3"
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-[var(--mute)]">
+                        {previewNotesMode === 'visual'
+                          ? 'Structured Note Layout Preview'
+                          : 'Line-by-Line Draft Editor'}
+                      </span>
+                      <div className="sd-seg" role="group" aria-label="Notes preview mode">
+                        <button
+                          type="button"
+                          aria-pressed={previewNotesMode === 'visual'}
+                          onClick={() => setPreviewNotesMode('visual')}
+                          className="sd-seg-btn whitespace-nowrap"
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono-num text-xs font-bold text-[var(--e3)]">
-                              {String(sIdx + 1).padStart(2, '0')}.
-                            </span>
-                            <input
-                              type="text"
-                              value={sec.heading}
-                              onChange={(e) =>
-                                setDraftSections((prev) =>
-                                  prev.map((item, idx) =>
-                                    idx === sIdx ? { ...item, heading: e.target.value } : item
-                                  )
-                                )
-                              }
-                              className="sd-input flex-1 py-1 text-xs font-bold"
-                            />
-                            <button
-                              type="button"
-                              title="Remove section"
-                              aria-label={`Remove section ${sec.heading}`}
-                              onClick={() =>
-                                setDraftSections((prev) => prev.filter((_, idx) => idx !== sIdx))
-                              }
-                              className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            </button>
-                          </div>
-
-                          <div className="mt-2 space-y-1.5">
-                            {sec.points.map((pt, pIdx) => {
-                              const isSub = pt.startsWith('↳ ');
-                              return (
-                                <div key={pIdx} className="flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    title={isSub ? 'Outdent to main point' : 'Indent as sub-point'}
-                                    onClick={() =>
-                                      setDraftSections((prev) =>
-                                        prev.map((item, idx) =>
-                                          idx === sIdx
-                                            ? {
-                                                ...item,
-                                                points: item.points.map((x, j) =>
-                                                  j === pIdx
-                                                    ? x.startsWith('↳ ')
-                                                      ? x.slice(2)
-                                                      : `↳ ${x}`
-                                                    : x
-                                                ),
-                                              }
-                                            : item
-                                        )
-                                      )
-                                    }
-                                    className={`sd-btn h-7 w-7 shrink-0 p-0 ${
-                                      isSub ? 'border-[var(--e3)] text-[var(--e3)]' : 'text-[var(--mute)]'
-                                    }`}
-                                  >
-                                    <Indent className="h-3 w-3" aria-hidden="true" />
-                                  </button>
-                                  <input
-                                    type="text"
-                                    value={pt}
-                                    onChange={(e) =>
-                                      setDraftSections((prev) =>
-                                        prev.map((item, idx) =>
-                                          idx === sIdx
-                                            ? {
-                                                ...item,
-                                                points: item.points.map((x, j) =>
-                                                  j === pIdx ? e.target.value : x
-                                                ),
-                                              }
-                                            : item
-                                        )
-                                      )
-                                    }
-                                    className="sd-input flex-1 py-1 text-xs"
-                                  />
-                                  <button
-                                    type="button"
-                                    title="Delete point"
-                                    onClick={() =>
-                                      setDraftSections((prev) =>
-                                        prev.map((item, idx) =>
-                                          idx === sIdx
-                                            ? {
-                                                ...item,
-                                                points: item.points.filter((_, j) => j !== pIdx),
-                                              }
-                                            : item
-                                        )
-                                      )
-                                    }
-                                    className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
-                                  >
-                                    <X className="h-3 w-3" aria-hidden="true" />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setDraftSections((prev) =>
-                                  prev.map((item, idx) =>
-                                    idx === sIdx ? { ...item, points: [...item.points, ''] } : item
-                                  )
-                                )
-                              }
-                              className="cursor-pointer inline-flex items-center gap-1 pt-1 text-[11px] font-semibold text-[var(--e3)] hover:underline"
-                            >
-                              <Plus className="h-3 w-3" aria-hidden="true" />
-                              <span>Add point</span>
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                          Visual Preview
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={previewNotesMode === 'edit'}
+                          onClick={() => setPreviewNotesMode('edit')}
+                          className="sd-seg-btn whitespace-nowrap"
+                        >
+                          Edit Lines
+                        </button>
+                      </div>
                     </div>
+
+                    {previewNotesMode === 'visual' ? (
+                      <div className="max-h-80 space-y-3.5 overflow-y-auto pr-1">
+                        {draftSummary.trim() && (
+                          <div className="rounded-xl border border-[var(--line)] bg-[var(--card)] p-3.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                              Topic Overview
+                            </div>
+                            <p className="mt-1 text-xs leading-relaxed text-[var(--ink)]">
+                              {renderPreviewBold(draftSummary)}
+                            </p>
+                          </div>
+                        )}
+
+                        {draftSections.map((sec, sIdx) => {
+                          const blocks = groupSectionPoints(sec.points);
+                          return (
+                            <div
+                              key={sec.id}
+                              className="rounded-xl border border-[var(--line)] bg-[var(--card)] p-4"
+                            >
+                              <div className="flex items-baseline gap-2 border-b border-[var(--line)] pb-2">
+                                <span className="font-mono-num text-xs font-bold text-[var(--e3)]">
+                                  {String(sIdx + 1).padStart(2, '0')}.
+                                </span>
+                                <h4 className="font-display text-sm font-bold text-[var(--ink)]">
+                                  {sec.heading || 'Key Points'}
+                                </h4>
+                              </div>
+                              {blocks.length > 0 && (
+                                <div className="mt-3 space-y-2.5 text-xs text-[var(--ink)]">
+                                  {blocks.map((blk, bi) => {
+                                    if (blk.kind === 'subheading') {
+                                      return (
+                                        <div
+                                          key={bi}
+                                          className={`font-display text-xs font-bold text-[var(--e3)] ${
+                                            bi > 0 ? 'mt-3 border-t border-[var(--line)] pt-2.5' : ''
+                                          }`}
+                                        >
+                                          {renderPreviewBold(blk.text)}
+                                        </div>
+                                      );
+                                    }
+                                    if (blk.kind === 'factbox') {
+                                      return (
+                                        <div
+                                          key={bi}
+                                          className="rounded-lg border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-3 py-2"
+                                        >
+                                          <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                                            {blk.title || 'Key Fact'}
+                                          </div>
+                                          <div className="mt-0.5 leading-relaxed">
+                                            {renderPreviewBold(blk.text)}
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                    if (blk.kind === 'table') {
+                                      return (
+                                        <div
+                                          key={bi}
+                                          className="overflow-x-auto rounded-lg border border-[var(--line)]"
+                                        >
+                                          <table className="w-full border-collapse text-left text-[11px]">
+                                            <thead className="border-b border-[var(--line)] bg-[var(--bg)]">
+                                              <tr>
+                                                {blk.headers.map((h, hi) => (
+                                                  <th key={hi} className="px-2.5 py-1.5 font-bold">
+                                                    {renderPreviewBold(h)}
+                                                  </th>
+                                                ))}
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-[var(--line)]">
+                                              {blk.rows.map((row, ri) => (
+                                                <tr key={ri}>
+                                                  {row.map((cell, ci) => (
+                                                    <td key={ci} className="px-2.5 py-1.5 align-top">
+                                                      {renderPreviewBold(cell)}
+                                                    </td>
+                                                  ))}
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      );
+                                    }
+                                    if (blk.kind === 'flow') {
+                                      return (
+                                        <div
+                                          key={bi}
+                                          className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2.5"
+                                        >
+                                          {blk.label && (
+                                            <div className="mb-1.5 text-[10px] font-bold text-[var(--e3)]">
+                                              {blk.label}
+                                            </div>
+                                          )}
+                                          <div className="flex flex-wrap items-center gap-1.5">
+                                            {blk.steps.map((step, stepIdx) => (
+                                              <span key={stepIdx} className="inline-flex items-center gap-1">
+                                                <span className="rounded border border-[var(--line)] bg-[var(--card)] px-2 py-0.5 text-[11px]">
+                                                  <strong className="font-mono-num text-[var(--e3)]">
+                                                    {stepIdx + 1}.
+                                                  </strong>{' '}
+                                                  {renderPreviewBold(step)}
+                                                </span>
+                                                {stepIdx < blk.steps.length - 1 && (
+                                                  <span className="text-[var(--mute)]">→</span>
+                                                )}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                    if (blk.kind === 'paragraph') {
+                                      return (
+                                        <p key={bi} className="leading-relaxed text-[var(--ink)]">
+                                          {renderPreviewBold(blk.text)}
+                                        </p>
+                                      );
+                                    }
+                                    const isSub = Boolean(blk.indent && blk.indent > 0);
+                                    return (
+                                      <div
+                                        key={bi}
+                                        className={`flex items-start gap-2 leading-relaxed ${
+                                          isSub ? 'pl-5 text-[var(--mute)]' : 'pl-0.5'
+                                        }`}
+                                      >
+                                        <span
+                                          className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                            isSub ? 'bg-[var(--mute)]' : 'bg-[var(--e3)]'
+                                          }`}
+                                          aria-hidden="true"
+                                        />
+                                        <span className="text-[var(--ink)]">
+                                          {renderPreviewBold(blk.text)}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <>
+                        <label className="block text-[11px] font-semibold text-[var(--mute)]">
+                          Topic Overview / Summary
+                          <textarea
+                            rows={2}
+                            value={draftSummary}
+                            onChange={(e) => setDraftSummary(e.target.value)}
+                            placeholder="Optional 1–2 sentence overview..."
+                            className="sd-input mt-1 text-xs"
+                          />
+                        </label>
+
+                        <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+                          {draftSections.map((sec, sIdx) => (
+                            <div
+                              key={sec.id}
+                              className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-3"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono-num text-xs font-bold text-[var(--e3)]">
+                                  {String(sIdx + 1).padStart(2, '0')}.
+                                </span>
+                                <input
+                                  type="text"
+                                  value={sec.heading}
+                                  onChange={(e) =>
+                                    setDraftSections((prev) =>
+                                      prev.map((item, idx) =>
+                                        idx === sIdx ? { ...item, heading: e.target.value } : item
+                                      )
+                                    )
+                                  }
+                                  className="sd-input flex-1 py-1 text-xs font-bold"
+                                />
+                                <button
+                                  type="button"
+                                  title="Remove section"
+                                  aria-label={`Remove section ${sec.heading}`}
+                                  onClick={() =>
+                                    setDraftSections((prev) => prev.filter((_, idx) => idx !== sIdx))
+                                  }
+                                  className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                </button>
+                              </div>
+
+                              <div className="mt-2 space-y-1.5">
+                                {sec.points.map((pt, pIdx) => {
+                                  const isSub = pt.startsWith('↳ ');
+                                  return (
+                                    <div key={pIdx} className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        title={isSub ? 'Outdent to main point' : 'Indent as sub-point'}
+                                        onClick={() =>
+                                          setDraftSections((prev) =>
+                                            prev.map((item, idx) =>
+                                              idx === sIdx
+                                                ? {
+                                                    ...item,
+                                                    points: item.points.map((x, j) =>
+                                                      j === pIdx
+                                                        ? x.startsWith('↳ ')
+                                                          ? x.slice(2)
+                                                          : `↳ ${x}`
+                                                        : x
+                                                    ),
+                                                  }
+                                                : item
+                                            )
+                                          )
+                                        }
+                                        className={`sd-btn h-7 w-7 shrink-0 p-0 ${
+                                          isSub ? 'border-[var(--e3)] text-[var(--e3)]' : 'text-[var(--mute)]'
+                                        }`}
+                                      >
+                                        <Indent className="h-3 w-3" aria-hidden="true" />
+                                      </button>
+                                      <input
+                                        type="text"
+                                        value={pt}
+                                        onChange={(e) =>
+                                          setDraftSections((prev) =>
+                                            prev.map((item, idx) =>
+                                              idx === sIdx
+                                                ? {
+                                                    ...item,
+                                                    points: item.points.map((x, j) =>
+                                                      j === pIdx ? e.target.value : x
+                                                    ),
+                                                  }
+                                                : item
+                                            )
+                                          )
+                                        }
+                                        className="sd-input flex-1 py-1 text-xs"
+                                      />
+                                      <button
+                                        type="button"
+                                        title="Delete point"
+                                        onClick={() =>
+                                          setDraftSections((prev) =>
+                                            prev.map((item, idx) =>
+                                              idx === sIdx
+                                                ? {
+                                                    ...item,
+                                                    points: item.points.filter((_, j) => j !== pIdx),
+                                                  }
+                                                : item
+                                            )
+                                          )
+                                        }
+                                        className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                                      >
+                                        <X className="h-3 w-3" aria-hidden="true" />
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDraftSections((prev) =>
+                                      prev.map((item, idx) =>
+                                        idx === sIdx ? { ...item, points: [...item.points, ''] } : item
+                                      )
+                                    )
+                                  }
+                                  className="cursor-pointer inline-flex items-center gap-1 pt-1 text-[11px] font-semibold text-[var(--e3)] hover:underline"
+                                >
+                                  <Plus className="h-3 w-3" aria-hidden="true" />
+                                  <span>Add point</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
 
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <button

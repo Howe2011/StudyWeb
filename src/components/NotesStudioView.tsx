@@ -999,18 +999,34 @@ export function NotesStudioView({
                             </div>
 
                             {blocks.length > 0 && (
-                              <div className="mt-4 space-y-3 text-[var(--ink)]">
+                              <div className="mt-4 space-y-3.5 text-[var(--ink)]">
                                 {blocks.map((blk, i) => {
                                   if (blk.kind === 'subheading') {
                                     return (
                                       <h3
                                         key={i}
                                         className={`font-display text-[15px] font-bold text-[var(--e3)] ${
-                                          i > 0 ? 'border-t border-[var(--line)] pt-4 mt-4' : ''
+                                          i > 0 ? 'mt-5 border-t border-[var(--line)] pt-4' : ''
                                         }`}
                                       >
                                         {renderInlineBold(blk.text)}
                                       </h3>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'factbox') {
+                                    return (
+                                      <div
+                                        key={i}
+                                        className="my-2.5 rounded-xl border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-4 py-3"
+                                      >
+                                        <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                                          {blk.title || 'Key Fact'}
+                                        </div>
+                                        <div className="mt-1 text-sm leading-relaxed text-[var(--ink)]">
+                                          {renderInlineBold(blk.text)}
+                                        </div>
+                                      </div>
                                     );
                                   }
 
