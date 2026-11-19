@@ -10,6 +10,8 @@ interface PdfTextSpan {
   width: number;
   height: number;
   bold: boolean;
+  italic: boolean;
+  fontKind: 'sans' | 'serif' | 'mono';
 }
 
 interface PdfLine {
@@ -21,18 +23,37 @@ interface PdfLine {
   plain: string;
 }
 
-function isFontBold(fontName: string, styles: Record<string, { fontFamily?: string }>): boolean {
+function escapePdfHtml(s: string): string {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function inspectPdfFont(
+  fontName: string,
+  styles: Record<string, { fontFamily?: string }>
+): { bold: boolean; italic: boolean; fontKind: 'sans' | 'serif' | 'mono' } {
   const family = styles[fontName]?.fontFamily || '';
-  return /bold|black|heavy|semibold|demi|medi/i.test(`${fontName} ${family}`);
+  const combined = `${fontName} ${family}`;
+  const bold = /bold|black|heavy|semibold|demi|medi/i.test(combined);
+  const italic = /italic|oblique/i.test(combined);
+  const fontKind: 'sans' | 'serif' | 'mono' = /mono|courier|consola/i.test(combined)
+    ? 'mono'
+    : /serif|times|garamond|georgia|palatino|cambria/i.test(combined) && !/sans/i.test(combined)
+    ? 'serif'
+    : 'sans';
+  return { bold, italic, fontKind };
 }
 
 /**
  * Pure-browser PDF ingestion using pdfjs-dist.
- * Reconstructs headings by font size, inline bold spans, and nested bullet lists by X indentation.
+ * Reconstructs both responsive exact-layout HTML pages (.sd-pdf-page) and clean Markdown text.
  */
 export async function parsePdfFile(
   arrayBuffer: ArrayBuffer
-): Promise<{ text: string; pageCount: number }> {
+): Promise<{ text: string; html: string; pageCount: number }> {
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(arrayBuffer),
     useWorkerFetch: false,
@@ -41,10 +62,15 @@ export async function parsePdfFile(
   const pdf = await loadingTask.promise;
   const pageCount = pdf.numPages;
   const allPageLines: PdfLine[][] = [];
+  const pageHtmlBlocks: string[] = [];
   const fontSizeCounts = new Map<number, number>();
+  const MAX_VISUAL_PAGES = 35;
 
   for (let p = 1; p <= pageCount; p++) {
     const page = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 1 });
+    const pageW = Math.max(200, viewport.width || 595);
+    const pageH = Math.max(200, viewport.height || 842);
     const content = await page.getTextContent();
     const styles = (content.styles || {}) as Record<string, { fontFamily?: string }>;
     const spans: PdfTextSpan[] = [];
@@ -61,13 +87,16 @@ export async function parsePdfFile(
       if (rawStr.trim()) {
         fontSizeCounts.set(roundedSize, (fontSizeCounts.get(roundedSize) || 0) + rawStr.trim().length);
       }
+      const fontInfo = inspectPdfFont(String(item.fontName || ''), styles);
       spans.push({
         str: rawStr,
         x,
         y,
         width: Number(item.width || 0),
         height: fontSize,
-        bold: isFontBold(String(item.fontName || ''), styles),
+        bold: fontInfo.bold,
+        italic: fontInfo.italic,
+        fontKind: fontInfo.fontKind,
       });
     }
 
@@ -85,6 +114,8 @@ export async function parsePdfFile(
     }
 
     const lines: PdfLine[] = [];
+    const visualSpanEls: string[] = [];
+
     for (const row of groupedRows) {
       row.sort((a, b) => a.x - b.x);
       let plain = '';
@@ -94,9 +125,21 @@ export async function parsePdfFile(
       let hasChars = false;
       let prevEndX = row[0].x;
 
-      // Merge adjacent spans with matching bold state cleanly
+      // Merge adjacent spans with matching bold state cleanly for Markdown
       let activeBold = false;
       let boldBuf = '';
+
+      // Merge contiguous visual spans with matching styling & small X gaps for crisp lightweight HTML
+      const mergedVisual: Array<{
+        text: string;
+        x: number;
+        y: number;
+        endX: number;
+        height: number;
+        bold: boolean;
+        italic: boolean;
+        fontKind: 'sans' | 'serif' | 'mono';
+      }> = [];
 
       const flushBoldBuf = () => {
         if (!boldBuf) return;
@@ -127,6 +170,36 @@ export async function parsePdfFile(
           hasChars = true;
           if (!sp.bold) allBold = false;
           if (sp.height > maxFont) maxFont = sp.height;
+
+          const lastVis = mergedVisual[mergedVisual.length - 1];
+          const visGap = lastVis ? sp.x - lastVis.endX : 999;
+          if (
+            lastVis &&
+            lastVis.bold === sp.bold &&
+            lastVis.italic === sp.italic &&
+            lastVis.fontKind === sp.fontKind &&
+            Math.abs(lastVis.height - sp.height) < 1.2 &&
+            visGap < sp.height * 0.75 &&
+            visGap > -sp.height * 0.35
+          ) {
+            const needGapSpace =
+              visGap > Math.max(1.5, sp.height * 0.2) &&
+              !lastVis.text.endsWith(' ') &&
+              !sp.str.startsWith(' ');
+            lastVis.text += (needGapSpace ? ' ' : '') + sp.str;
+            lastVis.endX = Math.max(lastVis.endX, sp.x + sp.width);
+          } else {
+            mergedVisual.push({
+              text: sp.str,
+              x: sp.x,
+              y: sp.y,
+              endX: sp.x + sp.width,
+              height: sp.height,
+              bold: sp.bold,
+              italic: sp.italic,
+              fontKind: sp.fontKind,
+            });
+          }
         }
 
         if (sp.bold) {
@@ -144,6 +217,26 @@ export async function parsePdfFile(
       }
       if (activeBold) flushBoldBuf();
 
+      if (p <= MAX_VISUAL_PAGES) {
+        for (const mv of mergedVisual) {
+          if (!mv.text.trim()) continue;
+          const leftPct = Math.max(0, Math.min(97, (mv.x / pageW) * 100)).toFixed(3);
+          const topPct = Math.max(
+            0,
+            Math.min(97, ((pageH - mv.y - mv.height * 0.85) / pageH) * 100)
+          ).toFixed(3);
+          const fontCqw = Math.max(0.85, Math.min(8.5, (mv.height / pageW) * 100)).toFixed(3);
+          const styleParts = [`left:${leftPct}%`, `top:${topPct}%`, `font-size:${fontCqw}cqw`];
+          if (mv.bold) styleParts.push('font-weight:700');
+          if (mv.italic) styleParts.push('font-style:italic');
+          if (mv.fontKind === 'serif') styleParts.push('font-family:Georgia,serif');
+          else if (mv.fontKind === 'mono') styleParts.push('font-family:monospace');
+          visualSpanEls.push(
+            `<span class="sd-pdf-span" style="${styleParts.join(';')}">${escapePdfHtml(mv.text)}</span>`
+          );
+        }
+      }
+
       const cleanPlain = plain.replace(/\s+/g, ' ').trim();
       const cleanMd = md.replace(/\*\*([^*]+?)\*\*\s*\*\*([^*]+?)\*\*/g, '**$1 $2**').replace(/\s+/g, ' ').trim();
       if (!hasChars || !cleanPlain) continue;
@@ -158,6 +251,13 @@ export async function parsePdfFile(
         markdown: cleanMd,
         plain: cleanPlain,
       });
+    }
+
+    if (p <= MAX_VISUAL_PAGES && visualSpanEls.length > 0) {
+      const aspect = (pageW / pageH).toFixed(4);
+      pageHtmlBlocks.push(
+        `<div class="sd-pdf-page-wrap"><div class="sd-pdf-page-label">Page ${p} of ${pageCount}</div><div class="sd-pdf-page" style="aspect-ratio:${aspect}">${visualSpanEls.join('')}</div></div>`
+      );
     }
 
     allPageLines.push(lines);
@@ -234,8 +334,14 @@ export async function parsePdfFile(
     }
   }
 
+  const extraNotice =
+    pageCount > MAX_VISUAL_PAGES
+      ? `<p style="font-size:12px;color:#64748b;text-align:center;">Showing exact page layout for first ${MAX_VISUAL_PAGES} of ${pageCount} pages. Switch to Read tab for full document notes.</p>`
+      : '';
+
   return {
     text: outLines.join('\n').trim(),
+    html: pageHtmlBlocks.length > 0 ? `<div class="sd-pdf-stack">${pageHtmlBlocks.join('')}${extraNotice}</div>` : '',
     pageCount,
   };
 }

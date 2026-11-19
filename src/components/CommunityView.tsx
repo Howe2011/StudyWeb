@@ -71,6 +71,7 @@ function StructuredNoteReader({
   timelineEvents?: TimelineEventItem[];
 }) {
   const hasSections = notes.sections.some((s) => s.points.length > 0 || s.heading.trim());
+  const docHtml = (notes.originalHtml || notes.legacyHtml || '').trim();
   const hasAnyContent =
     Boolean(notes.summary.trim()) ||
     hasSections ||
@@ -78,7 +79,7 @@ function StructuredNoteReader({
     Boolean(notes.workedExample.trim()) ||
     Boolean(notes.examTip.trim()) ||
     Boolean(timelineEvents && timelineEvents.length > 0) ||
-    Boolean(notes.legacyHtml);
+    Boolean(docHtml);
 
   if (!hasAnyContent) {
     return (
@@ -90,6 +91,12 @@ function StructuredNoteReader({
 
   return (
     <div className="space-y-4 text-sm leading-relaxed">
+      {docHtml && notes.preferOriginalFormat && (
+        <div className="sd-doc-canvas">
+          <div className="sd-doc-sheet" dangerouslySetInnerHTML={{ __html: docHtml }} />
+        </div>
+      )}
+
       {notes.summary.trim() && (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
           <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">

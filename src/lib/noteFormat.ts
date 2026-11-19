@@ -49,7 +49,11 @@ export function estimateNoteReadingMinutes(note: StructuredNoteData): number {
     note.workedExample,
     ...note.sections.flatMap((s) => [s.heading, ...s.points]),
     ...note.keyTerms.flatMap((k) => [k.term, k.definition]),
-    note.legacyHtml ? note.legacyHtml.replace(/<[^>]+>/g, ' ') : '',
+    note.originalHtml
+      ? note.originalHtml.replace(/<[^>]+>/g, ' ')
+      : note.legacyHtml
+      ? note.legacyHtml.replace(/<[^>]+>/g, ' ')
+      : '',
   ]
     .join(' ')
     .trim()
@@ -68,9 +72,8 @@ export function isNoteEmpty(note: StructuredNoteData): boolean {
   const hasTerms = note.keyTerms.some((k) => k.term.trim() && k.definition.trim());
   const hasTip = note.examTip.trim().length > 0;
   const hasEx = note.workedExample.trim().length > 0;
-  const hasLegacy = Boolean(
-    note.legacyHtml && note.legacyHtml.replace(/<[^>]+>/g, '').trim().length > 0
-  );
+  const docHtml = note.originalHtml || note.legacyHtml;
+  const hasLegacy = Boolean(docHtml && docHtml.replace(/<[^>]+>/g, '').trim().length > 0);
   return !hasSummary && !hasSections && !hasTerms && !hasTip && !hasEx && !hasLegacy;
 }
 

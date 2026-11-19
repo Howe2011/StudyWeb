@@ -1,10 +1,20 @@
-import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChangeEvent,
+  ClipboardEvent,
+  DragEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   BookOpen,
   Calendar,
   Check,
   Database,
   Download,
+  FileCheck2,
   FileText,
   Globe,
   Indent,
@@ -24,6 +34,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { isRichFormattedHtml, sanitizeDocumentHtml } from '../lib/documentRenderer';
 import { useByokConfig } from '../lib/byokStore';
 import {
   downloadFlashcardsCsvTemplate,
@@ -190,6 +201,8 @@ export function UniversalImportModal({
   const [rawText, setRawText] = useState('');
   const [sourceLabel, setSourceLabel] = useState('Pasted Notes');
   const [legacyHtml, setLegacyHtml] = useState<string | undefined>(undefined);
+  const [originalHtml, setOriginalHtml] = useState<string | undefined>(undefined);
+  const [preferOriginalFormat, setPreferOriginalFormat] = useState<boolean>(true);
   const [preExtractedCards, setPreExtractedCards] = useState<
     Array<{ q: string; a: string; sectionName: string }> | undefined
   >(undefined);
@@ -217,7 +230,7 @@ export function UniversalImportModal({
   const [includeCards, setIncludeCards] = useState(false);
   const [includeTimeline, setIncludeTimeline] = useState(false);
   const [previewTab, setPreviewTab] = useState<PreviewEditorTab>('notes');
-  const [previewNotesMode, setPreviewNotesMode] = useState<'visual' | 'edit'>('visual');
+  const [previewNotesMode, setPreviewNotesMode] = useState<'original' | 'visual' | 'edit'>('visual');
 
   // Editable Pre-Save Drafts (hydrated from parsed structure + entities)
   const [draftSummary, setDraftSummary] = useState('');
@@ -260,11 +273,13 @@ export function UniversalImportModal({
   }, [rawText]);
 
   const parsedPreview = useMemo(() => {
-    if (!rawText.trim() && !preExtractedCards?.length) return null;
+    if (!rawText.trim() && !preExtractedCards?.length && !originalHtml) return null;
     if (backupBundle) return null;
     return parseUniversalStudyImport(rawText, {
       sourceLabel,
       legacyHtml,
+      originalHtml,
+      preferOriginalFormat,
       formatOptions,
       deckDelimiter: sourceTab === 'quizlet' ? deckDelimiter : 'auto',
       preExtractedCards,
@@ -273,6 +288,8 @@ export function UniversalImportModal({
     rawText,
     sourceLabel,
     legacyHtml,
+    originalHtml,
+    preferOriginalFormat,
     backupBundle,
     formatOptions,
     sourceTab,
@@ -397,21 +414,49 @@ export function UniversalImportModal({
         if (!res.text.trim()) {
           throw new Error('No selectable text found in this PDF (scanned image PDFs need OCR first).');
         }
+        const cleanPdfHtml = res.html ? sanitizeDocumentHtml(res.html) : '';
         setLegacyHtml(undefined);
+        setOriginalHtml(cleanPdfHtml || undefined);
+        setPreferOriginalFormat(Boolean(cleanPdfHtml));
+        if (cleanPdfHtml) setPreviewNotesMode('original');
         setRawText(res.text);
-        setStatusNote(`Parsed ${res.pageCount} PDF page${res.pageCount === 1 ? '' : 's'} cleanly.`);
+        setStatusNote(
+          `Parsed ${res.pageCount} PDF page${res.pageCount === 1 ? '' : 's'} with exact page formatting.`
+        );
       } else if (lower.endsWith('.docx')) {
         if (!topicNameOverride.trim()) {
           setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
         }
         const ab = await file.arrayBuffer();
         const res = await parseDocxFile(ab);
-        setLegacyHtml(res.html);
+        const cleanDocxHtml = res.html ? sanitizeDocumentHtml(res.html) : '';
+        setLegacyHtml(cleanDocxHtml || res.html);
+        setOriginalHtml(cleanDocxHtml || undefined);
+        setPreferOriginalFormat(Boolean(cleanDocxHtml));
+        if (cleanDocxHtml) setPreviewNotesMode('original');
         setRawText(res.text);
-        setStatusNote('Parsed Word (.docx) headings, bold terms, nested bullets, and tables.');
+        setStatusNote(
+          'Parsed Word (.docx) fonts, colors, highlights, alignments, lists, and tables.'
+        );
+      } else if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+        const htmlRaw = await file.text();
+        if (!topicNameOverride.trim()) {
+          setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
+        }
+        const cleanHtml = sanitizeDocumentHtml(htmlRaw);
+        const doc = new DOMParser().parseFromString(htmlRaw, 'text/html');
+        const extractedText = (doc.body?.innerText || doc.body?.textContent || '').trim();
+        setLegacyHtml(undefined);
+        setOriginalHtml(cleanHtml || undefined);
+        setPreferOriginalFormat(Boolean(cleanHtml));
+        if (cleanHtml) setPreviewNotesMode('original');
+        setRawText(extractedText || file.name);
+        setStatusNote(`Loaded exact formatting from ${file.name}.`);
       } else {
         const text = await file.text();
         setLegacyHtml(undefined);
+        setOriginalHtml(undefined);
+        setPreviewNotesMode('visual');
         if (!lower.endsWith('.json') && !topicNameOverride.trim()) {
           setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
         }
@@ -479,6 +524,7 @@ export function UniversalImportModal({
         kind?: 'notes' | 'flashcards';
         title?: string;
         markdown?: string;
+        originalHtml?: string;
         cards?: Array<{ q: string; a: string; sectionName: string }>;
         error?: string;
         blocked?: boolean;
@@ -491,6 +537,12 @@ export function UniversalImportModal({
       const pageTitle = (data.title || data.domain || 'Web Import').trim();
       setTopicNameOverride(pageTitle);
       setLegacyHtml(undefined);
+
+      const safeOrig = data.originalHtml ? sanitizeDocumentHtml(data.originalHtml, normalized) : '';
+      const isGDoc = /docs\.google\.com/i.test(normalized);
+      setOriginalHtml(safeOrig || undefined);
+      setPreferOriginalFormat(Boolean(safeOrig && isGDoc));
+      setPreviewNotesMode(safeOrig && isGDoc ? 'original' : 'visual');
 
       if (data.kind === 'flashcards' && Array.isArray(data.cards) && data.cards.length > 0) {
         setPreExtractedCards(data.cards);
@@ -506,6 +558,8 @@ export function UniversalImportModal({
         setStatusNote(
           mode === 'quizlet'
             ? `Fetched page "${pageTitle}". Check cards or switch to paste mode if the deck is behind a login.`
+            : safeOrig && isGDoc
+            ? `Fetched "${pageTitle}" with exact Google Docs formatting.`
             : `Fetched and structured "${pageTitle}" from ${data.domain || 'the web'}.`
         );
       }
@@ -549,27 +603,36 @@ export function UniversalImportModal({
         const data = await parseJsonResponseSafe<{
           title?: string;
           markdown?: string;
+          originalHtml?: string;
           error?: string;
         }>(res, 'Google Doc fetch');
         if (!res.ok) {
           throw new Error(data.error || `Could not import Google Doc (HTTP ${res.status}).`);
         }
         const docTitle = knownTitle || data.title || 'Google Doc';
+        const safeOrig = data.originalHtml ? sanitizeDocumentHtml(data.originalHtml, normalized) : '';
         setSourceLabel(`Google Doc · ${docTitle}`);
         setTopicNameOverride(docTitle);
         setLegacyHtml(undefined);
+        setOriginalHtml(safeOrig || undefined);
+        setPreferOriginalFormat(Boolean(safeOrig));
+        setPreviewNotesMode(safeOrig ? 'original' : 'visual');
         setRawText(data.markdown || '');
-        setStatusNote(`Loaded link-shared "${docTitle}" from Google Docs.`);
+        setStatusNote(`Loaded link-shared "${docTitle}" from Google Docs with original formatting.`);
         return;
       }
 
       const res = await fetchGoogleDocById(trimmed);
       const docTitle = knownTitle || res.title || 'Google Doc';
+      const safeOrig = res.html ? sanitizeDocumentHtml(res.html) : '';
       setSourceLabel(`Google Doc · ${docTitle}`);
       setTopicNameOverride(docTitle);
       setLegacyHtml(undefined);
+      setOriginalHtml(safeOrig || undefined);
+      setPreferOriginalFormat(Boolean(safeOrig));
+      setPreviewNotesMode(safeOrig ? 'original' : 'visual');
       setRawText(res.markdown);
-      setStatusNote(`Loaded "${docTitle}" from Google Docs.`);
+      setStatusNote(`Loaded "${docTitle}" from Google Docs with exact formatting.`);
     } catch (err) {
       if (err instanceof Error && err.message === 'AUTH_REQUIRED') {
         clearGoogleDocsAccessToken();
@@ -648,6 +711,10 @@ export function UniversalImportModal({
       }))
       .filter((s) => s.points.length > 0 || s.heading !== 'Key Points');
 
+    const cleanOrig = originalHtml
+      ? sanitizeDocumentHtml(originalHtml)
+      : parsedPreview.originalHtml || undefined;
+
     const builtNote = {
       summary: draftSummary.trim(),
       sections: cleanSections.length
@@ -657,6 +724,8 @@ export function UniversalImportModal({
       examTip: draftExamTip.trim(),
       workedExample: draftWorkedExample.trim(),
       legacyHtml: parsedPreview.legacyHtml,
+      originalHtml: cleanOrig,
+      preferOriginalFormat: cleanOrig ? preferOriginalFormat : undefined,
       updatedAt: new Date().toISOString(),
     };
 
@@ -727,7 +796,11 @@ export function UniversalImportModal({
                 keyTerms: [...topic.notes.keyTerms, ...builtNote.keyTerms],
                 examTip: topic.notes.examTip || builtNote.examTip,
                 workedExample: topic.notes.workedExample || builtNote.workedExample,
-                legacyHtml: topic.notes.legacyHtml || builtNote.legacyHtml,
+                legacyHtml: builtNote.legacyHtml || topic.notes.legacyHtml,
+                originalHtml: builtNote.originalHtml || topic.notes.originalHtml,
+                preferOriginalFormat: builtNote.originalHtml
+                  ? builtNote.preferOriginalFormat
+                  : topic.notes.preferOriginalFormat,
                 updatedAt: new Date().toISOString(),
               }
             : topic.notes;
@@ -818,6 +891,8 @@ export function UniversalImportModal({
     setTargetParentTopicId('');
     setTagsInput('');
     setLegacyHtml(undefined);
+    setOriginalHtml(undefined);
+    setPreferOriginalFormat(true);
     setIncludeCards(false);
     setIncludeTimeline(false);
     onClose();
@@ -1062,6 +1137,7 @@ export function UniversalImportModal({
       }
 
       setAiFormattedApplied(true);
+      setPreferOriginalFormat(false);
       setPreviewNotesMode('visual');
       const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
       const u = usageResult;
@@ -1243,6 +1319,8 @@ export function UniversalImportModal({
                   setSourceTab('paste');
                   setSourceLabel('Sample History Notes');
                   setLegacyHtml(undefined);
+                  setOriginalHtml(undefined);
+                  setPreviewNotesMode('visual');
                   setPreExtractedCards(undefined);
                   setRawText(SAMPLE_SNIPPET);
                   setTopicNameOverride('Weimar Republic & Early Challenges (1918–1923)');
@@ -1262,16 +1340,49 @@ export function UniversalImportModal({
                 <textarea
                   rows={6}
                   value={rawText}
+                  onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
+                    const htmlData = e.clipboardData?.getData('text/html') || '';
+                    if (htmlData && isRichFormattedHtml(htmlData)) {
+                      const cleanClipHtml = sanitizeDocumentHtml(htmlData);
+                      if (cleanClipHtml) {
+                        setOriginalHtml(cleanClipHtml);
+                        setPreferOriginalFormat(true);
+                        setPreviewNotesMode('original');
+                        setStatusNote(
+                          'Captured rich formatting (colors, highlights, headings, tables) from clipboard!'
+                        );
+                      }
+                    }
+                  }}
                   onChange={(e) => {
                     setRawText(e.target.value);
                     setPreExtractedCards(undefined);
                     setErrorMsg(null);
                   }}
                   placeholder={
-                    'Paste raw lecture notes, Markdown, Word text, Q:/A:, CSV, or a full .json backup:\n• # Headings, ## Subsections, - Bullets & indented sub-bullets\n• **Bolded terms**, Term: Definition, or "X refers to Y"\n• Dated events e.g. "1929 — Wall Street Crash: ..." for automatic History timelines'
+                    'Paste raw lecture notes, Word/Google Docs copy (rich formatting preserved!), Markdown, Q:/A:, CSV, or a full .json backup:\n• Paste directly from Word, Google Docs, or webpages to keep exact layout & colors\n• Or type # Headings, ## Subsections, - Bullets, and Term: Definition'
                   }
                   className="sd-input font-mono-num text-xs leading-relaxed"
                 />
+                {originalHtml && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color-mix(in_srgb,var(--e3)_35%,var(--line))] bg-[color-mix(in_srgb,var(--e3)_7%,var(--bg))] px-3 py-1.5 text-xs">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--ink)]">
+                      <FileCheck2 className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                      Rich document formatting preserved — open &ldquo;Original Document&rdquo; in preview below.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOriginalHtml(undefined);
+                        setPreferOriginalFormat(false);
+                        setPreviewNotesMode('visual');
+                      }}
+                      className="cursor-pointer font-semibold text-[var(--mute)] hover:text-[var(--bad)]"
+                    >
+                      Clear formatting
+                    </button>
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
                   <span className="font-semibold">Download template:</span>
                   <button
@@ -1494,18 +1605,18 @@ export function UniversalImportModal({
                 )}
                 <p className="mt-2 text-sm font-semibold text-[var(--ink)]">
                   {readingFile
-                    ? 'Extracting headings, bullets, and entities…'
-                    : 'Drop a PDF, Word (.docx), Markdown (.md), CSV, or Backup (.json) file here'}
+                    ? 'Extracting exact document formatting, headings & tables…'
+                    : 'Drop a PDF, Word (.docx), HTML (.html), Markdown (.md), CSV, or Backup (.json) file'}
                 </p>
                 <p className="mt-1 text-xs text-[var(--mute)]">
-                  Preserves heading sizes, bold terms, nested bullet hierarchies, tables, and dates.
+                  Preserves exact document layout, colors, highlights, tables, and headings — plus extracts revision flashcards.
                 </p>
                 <label className="sd-btn-pri mt-3 cursor-pointer px-4 py-2 text-xs whitespace-nowrap">
                   <Upload className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Choose File</span>
                   <input
                     type="file"
-                    accept=".pdf,.docx,.md,.txt,.csv,.json,application/pdf,application/json,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    accept=".pdf,.docx,.html,.htm,.md,.txt,.csv,.json,application/pdf,application/json,text/html,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     onChange={(e) => void handleFileChange(e)}
                     className="hidden"
                   />
@@ -1867,9 +1978,49 @@ export function UniversalImportModal({
                 </label>
               )}
 
-              {/* Autoformatter Style & Rules Bar */}
+              {/* Autoformatter Style & Exact Document Mode Bar */}
               {parsedPreview.mode !== 'flashcards-only' && (
                 <div className="space-y-2.5 rounded-xl border border-[var(--line)] bg-[var(--card)] p-3.5">
+                  {originalHtml && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--ink)]">
+                          <FileCheck2 className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                          <span>Default Topic View Mode</span>
+                        </div>
+                        <p className="text-[11px] text-[var(--mute)]">
+                          Choose whether opening this topic displays the exact original document first or auto-formatted revision notes. (Both tabs remain saved!)
+                        </p>
+                      </div>
+                      <div className="sd-seg" role="group" aria-label="Document formatting mode">
+                        <button
+                          type="button"
+                          aria-pressed={preferOriginalFormat}
+                          onClick={() => {
+                            setPreferOriginalFormat(true);
+                            setPreviewNotesMode('original');
+                          }}
+                          className="sd-seg-btn whitespace-nowrap"
+                        >
+                          Keep Original Formatting
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={!preferOriginalFormat}
+                          onClick={() => {
+                            setPreferOriginalFormat(false);
+                            if (previewNotesMode === 'original') {
+                              setPreviewNotesMode('visual');
+                            }
+                          }}
+                          className="sd-seg-btn whitespace-nowrap"
+                        >
+                          Auto-Format Notes
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--ink)]">
                       <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
@@ -2099,16 +2250,28 @@ export function UniversalImportModal({
                   </button>
                 </div>
 
-                {/* Preview Tab 1: Visual Pretty Preview OR Editable Structured Sections */}
+                {/* Preview Tab 1: Original Document OR Visual Pretty Preview OR Editable Structured Sections */}
                 {previewTab === 'notes' && (
                   <div className="mt-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-[11px] font-semibold text-[var(--mute)]">
-                        {previewNotesMode === 'visual'
+                        {previewNotesMode === 'original'
+                          ? 'Exact Original Document Appearance'
+                          : previewNotesMode === 'visual'
                           ? 'Structured Note Layout Preview'
                           : 'Line-by-Line Draft Editor'}
                       </span>
                       <div className="sd-seg" role="group" aria-label="Notes preview mode">
+                        {originalHtml && (
+                          <button
+                            type="button"
+                            aria-pressed={previewNotesMode === 'original'}
+                            onClick={() => setPreviewNotesMode('original')}
+                            className="sd-seg-btn whitespace-nowrap"
+                          >
+                            Original Document
+                          </button>
+                        )}
                         <button
                           type="button"
                           aria-pressed={previewNotesMode === 'visual'}
@@ -2128,7 +2291,16 @@ export function UniversalImportModal({
                       </div>
                     </div>
 
-                    {previewNotesMode === 'visual' ? (
+                    {previewNotesMode === 'original' && originalHtml ? (
+                      <div className="max-h-96 overflow-y-auto rounded-xl border border-[var(--line)]">
+                        <div className="sd-doc-canvas">
+                          <div
+                            className="sd-doc-sheet"
+                            dangerouslySetInnerHTML={{ __html: originalHtml }}
+                          />
+                        </div>
+                      </div>
+                    ) : previewNotesMode === 'visual' ? (
                       <div className="max-h-80 space-y-3.5 overflow-y-auto pr-1">
                         {draftSummary.trim() && (
                           <div className="rounded-xl border border-[var(--line)] bg-[var(--card)] p-3.5">

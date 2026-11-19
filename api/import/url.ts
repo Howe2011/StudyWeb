@@ -25,6 +25,7 @@ interface WebImportResponse {
   kind: 'notes' | 'flashcards';
   title: string;
   markdown: string;
+  originalHtml?: string;
   cards: WebImportedCard[];
 }
 
@@ -509,6 +510,7 @@ function scoreContentCandidate($: cheerio.CheerioAPI, el: Element): number {
 function extractArticleMarkdown($: cheerio.CheerioAPI, domain: string): {
   title: string;
   markdown: string;
+  originalHtml?: string;
 } {
   const embeddedNotes = extractNotesFromEmbeddedJson($);
 
@@ -611,13 +613,20 @@ function extractArticleMarkdown($: cheerio.CheerioAPI, domain: string): {
 
   if (!bestRoot) bestRoot = $('body').first() as cheerio.Cheerio<Element>;
   const domMarkdown = extractArticleMarkdownFromRoot($, bestRoot);
+  const rootHtml = (bestRoot.html() || '').trim();
+  const originalHtml =
+    rootHtml.length > 0 && rootHtml.length <= 240_000
+      ? rootHtml
+      : rootHtml.length > 240_000
+      ? rootHtml.slice(0, 240_000)
+      : undefined;
 
   const markdown =
     domMarkdown.length >= 250 || domMarkdown.length >= embeddedNotes.markdown.length
       ? domMarkdown
       : embeddedNotes.markdown;
 
-  return { title, markdown };
+  return { title, markdown, originalHtml };
 }
 
 function extractGoogleDocIdFromUrl(url: URL): string | null {
@@ -731,6 +740,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const $g = cheerio.load(gHtml);
       const docTitle =
         $g('title').first().text().trim() || $g('h1').first().text().trim() || 'Google Doc';
+      const gStyleBlocks = $g('style')
+        .map((_idx, el) => `<style>${$g(el).html() || ''}</style>`)
+        .get()
+        .join('\n');
+      $g('script, noscript, iframe, form').remove();
+      const gBodyHtml = ($g('body').first().html() || '').trim();
+      const gOriginalHtml = `${gStyleBlocks}\n${gBodyHtml}`.trim().slice(0, 250_000);
       const gMarkdown = extractArticleMarkdownFromRoot(
         $g,
         $g('body').first() as cheerio.Cheerio<Element>
@@ -749,6 +765,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         kind: 'notes',
         title: docTitle,
         markdown: gMarkdown,
+        originalHtml: gOriginalHtml || undefined,
         cards: [],
       };
       res.status(200).json(payload);
@@ -814,7 +831,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const $ = cheerio.load(rawBody);
-    const { title, markdown } = extractArticleMarkdown($, domain);
+    const { title, markdown, originalHtml } = extractArticleMarkdown($, domain);
 
     if (isDeckSite) {
       const $raw = cheerio.load(rawBody);
@@ -853,6 +870,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       kind: 'notes',
       title,
       markdown,
+      originalHtml,
       cards: [],
     } satisfies WebImportResponse);
   } catch (err) {

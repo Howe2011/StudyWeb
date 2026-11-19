@@ -992,6 +992,12 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
       if (!match.notes.legacyHtml && t.notes.legacyHtml) {
         match.notes.legacyHtml = t.notes.legacyHtml;
       }
+      if (!match.notes.originalHtml && t.notes.originalHtml) {
+        match.notes.originalHtml = t.notes.originalHtml;
+      }
+      if (match.notes.preferOriginalFormat === undefined && t.notes.preferOriginalFormat !== undefined) {
+        match.notes.preferOriginalFormat = t.notes.preferOriginalFormat;
+      }
       if (t.notes.sections.some((sec) => sec.points.length > 0)) {
         const existingHeadings = new Set(match.notes.sections.map((sec) => sec.heading.toLowerCase()));
         for (const sec of t.notes.sections) {

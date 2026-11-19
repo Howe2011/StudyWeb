@@ -142,6 +142,8 @@ export interface StructuredNoteData {
   examTip: string;
   workedExample: string;
   legacyHtml?: string;
+  originalHtml?: string;
+  preferOriginalFormat?: boolean;
   updatedAt: string;
 }
 

@@ -18,6 +18,7 @@ export interface ImportedGoogleDocResult {
   docId: string;
   title: string;
   markdown: string;
+  html: string;
 }
 
 // In-memory access token cache ONLY (never stored in localStorage/sessionStorage)
@@ -166,9 +167,29 @@ export async function listGoogleDocsFiles(searchQuery = ''): Promise<GoogleDocLi
   return Array.isArray(data.files) ? data.files : [];
 }
 
+interface DocsRgbColor {
+  red?: number;
+  green?: number;
+  blue?: number;
+}
+
+interface DocsOptionalColor {
+  color?: {
+    rgbColor?: DocsRgbColor;
+  };
+}
+
 interface DocsTextStyle {
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  baselineOffset?: string;
+  foregroundColor?: DocsOptionalColor;
+  backgroundColor?: DocsOptionalColor;
+  fontSize?: { magnitude?: number; unit?: string };
+  weightedFontFamily?: { fontFamily?: string };
+  link?: { url?: string };
 }
 
 interface DocsParagraphElement {
@@ -183,6 +204,9 @@ interface DocsStructuralElement {
     elements?: DocsParagraphElement[];
     paragraphStyle?: {
       namedStyleType?: string;
+      alignment?: string;
+      indentStart?: { magnitude?: number; unit?: string };
+      shading?: { backgroundColor?: DocsOptionalColor };
     };
     bullet?: {
       listId?: string;
@@ -193,6 +217,10 @@ interface DocsStructuralElement {
     tableRows?: Array<{
       tableCells?: Array<{
         content?: DocsStructuralElement[];
+        tableCellStyle?: {
+          backgroundColor?: DocsOptionalColor;
+          contentAlignment?: string;
+        };
       }>;
     }>;
   };
@@ -204,6 +232,62 @@ interface DocsListDefinition {
       glyphType?: string;
     }>;
   };
+}
+
+function escapeDocsHtml(s: string): string {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function docsColorToCss(opt?: DocsOptionalColor): string | null {
+  const rgb = opt?.color?.rgbColor;
+  if (!rgb) return null;
+  const r = Math.round((rgb.red || 0) * 255);
+  const g = Math.round((rgb.green || 0) * 255);
+  const b = Math.round((rgb.blue || 0) * 255);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function formatParagraphRunsHtml(elements: DocsParagraphElement[] | undefined): string {
+  if (!elements?.length) return '';
+  let out = '';
+  for (const el of elements) {
+    const raw = el.textRun?.content;
+    if (!raw) continue;
+    const cleaned = raw.replace(/\n$/, '');
+    if (!cleaned) continue;
+    const st = el.textRun?.textStyle;
+    let piece = escapeDocsHtml(cleaned).replace(/\u000b/g, '<br/>');
+    if (st?.bold) piece = `<strong>${piece}</strong>`;
+    if (st?.italic) piece = `<em>${piece}</em>`;
+    if (st?.underline && !st?.link?.url) piece = `<u>${piece}</u>`;
+    if (st?.strikethrough) piece = `<s>${piece}</s>`;
+    if (st?.baselineOffset === 'SUPERSCRIPT') piece = `<sup>${piece}</sup>`;
+    else if (st?.baselineOffset === 'SUBSCRIPT') piece = `<sub>${piece}</sub>`;
+
+    const css: string[] = [];
+    const fg = docsColorToCss(st?.foregroundColor);
+    const bg = docsColorToCss(st?.backgroundColor);
+    if (fg) css.push(`color: ${fg}`);
+    if (bg) css.push(`background-color: ${bg}; padding: 0 2px; border-radius: 2px`);
+    if (st?.fontSize?.magnitude && st.fontSize.magnitude !== 11) {
+      css.push(`font-size: ${st.fontSize.magnitude}pt`);
+    }
+    if (st?.weightedFontFamily?.fontFamily && !/^(?:arial|roboto)$/i.test(st.weightedFontFamily.fontFamily)) {
+      css.push(`font-family: "${escapeDocsHtml(st.weightedFontFamily.fontFamily)}", sans-serif`);
+    }
+    if (css.length > 0) {
+      piece = `<span style="${css.join('; ')}">${piece}</span>`;
+    }
+    if (st?.link?.url && /^https?:\/\//i.test(st.link.url)) {
+      piece = `<a href="${escapeDocsHtml(st.link.url)}" target="_blank" rel="noopener noreferrer">${piece}</a>`;
+    }
+    out += piece;
+  }
+  return out;
 }
 
 function formatParagraphRuns(elements: DocsParagraphElement[] | undefined): string {
@@ -251,22 +335,52 @@ export function convertGoogleDocJsonToMarkdown(docJson: {
   const content = docJson.body?.content || [];
   const lists = docJson.lists || {};
   const lines: string[] = [];
+  const htmlParts: string[] = [];
+  let activeListTag: 'ul' | 'ol' | null = null;
+
+  const closeList = () => {
+    if (activeListTag) {
+      htmlParts.push(`</${activeListTag}>`);
+      activeListTag = null;
+    }
+  };
+
+  const buildParaStyleAttr = (ps?: NonNullable<DocsStructuralElement['paragraph']>['paragraphStyle'], isList = false): string => {
+    if (!ps) return '';
+    const css: string[] = [];
+    if (ps.alignment === 'CENTER') css.push('text-align: center');
+    else if (ps.alignment === 'END') css.push('text-align: right');
+    else if (ps.alignment === 'JUSTIFIED') css.push('text-align: justify');
+    if (!isList && ps.indentStart?.magnitude && ps.indentStart.magnitude > 0) {
+      css.push(`margin-left: ${Math.min(160, Math.round(ps.indentStart.magnitude * 1.3))}px`);
+    }
+    const bg = docsColorToCss(ps.shading?.backgroundColor);
+    if (bg) css.push(`background-color: ${bg}; padding: 8px 12px; border-radius: 6px`);
+    return css.length > 0 ? ` style="${css.join('; ')}"` : '';
+  };
 
   for (const block of content) {
     if (block.paragraph) {
       const formatted = formatParagraphRuns(block.paragraph.elements);
-      if (!formatted) continue;
+      const htmlInner = formatParagraphRunsHtml(block.paragraph.elements);
+      if (!formatted && !htmlInner.trim()) continue;
 
-      const styleType = block.paragraph.paragraphStyle?.namedStyleType || 'NORMAL_TEXT';
+      const ps = block.paragraph.paragraphStyle;
+      const styleType = ps?.namedStyleType || 'NORMAL_TEXT';
       const bullet = block.paragraph.bullet;
       const plain = formatted.replace(/\*\*/g, '').trim();
+      const pStyleAttr = buildParaStyleAttr(ps, Boolean(bullet));
 
       if (styleType === 'TITLE' || styleType === 'HEADING_1') {
+        closeList();
         lines.push(`# ${plain}`);
+        htmlParts.push(`<h1${pStyleAttr}>${htmlInner}</h1>`);
         continue;
       }
       if (styleType === 'SUBTITLE' || styleType === 'HEADING_2') {
+        closeList();
         lines.push(`## ${plain}`);
+        htmlParts.push(`<h2${pStyleAttr}>${htmlInner}</h2>`);
         continue;
       }
       if (
@@ -275,7 +389,10 @@ export function convertGoogleDocJsonToMarkdown(docJson: {
         styleType === 'HEADING_5' ||
         styleType === 'HEADING_6'
       ) {
+        closeList();
         lines.push(`### ${plain}`);
+        const lvl = styleType === 'HEADING_3' ? 3 : 4;
+        htmlParts.push(`<h${lvl}${pStyleAttr}>${htmlInner}</h${lvl}>`);
         continue;
       }
 
@@ -285,23 +402,70 @@ export function convertGoogleDocJsonToMarkdown(docJson: {
         const glyphType =
           listDef?.listProperties?.nestingLevels?.[level]?.glyphType || '';
         const isOrdered = /DECIMAL|ALPHA|ROMAN/i.test(glyphType);
+        const listTag: 'ul' | 'ol' = isOrdered ? 'ol' : 'ul';
+        if (activeListTag && activeListTag !== listTag) {
+          closeList();
+        }
+        if (!activeListTag) {
+          htmlParts.push(`<${listTag}>`);
+          activeListTag = listTag;
+        }
         const indent = level > 0 ? '  '.repeat(level) : '';
         const prefix = isOrdered ? '1. ' : '- ';
         lines.push(`${indent}${prefix}${formatted}`);
+        const liStyle = level > 0 ? ` style="margin-left: ${level * 22}px"` : '';
+        htmlParts.push(`<li${liStyle}>${htmlInner}</li>`);
         continue;
       }
 
+      closeList();
       lines.push(formatted);
+      htmlParts.push(`<p${pStyleAttr}>${htmlInner}</p>`);
     } else if (block.table?.tableRows?.length) {
+      closeList();
       const rows: string[][] = [];
-      for (const tr of block.table.tableRows) {
-        const cells = (tr.tableCells || []).map((tc) => {
+      const htmlRows: string[] = [];
+
+      for (let rIdx = 0; rIdx < block.table.tableRows.length; rIdx++) {
+        const tr = block.table.tableRows[rIdx];
+        const cellPlainRow: string[] = [];
+        const cellHtmlPieces: string[] = [];
+        const tag = rIdx === 0 ? 'th' : 'td';
+
+        for (const tc of tr.tableCells || []) {
+          const cellBg = docsColorToCss(tc.tableCellStyle?.backgroundColor);
+          const vAlign =
+            tc.tableCellStyle?.contentAlignment === 'MIDDLE'
+              ? 'middle'
+              : tc.tableCellStyle?.contentAlignment === 'BOTTOM'
+              ? 'bottom'
+              : '';
+          const tcCss: string[] = [];
+          if (cellBg) tcCss.push(`background-color: ${cellBg}`);
+          if (vAlign) tcCss.push(`vertical-align: ${vAlign}`);
+          const tcStyleAttr = tcCss.length > 0 ? ` style="${tcCss.join('; ')}"` : '';
+
           const cellTexts = (tc.content || [])
             .map((el) => (el.paragraph ? formatParagraphRuns(el.paragraph.elements) : ''))
             .filter(Boolean);
-          return cellTexts.join('; ').replace(/\|/g, '/').trim();
-        });
-        if (cells.some(Boolean)) rows.push(cells);
+          const cellParasHtml = (tc.content || [])
+            .map((el) => {
+              if (!el.paragraph) return '';
+              const h = formatParagraphRunsHtml(el.paragraph.elements);
+              if (!h.trim()) return '';
+              const sAttr = buildParaStyleAttr(el.paragraph.paragraphStyle, false);
+              return `<p${sAttr}>${h}</p>`;
+            })
+            .filter(Boolean);
+
+          cellPlainRow.push(cellTexts.join('; ').replace(/\|/g, '/').trim());
+          cellHtmlPieces.push(`<${tag}${tcStyleAttr}>${cellParasHtml.join('') || '&nbsp;'}</${tag}>`);
+        }
+
+        if (cellPlainRow.some(Boolean) || cellHtmlPieces.length > 0) {
+          rows.push(cellPlainRow);
+          htmlRows.push(`<tr>${cellHtmlPieces.join('')}</tr>`);
+        }
       }
 
       if (rows.length > 0) {
@@ -319,14 +483,17 @@ export function convertGoogleDocJsonToMarkdown(docJson: {
             if (r[0]) lines.push(`- ${r[0]}`);
           });
         }
+        htmlParts.push(`<table><tbody>${htmlRows.join('')}</tbody></table>`);
       }
     }
   }
+  closeList();
 
   return {
     docId: String(docJson.documentId || ''),
     title,
     markdown: lines.join('\n'),
+    html: htmlParts.length > 0 ? `<div class="word-doc">${htmlParts.join('')}</div>` : '',
   };
 }
 

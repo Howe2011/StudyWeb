@@ -1,10 +1,14 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
   ArrowUpDown,
+  Bold,
   BookOpen,
   Calendar,
   Check,
@@ -16,9 +20,15 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  FileCheck2,
   FolderPlus,
   Globe,
+  Heading2,
+  Highlighter,
+  Italic,
   Layers,
+  List,
+  ListOrdered,
   ListPlus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -27,9 +37,12 @@ import {
   Share2,
   Star,
   Trash2,
+  Underline,
+  Undo2,
   Upload,
   X,
 } from 'lucide-react';
+import { sanitizeDocumentHtml } from '../lib/documentRenderer';
 import {
   createEmptyStructuredNote,
   estimateNoteReadingMinutes,
@@ -98,13 +111,30 @@ function parseChronologicalWeight(rawDate: string): number {
 }
 
 function renderInlineBold(text: string) {
-  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g);
+  const parts = String(text || '').split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
       return (
         <strong key={i} className="font-semibold text-[var(--ink)]">
           {part.slice(2, -2)}
         </strong>
+      );
+    }
+    if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
+      return (
+        <em key={i} className="italic">
+          {part.slice(1, -1)}
+        </em>
+      );
+    }
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
+      return (
+        <code
+          key={i}
+          className="font-mono-num rounded bg-[var(--bg)] px-1.5 py-0.5 text-[0.9em] text-[var(--e3)]"
+        >
+          {part.slice(1, -1)}
+        </code>
       );
     }
     return <span key={i}>{part}</span>;
@@ -204,7 +234,12 @@ export function NotesStudioView({
   });
 
   const [selectedTopicId, setSelectedTopicId] = useState<string>(initialTopicId || '');
-  const [viewMode, setViewMode] = useState<'read' | 'edit' | 'timeline'>('read');
+  const [viewMode, setViewMode] = useState<'document' | 'read' | 'edit' | 'timeline'>('read');
+  const [docZoom, setDocZoom] = useState<number>(100);
+  const [docPaperTheme, setDocPaperTheme] = useState<'paper' | 'adaptive'>('paper');
+  const [editingDocHtml, setEditingDocHtml] = useState(false);
+  const docEditorRef = useRef<HTMLDivElement | null>(null);
+  const prevTopicIdRef = useRef<string | null>(null);
   const [newTopicName, setNewTopicName] = useState('');
   const [addingTopic, setAddingTopic] = useState(false);
   const [addingParentTopicId, setAddingParentTopicId] = useState<string | null>(null);
@@ -255,9 +290,15 @@ export function NotesStudioView({
   };
 
   useEffect(() => {
-    if (initialTopicId && subjectTopics.some((t) => t.id === initialTopicId)) {
-      setSelectedTopicId(initialTopicId);
-      setViewMode('read');
+    if (initialTopicId) {
+      const target = subjectTopics.find((t) => t.id === initialTopicId);
+      if (target) {
+        setSelectedTopicId(initialTopicId);
+        const hasDoc = Boolean(
+          (target.notes.originalHtml || target.notes.legacyHtml || '').trim()
+        );
+        setViewMode(hasDoc && target.notes.preferOriginalFormat ? 'document' : 'read');
+      }
     }
   }, [initialTopicId, subjectTopics]);
 
@@ -303,6 +344,14 @@ export function NotesStudioView({
       }));
   }, [activeTopic, subjectTopics, topicTreeNodes]);
 
+  const activeDocHtml = useMemo(() => {
+    if (!activeTopic) return '';
+    return (activeTopic.notes.originalHtml || activeTopic.notes.legacyHtml || '').trim();
+  }, [activeTopic]);
+
+  const hasDocHtml = activeDocHtml.length > 0;
+  const isPdfPageDoc = hasDocHtml && activeDocHtml.includes('sd-pdf-page');
+
   useEffect(() => {
     if (activeTopic && activeTopic.id !== selectedTopicId) {
       setSelectedTopicId(activeTopic.id);
@@ -316,19 +365,73 @@ export function NotesStudioView({
         return next;
       });
     }
-    setCardsFeedback(null);
-    setConfirmDeleteTopicId(null);
-    setShowLegacyHtml(false);
-    setEditingEventId(null);
-    setTimelineEraFilter('ALL');
-    setTimelineSearch('');
-    setTimelineKeyOnly(false);
-    setGlossaryFilter('');
-    setGlossaryExpanded((activeTopic?.notes.keyTerms.length || 0) <= 8);
+
+    const activeId = activeTopic?.id || null;
+    if (activeId !== prevTopicIdRef.current) {
+      prevTopicIdRef.current = activeId;
+      setCardsFeedback(null);
+      setConfirmDeleteTopicId(null);
+      setShowLegacyHtml(false);
+      setEditingDocHtml(false);
+      setEditingEventId(null);
+      setTimelineEraFilter('ALL');
+      setTimelineSearch('');
+      setTimelineKeyOnly(false);
+      setGlossaryFilter('');
+      setGlossaryExpanded((activeTopic?.notes.keyTerms.length || 0) <= 8);
+
+      const topicDocHtml = (
+        activeTopic?.notes.originalHtml ||
+        activeTopic?.notes.legacyHtml ||
+        ''
+      ).trim();
+      if (topicDocHtml && activeTopic?.notes.preferOriginalFormat) {
+        setViewMode('document');
+      } else if (viewMode === 'document' && !topicDocHtml) {
+        setViewMode('read');
+      }
+    }
+
     if (viewMode === 'timeline' && !isHistorySubject) {
       setViewMode('read');
     }
-  }, [activeTopic, activeTreeNode, isHistorySubject, selectedTopicId, viewMode]);
+    if (viewMode === 'document' && !hasDocHtml) {
+      setViewMode('read');
+    }
+  }, [activeTopic, activeTreeNode, hasDocHtml, isHistorySubject, selectedTopicId, viewMode]);
+
+  useEffect(() => {
+    if (editingDocHtml && docEditorRef.current) {
+      docEditorRef.current.innerHTML = activeDocHtml;
+    }
+    // Intentionally initialize contentEditable DOM only when entering edit mode or switching topic
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingDocHtml, activeTopic?.id]);
+
+  const commitDocumentHtmlEdit = (finishEditing = false) => {
+    if (!activeTopic || !docEditorRef.current) return;
+    const cleaned = sanitizeDocumentHtml(docEditorRef.current.innerHTML);
+    if (cleaned) {
+      replaceActiveNote({
+        ...activeTopic.notes,
+        originalHtml: cleaned,
+        preferOriginalFormat: true,
+      });
+    }
+    if (finishEditing) {
+      setEditingDocHtml(false);
+    }
+  };
+
+  const execDocCommand = (cmd: string, value?: string) => {
+    if (!docEditorRef.current) return;
+    docEditorRef.current.focus();
+    try {
+      document.execCommand(cmd, false, value);
+    } catch {
+      // ignore unsupported command
+    }
+  };
 
   const updateTopic = (topicId: string, updater: (t: StudyTopic) => StudyTopic) => {
     onUpdateWorkspace((prev) => ({
@@ -1071,6 +1174,16 @@ export function NotesStudioView({
 
               <div className="flex flex-wrap items-center gap-2">
                 <div className="sd-seg" role="tablist" aria-label="Note mode">
+                  {hasDocHtml && (
+                    <button
+                      type="button"
+                      aria-pressed={viewMode === 'document'}
+                      onClick={() => setViewMode('document')}
+                      className="sd-seg-btn"
+                    >
+                      Document
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-pressed={viewMode === 'read'}
@@ -1182,6 +1295,268 @@ export function NotesStudioView({
                 className="rounded-xl border border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] px-4 py-2.5 text-xs font-semibold text-[var(--ink)]"
               >
                 {cardsFeedback}
+              </div>
+            )}
+
+            {/* MODE 0: EXACT ORIGINAL DOCUMENT CANVAS & INLINE EDITOR */}
+            {viewMode === 'document' && hasDocHtml && (
+              <div className="space-y-3">
+                {/* Document Paper & Editing Toolbar */}
+                <div className="sd-card flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 font-bold text-[var(--e3)]">
+                      <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Exact Document View</span>
+                    </span>
+                    <span aria-hidden="true" className="text-[var(--line)]">|</span>
+                    <div className="sd-seg" role="group" aria-label="Document zoom">
+                      {[85, 100, 115].map((pct) => (
+                        <button
+                          key={pct}
+                          type="button"
+                          aria-pressed={docZoom === pct}
+                          onClick={() => setDocZoom(pct)}
+                          className="sd-seg-btn font-mono-num"
+                        >
+                          {pct}%
+                        </button>
+                      ))}
+                    </div>
+                    {!isPdfPageDoc && (
+                      <div className="sd-seg" role="group" aria-label="Paper appearance">
+                        <button
+                          type="button"
+                          aria-pressed={docPaperTheme === 'paper'}
+                          onClick={() => setDocPaperTheme('paper')}
+                          className="sd-seg-btn"
+                        >
+                          White Paper
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={docPaperTheme === 'adaptive'}
+                          onClick={() => setDocPaperTheme('adaptive')}
+                          className="sd-seg-btn"
+                        >
+                          Theme Match
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        replaceActiveNote({
+                          ...activeTopic.notes,
+                          preferOriginalFormat: !activeTopic.notes.preferOriginalFormat,
+                        })
+                      }
+                      className={`sd-btn px-2.5 py-1 text-xs whitespace-nowrap ${
+                        activeTopic.notes.preferOriginalFormat
+                          ? 'border-[var(--e3)] text-[var(--e3)]'
+                          : ''
+                      }`}
+                    >
+                      <span>
+                        {activeTopic.notes.preferOriginalFormat
+                          ? 'Default View: Document'
+                          : 'Set Document as Default'}
+                      </span>
+                    </button>
+
+                    {!isPdfPageDoc && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (editingDocHtml) {
+                            commitDocumentHtmlEdit(true);
+                          } else {
+                            setEditingDocHtml(true);
+                          }
+                        }}
+                        className={
+                          editingDocHtml
+                            ? 'sd-btn-pri px-3 py-1 text-xs whitespace-nowrap'
+                            : 'sd-btn px-3 py-1 text-xs whitespace-nowrap'
+                        }
+                      >
+                        {editingDocHtml ? (
+                          <>
+                            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Save &amp; Done Editing</span>
+                          </>
+                        ) : (
+                          <>
+                            <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Edit Document</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Inline Word/Docs Formatting Ribbon when Editing */}
+                {editingDocHtml && !isPdfPageDoc && (
+                  <div className="sd-card sticky top-2 z-20 flex flex-wrap items-center gap-1 px-3 py-2 text-xs">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('undo');
+                      }}
+                      title="Undo"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('bold');
+                      }}
+                      title="Bold"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <Bold className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('italic');
+                      }}
+                      title="Italic"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <Italic className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('underline');
+                      }}
+                      title="Underline"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <Underline className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('hiliteColor', '#fef08a');
+                      }}
+                      title="Highlight Yellow"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <Highlighter className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('formatBlock', '<h2>');
+                      }}
+                      title="Heading 2"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <Heading2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('insertUnorderedList');
+                      }}
+                      title="Bullet List"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <List className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('insertOrderedList');
+                      }}
+                      title="Numbered List"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('justifyLeft');
+                      }}
+                      title="Align Left"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <AlignLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('justifyCenter');
+                      }}
+                      title="Align Center"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <AlignCenter className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        execDocCommand('justifyRight');
+                      }}
+                      title="Align Right"
+                      className="sd-btn h-7 w-7 p-0"
+                    >
+                      <AlignRight className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Authentic Document Paper Canvas */}
+                <div className="sd-doc-canvas">
+                  <div
+                    className="mx-auto transition-[max-width] duration-150"
+                    style={{
+                      maxWidth:
+                        docZoom === 85 ? '700px' : docZoom === 115 ? '980px' : '820px',
+                      fontSize:
+                        docZoom === 85 ? '0.9em' : docZoom === 115 ? '1.12em' : undefined,
+                    }}
+                  >
+                    {editingDocHtml && !isPdfPageDoc ? (
+                      <div
+                        ref={docEditorRef}
+                        contentEditable
+                        suppressContentEditableWarning
+                        onBlur={() => commitDocumentHtmlEdit(false)}
+                        data-doc-theme={docPaperTheme === 'adaptive' ? 'adaptive' : undefined}
+                        className="sd-doc-sheet ring-2 ring-[var(--e3)] outline-none"
+                      />
+                    ) : (
+                      <div
+                        data-doc-theme={docPaperTheme === 'adaptive' ? 'adaptive' : undefined}
+                        className="sd-doc-sheet"
+                        dangerouslySetInnerHTML={{ __html: activeDocHtml }}
+                      />
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1699,21 +2074,34 @@ export function NotesStudioView({
                     </section>
                   )}
 
-                  {/* Optional Migrated Legacy / Word Tables */}
-                  {activeTopic.notes.legacyHtml && (
-                    <div className="sd-card p-5">
-                      <button
-                        type="button"
-                        onClick={() => setShowLegacyHtml((v) => !v)}
-                        className="cursor-pointer text-xs font-bold text-[var(--e3)] hover:underline"
-                      >
-                        {showLegacyHtml
-                          ? 'Hide original document tables / formatting'
-                          : 'Show original Word / legacy HTML document view'}
-                      </button>
-                      {showLegacyHtml && (
+                  {/* Optional Original Document Quick Link */}
+                  {hasDocHtml && (
+                    <div className="sd-card flex flex-wrap items-center justify-between gap-2 p-4">
+                      <span className="inline-flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
+                        <FileCheck2 className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                        Original document layout is also saved for this topic.
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewMode('document')}
+                          className="sd-btn px-3 py-1.5 text-xs font-semibold text-[var(--e3)]"
+                        >
+                          Open Document View
+                        </button>
+                        {activeTopic.notes.legacyHtml && (
+                          <button
+                            type="button"
+                            onClick={() => setShowLegacyHtml((v) => !v)}
+                            className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:underline"
+                          >
+                            {showLegacyHtml ? 'Hide inline' : 'Preview inline'}
+                          </button>
+                        )}
+                      </div>
+                      {showLegacyHtml && activeTopic.notes.legacyHtml && (
                         <div
-                          className="mt-3 overflow-x-auto text-sm text-[var(--ink)] [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--line)] [&_td]:p-2 [&_th]:border [&_th]:border-[var(--line)] [&_th]:p-2"
+                          className="mt-2 w-full overflow-x-auto text-sm text-[var(--ink)] [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--line)] [&_td]:p-2 [&_th]:border [&_th]:border-[var(--line)] [&_th]:p-2"
                           dangerouslySetInnerHTML={{ __html: activeTopic.notes.legacyHtml }}
                         />
                       )}
