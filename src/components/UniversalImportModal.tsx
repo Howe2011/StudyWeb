@@ -412,6 +412,22 @@ export function UniversalImportModal({
     }
   };
 
+  const parseJsonResponseSafe = async <T,>(res: Response, fallbackLabel: string): Promise<T> => {
+    const raw = await res.text();
+    if (!raw.trim()) {
+      throw new Error(`${fallbackLabel} failed (empty response, HTTP ${res.status}).`);
+    }
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      throw new Error(
+        res.ok
+          ? `${fallbackLabel} returned an unexpected non-JSON response.`
+          : `${fallbackLabel} error (HTTP ${res.status}). Please verify the server connection and try again.`
+      );
+    }
+  };
+
   const handleFetchFromUrl = async (targetUrl: string, mode: 'quizlet' | 'web') => {
     const cleaned = targetUrl.trim();
     if (!cleaned) return;
@@ -428,7 +444,7 @@ export function UniversalImportModal({
         body: JSON.stringify({ url: normalized }),
       });
 
-      const data = (await res.json()) as {
+      const data = await parseJsonResponseSafe<{
         url?: string;
         domain?: string;
         kind?: 'notes' | 'flashcards';
@@ -437,7 +453,7 @@ export function UniversalImportModal({
         cards?: Array<{ q: string; a: string; sectionName: string }>;
         error?: string;
         blocked?: boolean;
-      };
+      }>(res, 'Web import');
 
       if (!res.ok) {
         throw new Error(data.error || `Could not fetch ${normalized} (HTTP ${res.status}).`);
@@ -486,12 +502,39 @@ export function UniversalImportModal({
   };
 
   const handleImportGoogleDoc = async (docIdOrUrl: string, knownTitle?: string) => {
+    const trimmed = docIdOrUrl.trim();
+    if (!trimmed) return;
     setErrorMsg(null);
     setStatusNote(null);
     setPreExtractedCards(undefined);
     setGDocsLoading(true);
     try {
-      const res = await fetchGoogleDocById(docIdOrUrl);
+      // If user is not signed in with Google Docs OAuth and pasted a URL, fetch directly via server export!
+      if (!hasGoogleToken && /docs\.google\.com\/document/i.test(trimmed)) {
+        const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+        const res = await fetch('/api/import/url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: normalized }),
+        });
+        const data = await parseJsonResponseSafe<{
+          title?: string;
+          markdown?: string;
+          error?: string;
+        }>(res, 'Google Doc fetch');
+        if (!res.ok) {
+          throw new Error(data.error || `Could not import Google Doc (HTTP ${res.status}).`);
+        }
+        const docTitle = knownTitle || data.title || 'Google Doc';
+        setSourceLabel(`Google Doc · ${docTitle}`);
+        setTopicNameOverride(docTitle);
+        setLegacyHtml(undefined);
+        setRawText(data.markdown || '');
+        setStatusNote(`Loaded link-shared "${docTitle}" from Google Docs.`);
+        return;
+      }
+
+      const res = await fetchGoogleDocById(trimmed);
       const docTitle = knownTitle || res.title || 'Google Doc';
       setSourceLabel(`Google Doc · ${docTitle}`);
       setTopicNameOverride(docTitle);
@@ -502,7 +545,9 @@ export function UniversalImportModal({
       if (err instanceof Error && err.message === 'AUTH_REQUIRED') {
         clearGoogleDocsAccessToken();
         setHasGoogleToken(false);
-        setErrorMsg('Please sign in with Google to grant Google Docs read access.');
+        setErrorMsg(
+          'Paste a full link-shared Google Docs URL (https://docs.google.com/document/d/...), or click Sign in with Google for private docs.'
+        );
       } else {
         setErrorMsg(err instanceof Error ? err.message : 'Could not import Google Doc.');
       }
@@ -800,7 +845,7 @@ export function UniversalImportModal({
         }),
       });
 
-      const data = (await res.json()) as {
+      const data = await parseJsonResponseSafe<{
         formatted?: {
           title?: string;
           summary: string;
@@ -825,7 +870,7 @@ export function UniversalImportModal({
           totalTokens: number;
         };
         error?: string;
-      };
+      }>(res, 'AI Autoformat');
 
       if (!res.ok || !data.formatted) {
         throw new Error(data.error || `AI Autoformat failed (HTTP ${res.status}).`);
@@ -1317,15 +1362,49 @@ export function UniversalImportModal({
             {/* Source 5: Google Docs */}
             {sourceTab === 'gdocs' && (
               <div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+                {/* Always allow fetching a link-shared Google Doc URL even without OAuth */}
+                <div className="space-y-1.5">
+                  <div className="text-xs font-semibold text-[var(--ink)]">
+                    Import by Google Docs URL (works directly for link-shared docs):
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      type="text"
+                      value={gDocUrlInput}
+                      onChange={(e) => setGDocUrlInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && gDocUrlInput.trim()) {
+                          void handleImportGoogleDoc(gDocUrlInput);
+                        }
+                      }}
+                      placeholder="https://docs.google.com/document/d/…"
+                      className="sd-input min-w-[240px] flex-1 text-xs"
+                    />
+                    <button
+                      type="button"
+                      disabled={gDocsLoading || !gDocUrlInput.trim()}
+                      onClick={() => void handleImportGoogleDoc(gDocUrlInput)}
+                      className="sd-btn-pri px-3 py-2 text-xs whitespace-nowrap"
+                    >
+                      {gDocsLoading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      )}
+                      <span>{gDocsLoading ? 'Importing…' : 'Fetch Doc'}</span>
+                    </button>
+                  </div>
+                </div>
+
                 {!hasGoogleToken ? (
-                  <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+                  <div className="flex flex-col items-start justify-between gap-3 border-t border-[var(--line)] pt-3 sm:flex-row sm:items-center">
                     <div>
                       <div className="text-sm font-bold text-[var(--ink)]">
-                        Connect Google Docs
+                        Or connect private Google Docs
                       </div>
                       <p className="mt-0.5 text-xs text-[var(--mute)]">
-                        Browse your Google Docs and import headings, lists, bold formatting, and
-                        tables directly into structured notes.
+                        Sign in to browse private Drive documents, or export from Google Docs (File
+                        → Download → Word .docx) and drop it in Upload File.
                       </p>
                     </div>
                     <button
@@ -1368,7 +1447,7 @@ export function UniversalImportModal({
                     </button>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-3 border-t border-[var(--line)] pt-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="relative min-w-[200px] flex-1">
                         <Search
@@ -1397,25 +1476,6 @@ export function UniversalImportModal({
                           aria-hidden="true"
                         />
                         <span>Search</span>
-                      </button>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <input
-                        type="text"
-                        value={gDocUrlInput}
-                        onChange={(e) => setGDocUrlInput(e.target.value)}
-                        placeholder="Or paste a Google Docs URL / ID (https://docs.google.com/document/d/…)"
-                        className="sd-input min-w-[240px] flex-1 text-xs"
-                      />
-                      <button
-                        type="button"
-                        disabled={gDocsLoading || !gDocUrlInput.trim()}
-                        onClick={() => void handleImportGoogleDoc(gDocUrlInput)}
-                        className="sd-btn-pri px-3 py-2 text-xs whitespace-nowrap"
-                      >
-                        <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Fetch Doc</span>
                       </button>
                     </div>
 

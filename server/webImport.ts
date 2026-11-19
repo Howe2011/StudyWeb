@@ -65,6 +65,10 @@ async function assertSafeExternalUrl(rawUrl: string): Promise<URL> {
     }
   } catch (err) {
     if (err instanceof Error && err.message.includes('restricted')) throw err;
+    const code = (err as { code?: string } | null)?.code;
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ENODATA') {
+      throw new Error(`Could not find website "${host}". Check the URL spelling and try again.`);
+    }
   }
   return parsed;
 }
@@ -74,13 +78,20 @@ function extractInlineText($: cheerio.CheerioAPI, el: Element): string {
 
   const walk = (node: unknown) => {
     if (!node || typeof node !== 'object') return;
-    const n = node as { type?: string; data?: string; tagName?: string; children?: unknown[] };
+    const n = node as {
+      type?: string;
+      data?: string;
+      tagName?: string;
+      attribs?: Record<string, string>;
+      children?: unknown[];
+    };
     if (n.type === 'text') {
       parts.push(n.data || '');
       return;
     }
     if (n.type !== 'tag') return;
     const tag = (n.tagName || '').toLowerCase();
+    const cls = (n.attribs?.class || '').toLowerCase();
     if (
       tag === 'script' ||
       tag === 'style' ||
@@ -89,6 +100,12 @@ function extractInlineText($: cheerio.CheerioAPI, el: Element): string {
       tag === 'button' ||
       tag === 'nav'
     ) {
+      return;
+    }
+    if (tag === 'sup' && (cls.includes('reference') || cls.includes('noprint'))) {
+      return;
+    }
+    if (tag === 'span' && cls.includes('mw-editsection')) {
       return;
     }
     if (tag === 'br') {
@@ -119,6 +136,7 @@ function extractInlineText($: cheerio.CheerioAPI, el: Element): string {
   walk(el);
   return parts
     .join('')
+    .replace(/\[(?:\d+|[a-z]|citation needed|edit|update|clarification needed)\]/gi, '')
     .replace(/\s+/g, ' ')
     .replace(/\*\*([^*]+?)\*\*\s+\*\*([^*]+?)\*\*/g, '**$1 $2**')
     .trim();
@@ -128,7 +146,7 @@ function cleanBoilerplateLine(line: string): boolean {
   const s = line.replace(/\*\*/g, '').trim();
   if (!s) return true;
   if (
-    /^(?:advertisement|sponsored|did this page help you\??|yes\s*no|test yourself|join now|sign up|log in|cookie preferences|next topic|previous topic|back to top|download pdf|view all topics|jump to|table of contents|print this page)$/i.test(
+    /^(?:advertisement|sponsored|did this page help you\??|yes\s*no|test yourself|join now|sign up|log in|cookie preferences|next topic|previous topic|back to top|download pdf|view all topics|jump to|table of contents|print this page|more guides on this topic|related links?|external links|references|further reading|see also|notes)$/i.test(
       s
     )
   ) {
@@ -261,7 +279,9 @@ function extractQuizletOrGizmoFromHtml(
   // 3. Gizmo DOM selectors fallback
   if (domain.includes('gizmo')) {
     $('[data-testid*="card"], [class*="flashcard"], [class*="Card"]').each((_idx, el) => {
-      const parts = $(el).find('[class*="front"], [class*="question"], [class*="prompt"], [class*="back"], [class*="answer"]');
+      const parts = $(el).find(
+        '[class*="front"], [class*="question"], [class*="prompt"], [class*="back"], [class*="answer"]'
+      );
       if (parts.length >= 2) {
         add($(parts[0]).text(), $(parts[1]).text());
       }
@@ -271,77 +291,94 @@ function extractQuizletOrGizmoFromHtml(
   return cards;
 }
 
-function extractArticleMarkdown($: cheerio.CheerioAPI, domain: string): {
-  title: string;
-  markdown: string;
-} {
-  const rawTitle =
-    $('h1').first().text().trim() ||
-    $('meta[property="og:title"]').attr('content')?.trim() ||
-    $('title').first().text().trim() ||
-    domain;
+function htmlFragmentToMarkdown(fragment: string, domain: string): string {
+  const $frag = cheerio.load(`<div id="__sd_root__">${fragment}</div>`);
+  return extractArticleMarkdownFromRoot($frag, $frag('#__sd_root__').first() as cheerio.Cheerio<Element>, domain);
+}
 
-  const title = rawTitle
-    .replace(/\s*\|\s*(?:Save My Exams|BBC Bitesize|Wikipedia|Seneca).*$/i, '')
-    .replace(/\s*-\s*Revision Notes.*$/i, '')
-    .trim();
+function extractNotesFromEmbeddedJson(
+  $: cheerio.CheerioAPI,
+  domain: string
+): { title?: string; markdown: string } {
+  const chunks: string[] = [];
+  let discoveredTitle = '';
 
-  // Strip site chrome & noise
-  $(
-    [
-      'script',
-      'style',
-      'noscript',
-      'svg',
-      'nav',
-      'header',
-      'footer',
-      'aside',
-      'form',
-      'button',
-      'iframe',
-      '[role="navigation"]',
-      '[role="banner"]',
-      '[aria-label*="breadcrumb" i]',
-      '[class*="sidebar" i]',
-      '[class*="breadcrumb" i]',
-      '[class*="cookie" i]',
-      '[class*="advert" i]',
-      '[class*="promo" i]',
-      '[class*="upsell" i]',
-      '[class*="paywall" i]',
-      '[class*="feedback" i]',
-      '[class*="newsletter" i]',
-      '.mw-editsection',
-      '#toc',
-      '.toc',
-      '.navbox',
-      '.reflist',
-    ].join(', ')
-  ).remove();
-
-  // Pick richest content root
-  const candidates = [
-    'article',
-    'main',
-    '#mw-content-text .mw-parser-output',
-    '[class*="RevisionNotes" i]',
-    '[class*="revision-notes" i]',
-    '[class*="study-guide" i]',
-    '.content',
-    'body',
-  ];
-
-  let root: cheerio.Cheerio<Element> | null = null;
-  for (const sel of candidates) {
-    const found = $(sel).first();
-    if (found.length && found.text().trim().length > 180) {
-      root = found as cheerio.Cheerio<Element>;
-      break;
+  const visitJson = (node: unknown, depth = 0) => {
+    if (!node || depth > 14) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visitJson(item, depth + 1);
+      return;
     }
-  }
-  if (!root) root = $('body').first() as cheerio.Cheerio<Element>;
+    if (typeof node !== 'object') return;
+    const obj = node as Record<string, unknown>;
 
+    if (!discoveredTitle && typeof obj.headline === 'string' && obj.headline.trim().length > 4) {
+      discoveredTitle = obj.headline.trim();
+    }
+    if (typeof obj.articleBody === 'string' && obj.articleBody.trim().length > 120) {
+      chunks.push(obj.articleBody.trim());
+    }
+    if (typeof obj.markdown === 'string' && obj.markdown.trim().length > 120) {
+      chunks.push(obj.markdown.trim());
+    }
+    if (typeof obj.html === 'string' && obj.html.includes('<p>') && obj.html.length > 200) {
+      const md = htmlFragmentToMarkdown(obj.html, domain);
+      if (md.length > 100) chunks.push(md);
+    }
+    if (typeof obj.bodyHtml === 'string' && obj.bodyHtml.includes('<p>') && obj.bodyHtml.length > 200) {
+      const md = htmlFragmentToMarkdown(obj.bodyHtml, domain);
+      if (md.length > 100) chunks.push(md);
+    }
+
+    for (const val of Object.values(obj)) {
+      if (val && typeof val === 'object') visitJson(val, depth + 1);
+    }
+  };
+
+  $('script#__NEXT_DATA__, script[type="application/ld+json"], script[type="application/json"]').each(
+    (_idx, el) => {
+      const raw = $(el).html() || '';
+      if (!raw.trim() || raw.length > 1_500_000) return;
+      try {
+        visitJson(JSON.parse(raw));
+      } catch {
+        // ignore invalid script JSON
+      }
+    }
+  );
+
+  const uniqueChunks = Array.from(new Set(chunks));
+  return {
+    title: discoveredTitle || undefined,
+    markdown: uniqueChunks.join('\n\n').trim(),
+  };
+}
+
+function scoreContentCandidate($: cheerio.CheerioAPI, el: Element): number {
+  const $el = $(el);
+  let studyChars = 0;
+  $el.find('p, h1, h2, h3, h4, li, dt, dd, td, th').each((_i, child) => {
+    const t = $(child).text().replace(/\s+/g, ' ').trim();
+    if (t.length > 12) {
+      studyChars += t.length;
+    }
+  });
+  const totalChars = $el.text().replace(/\s+/g, ' ').trim().length;
+  let linkChars = 0;
+  $el.find('a').each((_i, a) => {
+    linkChars += $(a).text().replace(/\s+/g, ' ').trim().length;
+  });
+  // Penalize link-farm / navigation promo containers
+  const linkRatio = totalChars > 0 ? linkChars / totalChars : 0;
+  const penalty = linkRatio > 0.55 ? 0.25 : 1;
+  return Math.round((studyChars + totalChars * 0.2) * penalty);
+}
+
+function extractArticleMarkdownFromRoot(
+  $: cheerio.CheerioAPI,
+  root: cheerio.Cheerio<Element>,
+  _domain: string
+): string {
   const lines: string[] = [];
   const seenLines = new Set<string>();
 
@@ -478,24 +515,172 @@ function extractArticleMarkdown($: cheerio.CheerioAPI, domain: string): {
     walkBlock(child);
   });
 
-  // Fallback if nested structure had direct text nodes only
+  // Fallback if nested structure had direct text nodes or wrapped blocks
   if (lines.length === 0) {
-    root.find('h1, h2, h3, p, li').each((_i, el) => {
+    root.find('h1, h2, h3, h4, p, li, table').each((_i, el) => {
       walkBlock(el);
     });
   }
 
+  return lines.join('\n').trim();
+}
+
+function extractArticleMarkdown($: cheerio.CheerioAPI, domain: string): {
+  title: string;
+  markdown: string;
+} {
+  // Check embedded JSON BEFORE removing script tags
+  const embeddedNotes = extractNotesFromEmbeddedJson($, domain);
+
+  const firstH1 = $('h1').first();
+  const h1Text =
+    firstH1.length && firstH1[0]?.type === 'tag'
+      ? extractInlineText($, firstH1[0] as Element).replace(/\*\*/g, '').trim()
+      : '';
+
+  const rawTitle =
+    h1Text ||
+    embeddedNotes.title ||
+    $('meta[property="og:title"]').attr('content')?.trim() ||
+    $('title').first().text().trim() ||
+    domain;
+
+  const title = rawTitle
+    .replace(/\s*\|\s*(?:Save My Exams|BBC Bitesize|Wikipedia|Seneca|Google Docs).*$/i, '')
+    .replace(/\s*-\s*(?:Revision Notes|Google Docs).*$/i, '')
+    .trim();
+
+  // Strip site chrome & noise (never delete layout grid wrappers containing main content)
+  $(
+    [
+      'script',
+      'style',
+      'noscript',
+      'svg',
+      'nav',
+      'header',
+      'footer',
+      'aside',
+      'form',
+      'button',
+      'iframe',
+      '[role="navigation"]',
+      '[role="banner"]',
+      '[aria-label*="breadcrumb" i]',
+      '[class*="breadcrumb" i]',
+      '[class*="cookie" i]',
+      '[class*="advert" i]',
+      '[class*="promo" i]',
+      '[class*="upsell" i]',
+      '[class*="paywall" i]',
+      '[class*="feedback" i]',
+      '[class*="newsletter" i]',
+      '[class*="more-guides" i]',
+      '[class*="related-links" i]',
+      '.mw-editsection',
+      'sup.reference',
+      '.hatnote',
+      '.ambox',
+      '.infobox',
+      '#toc',
+      '.toc',
+      '.navbox',
+      '.reflist',
+      '#catlinks',
+    ].join(', ')
+  ).remove();
+
+  $('[class*="sidebar" i], [role="complementary"]').each((_i, el) => {
+    const $el = $(el);
+    if (
+      $el.is('main, article, body') ||
+      $el.find('main, article, [data-component="text-block"]').length > 0
+    ) {
+      return;
+    }
+    if ($el.find('p').length <= 3) {
+      $el.remove();
+    }
+  });
+
+  // Score ALL candidate elements rather than stopping at the first small <article> promo
+  const candidateSelectors = [
+    '#mw-content-text .mw-parser-output',
+    '[class*="RevisionNotes" i]',
+    '[class*="revision-notes" i]',
+    '[class*="study-guide" i]',
+    '[class*="article-body" i]',
+    'main',
+    '[role="main"]',
+    'article',
+    '.content',
+    'body',
+  ];
+
+  let bestRoot: cheerio.Cheerio<Element> | null = null;
+  let bestScore = 0;
+
+  for (const sel of candidateSelectors) {
+    $(sel).each((_idx, el) => {
+      if (el.type !== 'tag') return;
+      const score = scoreContentCandidate($, el as Element);
+      if (score > bestScore) {
+        bestScore = score;
+        bestRoot = $(el) as cheerio.Cheerio<Element>;
+      }
+    });
+  }
+
+  if (!bestRoot) bestRoot = $('body').first() as cheerio.Cheerio<Element>;
+  const domMarkdown = extractArticleMarkdownFromRoot($, bestRoot, domain);
+
+  const markdown =
+    domMarkdown.length >= 250 || domMarkdown.length >= embeddedNotes.markdown.length
+      ? domMarkdown
+      : embeddedNotes.markdown;
+
   return {
     title,
-    markdown: lines.join('\n').trim(),
+    markdown,
   };
 }
+
+function extractGoogleDocIdFromUrl(url: URL): string | null {
+  if (!url.hostname.toLowerCase().includes('docs.google.com')) return null;
+  const match = url.pathname.match(/\/document\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]{15,})/);
+  return match ? match[1] : null;
+}
+
+function describeFetchError(err: unknown, domain: string): { status: number; message: string } {
+  if (err instanceof Error) {
+    if (err.message.includes('restricted') || err.message.includes('Private')) {
+      return { status: 400, message: err.message };
+    }
+    if (err.name === 'TimeoutError' || err.name === 'AbortError' || /timed out/i.test(err.message)) {
+      return {
+        status: 422,
+        message: `${domain} took too long to respond (timeout). Copy the text from your browser and paste it into the "Paste Text" tab.`,
+      };
+    }
+  }
+  return {
+    status: 422,
+    message: `Could not connect to ${domain}. Check the URL, or copy the study text directly into the "Paste Text" tab.`,
+  };
+}
+
+const BROWSER_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
+};
 
 export function registerWebImportRoutes(app: Express): void {
   app.post('/api/import/url', async (req: Request, res: Response) => {
     const rawUrl = String((req.body as { url?: string })?.url || '').trim();
     if (!rawUrl) {
-      res.status(400).json({ error: 'Please paste a study webpage, Quizlet, or Gizmo URL.' });
+      res.status(400).json({ error: 'Please paste a study webpage, Quizlet, Gizmo, or Google Docs URL.' });
       return;
     }
 
@@ -511,17 +696,83 @@ export function registerWebImportRoutes(app: Express): void {
     const isDeckSite = domain.includes('quizlet') || domain.includes('gizmo');
 
     try {
+      // Special path: Public / link-shared Google Docs URLs export cleanly without OAuth
+      const gDocId = extractGoogleDocIdFromUrl(safeUrl);
+      if (gDocId) {
+        const exportHtmlUrl = `https://docs.google.com/document/d/${encodeURIComponent(gDocId)}/export?format=html`;
+        const gRes = await fetch(exportHtmlUrl, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(12000),
+          headers: BROWSER_HEADERS,
+        });
+
+        const redirectedToLogin = gRes.url.includes('accounts.google.com');
+        if (redirectedToLogin || gRes.status === 401 || gRes.status === 403) {
+          res.status(422).json({
+            blocked: true,
+            error:
+              'This Google Doc is private. Either set Share → "Anyone with the link (Viewer)" and retry, sign in above with Google Docs access, or click File → Download → Word (.docx) / Markdown (.md) and upload it.',
+          });
+          return;
+        }
+        if (!gRes.ok) {
+          res.status(422).json({
+            error: `Could not export Google Doc (HTTP ${gRes.status}). Verify the link or download it as .docx / .md.`,
+          });
+          return;
+        }
+
+        const gHtml = await gRes.text();
+        if (gHtml.includes('accounts.google.com/ServiceLogin') || gHtml.includes('Sign in - Google Accounts')) {
+          res.status(422).json({
+            blocked: true,
+            error:
+              'This Google Doc requires sign-in. Share it as "Anyone with the link" to fetch via URL, or download it as .docx / .md and upload it.',
+          });
+          return;
+        }
+
+        const $g = cheerio.load(gHtml);
+        const docTitle =
+          $g('title').first().text().trim() ||
+          $g('h1').first().text().trim() ||
+          'Google Doc';
+        const gMarkdown = extractArticleMarkdownFromRoot(
+          $g,
+          $g('body').first() as cheerio.Cheerio<Element>,
+          'docs.google.com'
+        );
+
+        if (!gMarkdown || gMarkdown.length < 10) {
+          res.status(422).json({
+            error: 'This Google Doc appears to be empty or could not be parsed.',
+          });
+          return;
+        }
+
+        const payload: WebImportResponse = {
+          url: safeUrl.toString(),
+          domain: 'docs.google.com',
+          kind: 'notes',
+          title: docTitle,
+          markdown: gMarkdown,
+          cards: [],
+        };
+        res.json(payload);
+        return;
+      }
+
       const fetchRes = await fetch(safeUrl.toString(), {
         method: 'GET',
         redirect: 'follow',
         signal: AbortSignal.timeout(12000),
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
-        },
+        headers: BROWSER_HEADERS,
       });
+
+      if (fetchRes.url) {
+        await assertSafeExternalUrl(fetchRes.url);
+      }
 
       if (fetchRes.status === 401 || fetchRes.status === 403 || fetchRes.status === 429) {
         const hint = isDeckSite
@@ -532,8 +783,8 @@ export function registerWebImportRoutes(app: Express): void {
       }
 
       if (!fetchRes.ok) {
-        res.status(fetchRes.status).json({
-          error: `Could not load URL (HTTP ${fetchRes.status}).`,
+        res.status(422).json({
+          error: `Could not load ${domain} (HTTP ${fetchRes.status}). Check the URL or paste the study text directly.`,
         });
         return;
       }
@@ -545,9 +796,13 @@ export function registerWebImportRoutes(app: Express): void {
         return;
       }
 
-      if (/cloudflare|just a moment|enable javascript and cookies|attention required/i.test(rawBody.slice(0, 4000))) {
+      if (
+        /cloudflare|just a moment|enable javascript and cookies|attention required|checking your browser/i.test(
+          rawBody.slice(0, 4500)
+        )
+      ) {
         const hint = isDeckSite
-          ? `${domain} uses a browser security challenge. Copy the flashcards directly (Quizlet: ··· → Export → Copy text) and paste them into the "Quizlet & Gizmo" tab.`
+          ? `${domain} uses a browser security check. Copy the flashcards directly (Quizlet: ··· → Export → Copy text) and paste them into the "Quizlet & Gizmo" tab.`
           : `${domain} requires interactive browser verification. Highlight & copy the notes from that page and paste them into the "Paste Text" tab.`;
         res.status(422).json({ error: hint, blocked: true });
         return;
@@ -616,12 +871,8 @@ export function registerWebImportRoutes(app: Express): void {
       };
       res.json(payload);
     } catch (err) {
-      res.status(500).json({
-        error:
-          err instanceof Error
-            ? err.message
-            : 'Failed to fetch webpage. You can always copy and paste the text directly.',
-      });
+      const info = describeFetchError(err, domain);
+      res.status(info.status).json({ error: info.message });
     }
   });
 }

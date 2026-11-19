@@ -1,10 +1,11 @@
 import {
   GoogleAuthProvider,
   onAuthStateChanged,
+  reauthenticateWithPopup,
   signInWithPopup,
   User,
 } from 'firebase/auth';
-import { auth, googleDocsProvider } from '../firebase';
+import { auth, GOOGLE_DOCS_SCOPES, googleDocsProvider } from '../firebase';
 
 export interface GoogleDocListItem {
   id: string;
@@ -49,22 +50,67 @@ export function clearGoogleDocsAccessToken(): void {
   cachedGoogleDocsToken = null;
 }
 
+function buildGoogleDocsAuthProvider(loginHint?: string | null): GoogleAuthProvider {
+  if (!loginHint) return googleDocsProvider;
+  const scoped = new GoogleAuthProvider();
+  for (const scope of GOOGLE_DOCS_SCOPES) {
+    scoped.addScope(scope);
+  }
+  scoped.setCustomParameters({
+    login_hint: loginHint,
+    prompt: 'consent select_account',
+  });
+  return scoped;
+}
+
+function formatGoogleDocsOAuthError(err: unknown): string {
+  const code = (err as { code?: string } | null)?.code || '';
+  const msg = err instanceof Error ? err.message : String(err || '');
+
+  if (code === 'auth/popup-blocked') {
+    return 'Browser blocked the Google sign-in popup. Allow popups for this site, or paste a link-shared Google Docs URL directly below!';
+  }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    return 'Google Docs sign-in was cancelled. You can also paste a link-shared Google Docs URL directly without signing in.';
+  }
+  if (code === 'auth/user-mismatch') {
+    return 'You chose a different Google account than the one currently signed into StudyDeck. Pick your StudyDeck Google account, or share the doc ("Anyone with the link") and paste its URL below.';
+  }
+  if (code === 'auth/unauthorized-domain' || /unauthorized-domain|redirect_uri_mismatch/i.test(msg)) {
+    return 'Google Docs OAuth is not authorized on this preview domain. Workaround: set your Doc to "Anyone with the link" and paste its URL below, or download it as .docx / .md and use Upload File.';
+  }
+  if (/access_denied|unverified|403|disabled|not enabled/i.test(msg)) {
+    return 'Google Docs / Drive OAuth permission was declined or not enabled on this project. Workaround: paste a link-shared Google Docs URL below, or download as .docx / .md!';
+  }
+  return msg || 'Google Docs sign-in failed. You can still paste a link-shared Google Docs URL below.';
+}
+
 export async function signInWithGoogleDocs(): Promise<{
   user: User;
   accessToken: string;
 }> {
   isSigningIn = true;
   try {
-    const result = await signInWithPopup(auth, googleDocsProvider);
+    const existingUser =
+      auth.currentUser && !auth.currentUser.isAnonymous ? auth.currentUser : null;
+    const provider = buildGoogleDocsAuthProvider(existingUser?.email);
+    const result = existingUser
+      ? await reauthenticateWithPopup(existingUser, provider)
+      : await signInWithPopup(auth, provider);
+
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
-      throw new Error('Could not obtain Google Docs access permission.');
+      throw new Error(
+        'Could not obtain Google Docs read permission. Make sure you ticked the Docs/Drive checkboxes, or paste a link-shared Doc URL below.'
+      );
     }
     cachedGoogleDocsToken = credential.accessToken;
     return {
       user: result.user,
       accessToken: cachedGoogleDocsToken,
     };
+  } catch (err) {
+    throw new Error(formatGoogleDocsOAuthError(err));
   } finally {
     isSigningIn = false;
   }

@@ -579,13 +579,22 @@ export function ProfileVaultView({
       setByokStatus({ ok: false, msg: 'Paste your API key before testing.' });
       return;
     }
+    const effectiveProvider: ByokProvider = trimmedKey.startsWith('xai-')
+      ? 'grok'
+      : trimmedKey.startsWith('AIza')
+      ? 'gemini'
+      : byokProvider;
+    if (effectiveProvider !== byokProvider) {
+      setByokProvider(effectiveProvider);
+    }
+
     setTestingByok(true);
     setByokStatus(null);
     try {
       const payload = {
-        provider: byokProvider,
+        provider: effectiveProvider,
         apiKey: trimmedKey,
-        baseUrl: byokProvider === 'openai-compatible' ? byokBaseUrlInput.trim() : undefined,
+        baseUrl: effectiveProvider === 'openai-compatible' ? byokBaseUrlInput.trim() : undefined,
         model: byokModelInput.trim() || undefined,
       };
       const res = await fetch('/api/ai/test-key', {
@@ -593,9 +602,21 @@ export function ProfileVaultView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ byok: payload }),
       });
-      const data = (await res.json()) as { ok?: boolean; model?: string; error?: string };
+      const rawText = await res.text();
+      let data: { ok?: boolean; model?: string; error?: string } = {};
+      if (rawText.trim()) {
+        try {
+          data = JSON.parse(rawText) as { ok?: boolean; model?: string; error?: string };
+        } catch {
+          throw new Error(
+            res.ok
+              ? 'Unexpected response from AI verification server.'
+              : `AI verification server error (HTTP ${res.status}).`
+          );
+        }
+      }
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || 'Key verification failed.');
+        throw new Error(data.error || `Key verification failed (HTTP ${res.status}).`);
       }
       saveByokConfig(payload);
       setByokStatus({
@@ -705,7 +726,17 @@ export function ProfileVaultView({
                   <input
                     type={showByokKey ? 'text' : 'password'}
                     value={byokKeyInput}
-                    onChange={(e) => setByokKeyInput(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setByokKeyInput(val);
+                      setByokStatus(null);
+                      const t = val.trim();
+                      if (t.startsWith('xai-') && byokProvider !== 'grok') {
+                        setByokProvider('grok');
+                      } else if (t.startsWith('AIza') && byokProvider !== 'gemini') {
+                        setByokProvider('gemini');
+                      }
+                    }}
                     placeholder={
                       byokProvider === 'gemini'
                         ? 'Paste your Google Gemini API key (AIza...)'
@@ -876,7 +907,7 @@ export function ProfileVaultView({
                       onChange={(e) => setByokModelInput(e.target.value)}
                       placeholder={
                         byokProvider === 'gemini'
-                          ? `Default: ${DEFAULT_GEMINI_FORMAT_MODEL}`
+                          ? `Auto (${DEFAULT_GEMINI_FORMAT_MODEL} / gemini-2.5-flash)`
                           : byokProvider === 'grok'
                           ? `Default: ${DEFAULT_GROK_MODEL}`
                           : `Default: ${DEFAULT_OPENAI_MODEL}`
