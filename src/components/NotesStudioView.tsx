@@ -26,6 +26,7 @@ import {
   FolderPlus,
   GitBranch,
   Globe,
+  GripVertical,
   Heading2,
   Heading3,
   Highlighter,
@@ -70,6 +71,7 @@ import {
   createEmptyStructuredNote,
   estimateNoteReadingMinutes,
   groupSectionPoints,
+  legacyHtmlToStructuredNote,
 } from '../lib/noteFormat';
 import { parseBulkTimelineNodes } from '../lib/smartImporter';
 import {
@@ -77,6 +79,8 @@ import {
   deleteTopicPromotingChildren,
   getTopicDescendantIds,
   makeId,
+  moveTopicInList,
+  TopicDropPosition,
 } from '../lib/workspaceStore';
 import {
   NoteAccentColor,
@@ -228,7 +232,6 @@ export function NotesStudioView({
 
   const [selectedTopicId, setSelectedTopicId] = useState<string>(initialTopicId || '');
   const [viewMode, setViewMode] = useState<'read' | 'edit' | 'timeline'>('read');
-  const [preferStructuredInRead, setPreferStructuredInRead] = useState(false);
   const [docZoom, setDocZoom] = useState<number>(100);
   const [editingDocHtml, setEditingDocHtml] = useState(false);
   const docEditorRef = useRef<HTMLDivElement | null>(null);
@@ -237,6 +240,11 @@ export function NotesStudioView({
   const [addingTopic, setAddingTopic] = useState(false);
   const [addingParentTopicId, setAddingParentTopicId] = useState<string | null>(null);
   const [collapsedTopicIds, setCollapsedTopicIds] = useState<Set<string>>(() => new Set());
+  const [draggedTopicId, setDraggedTopicId] = useState<string | null>(null);
+  const [topicDropTarget, setTopicDropTarget] = useState<{
+    targetId: string | 'root-end';
+    position: TopicDropPosition;
+  } | null>(null);
   const [confirmDeleteTopicId, setConfirmDeleteTopicId] = useState<string | null>(null);
   const [cardsFeedback, setCardsFeedback] = useState<string | null>(null);
   const [glossaryExpanded, setGlossaryExpanded] = useState(false);
@@ -322,7 +330,6 @@ export function NotesStudioView({
       if (target) {
         setSelectedTopicId(initialTopicId);
         setViewMode('read');
-        setPreferStructuredInRead(false);
       }
     }
   }, [initialTopicId, subjectTopics]);
@@ -397,7 +404,6 @@ export function NotesStudioView({
       setCardsFeedback(null);
       setConfirmDeleteTopicId(null);
       setEditingDocHtml(false);
-      setPreferStructuredInRead(false);
       setEditingEventId(null);
       setTimelineEraFilter('ALL');
       setTimelineSearch('');
@@ -433,6 +439,51 @@ export function NotesStudioView({
     if (finishEditing) {
       setEditingDocHtml(false);
     }
+  };
+
+  const switchTopicDefaultView = (mode: 'notes' | 'document') => {
+    if (!activeTopic) return;
+    if (mode === 'notes') {
+      let nextNote = activeTopic.notes;
+      if (editingDocHtml && docEditorRef.current) {
+        const cleaned = sanitizeDocumentHtml(docEditorRef.current.innerHTML);
+        if (cleaned) {
+          nextNote = { ...nextNote, originalHtml: cleaned };
+        }
+      }
+      setEditingDocHtml(false);
+      replaceActiveNote({
+        ...nextNote,
+        preferOriginalFormat: false,
+      });
+    } else {
+      if (viewMode === 'edit') {
+        setViewMode('read');
+      }
+      replaceActiveNote({
+        ...activeTopic.notes,
+        preferOriginalFormat: true,
+      });
+    }
+  };
+
+  const handleExtractStructuredFromDoc = () => {
+    if (!activeTopic || !activeDocHtml) return;
+    const extracted = legacyHtmlToStructuredNote(activeDocHtml);
+    replaceActiveNote({
+      ...activeTopic.notes,
+      summary: activeTopic.notes.summary.trim() || extracted.summary,
+      sections: extracted.sections.some((s) => s.points.length > 0)
+        ? extracted.sections
+        : activeTopic.notes.sections,
+      keyTerms:
+        activeTopic.notes.keyTerms.length > 0
+          ? activeTopic.notes.keyTerms
+          : extracted.keyTerms,
+      examTip: activeTopic.notes.examTip.trim() || extracted.examTip,
+      workedExample: activeTopic.notes.workedExample.trim() || extracted.workedExample,
+      preferOriginalFormat: false,
+    });
   };
 
   const execDocCommand = (cmd: string, value?: string) => {
@@ -576,6 +627,38 @@ export function NotesStudioView({
       else next.add(topicId);
       return next;
     });
+  };
+
+  const canDropTopicOn = (dragId: string, targetId: string): boolean => {
+    if (dragId === targetId) return false;
+    return !getTopicDescendantIds(subjectTopics, dragId).has(targetId);
+  };
+
+  const handleDropTopic = (targetId: string | null, position: TopicDropPosition) => {
+    if (!activeSubject || !draggedTopicId) {
+      setDraggedTopicId(null);
+      setTopicDropTarget(null);
+      return;
+    }
+    const dragId = draggedTopicId;
+    setDraggedTopicId(null);
+    setTopicDropTarget(null);
+    if (targetId && !canDropTopicOn(dragId, targetId)) return;
+
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      topics: moveTopicInList(prev.topics, activeSubject.id, dragId, targetId, position),
+      updatedAt: new Date().toISOString(),
+    }));
+
+    if (position === 'inside' && targetId) {
+      setCollapsedTopicIds((prev) => {
+        if (!prev.has(targetId)) return prev;
+        const next = new Set(prev);
+        next.delete(targetId);
+        return next;
+      });
+    }
   };
 
   const startAddingTopic = (parentId: string | null) => {
@@ -1110,7 +1193,7 @@ export function NotesStudioView({
               </form>
             )}
 
-            {/* Hierarchical Topic Tree List */}
+            {/* Hierarchical Topic Tree List (Drag & Drop to reorder or nest sub-topics) */}
             <div className="flex gap-1.5 overflow-x-auto pb-1 lg:flex-col lg:overflow-x-visible lg:pb-0">
               {topicTreeNodes
                 .filter(
@@ -1120,6 +1203,10 @@ export function NotesStudioView({
                   const tp = node.topic;
                   const selected = tp.id === activeTopic?.id;
                   const isCollapsed = collapsedTopicIds.has(tp.id);
+                  const isDraggingThis = draggedTopicId === tp.id;
+                  const isDropTarget = topicDropTarget?.targetId === tp.id;
+                  const dropPos = isDropTarget ? topicDropTarget?.position : null;
+                  const hasVisibleChildren = node.childCount > 0 && !isCollapsed;
                   const indentClass =
                     node.depth === 0
                       ? ''
@@ -1132,12 +1219,79 @@ export function NotesStudioView({
                   return (
                     <div
                       key={tp.id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.stopPropagation();
+                        setDraggedTopicId(tp.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', tp.id);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedTopicId(null);
+                        setTopicDropTarget(null);
+                      }}
+                      onDragOver={(e) => {
+                        if (!draggedTopicId || !canDropTopicOn(draggedTopicId, tp.id)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.dataTransfer.dropEffect = 'move';
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const relY = (e.clientY - rect.top) / Math.max(1, rect.height);
+                        const nextPos: TopicDropPosition =
+                          relY < 0.28
+                            ? 'before'
+                            : hasVisibleChildren
+                            ? 'inside'
+                            : relY > 0.72
+                            ? 'after'
+                            : 'inside';
+                        setTopicDropTarget((cur) =>
+                          cur?.targetId === tp.id && cur.position === nextPos
+                            ? cur
+                            : { targetId: tp.id, position: nextPos }
+                        );
+                      }}
+                      onDragLeave={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                          setTopicDropTarget((cur) =>
+                            cur?.targetId === tp.id ? null : cur
+                          );
+                        }
+                      }}
+                      onDrop={(e) => {
+                        if (!draggedTopicId || !canDropTopicOn(draggedTopicId, tp.id)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const pos =
+                          topicDropTarget?.targetId === tp.id
+                            ? topicDropTarget.position
+                            : 'inside';
+                        handleDropTopic(tp.id, pos);
+                      }}
                       className={`group flex shrink-0 items-center gap-1 rounded-xl border pr-1 transition-colors lg:w-full ${indentClass} ${
-                        selected
+                        isDraggingThis ? 'opacity-45' : ''
+                      } ${
+                        dropPos === 'inside'
+                          ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))] ring-1 ring-[var(--e3)]'
+                          : selected
                           ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))]'
                           : 'border-transparent hover:bg-[var(--bg)]'
+                      } ${
+                        dropPos === 'before'
+                          ? 'border-t-2 border-t-[var(--e3)]'
+                          : dropPos === 'after'
+                          ? 'border-b-2 border-b-[var(--e3)]'
+                          : ''
                       }`}
                     >
+                      <span
+                        title="Drag to reorder or drop onto a topic to make sub-topic"
+                        className="ml-0.5 hidden h-5 w-3.5 shrink-0 cursor-grab items-center justify-center text-[var(--mute)]/45 group-hover:text-[var(--mute)] active:cursor-grabbing lg:inline-flex"
+                        aria-hidden="true"
+                      >
+                        <GripVertical className="h-3 w-3" />
+                      </span>
+
                       {node.childCount > 0 ? (
                         <button
                           type="button"
@@ -1147,7 +1301,7 @@ export function NotesStudioView({
                               ? `Expand sub-topics of ${tp.name}`
                               : `Collapse sub-topics of ${tp.name}`
                           }
-                          className="ml-1 flex h-6 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-[var(--mute)] hover:text-[var(--ink)]"
+                          className="flex h-6 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-[var(--mute)] hover:text-[var(--ink)]"
                         >
                           {isCollapsed ? (
                             <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1157,11 +1311,11 @@ export function NotesStudioView({
                         </button>
                       ) : node.depth > 0 ? (
                         <CornerDownRight
-                          className="ml-1.5 h-3 w-3 shrink-0 text-[var(--mute)]/60"
+                          className="ml-0.5 h-3 w-3 shrink-0 text-[var(--mute)]/60"
                           aria-hidden="true"
                         />
                       ) : (
-                        <span className="hidden w-1.5 shrink-0 lg:block" aria-hidden="true" />
+                        <span className="hidden w-1 shrink-0 lg:block" aria-hidden="true" />
                       )}
 
                       <button
@@ -1175,7 +1329,12 @@ export function NotesStudioView({
                       >
                         <span className="truncate">{tp.name}</span>
                         <span className="flex shrink-0 items-center gap-1">
-                          {node.childCount > 0 && (
+                          {dropPos === 'inside' && (
+                            <span className="text-[10px] font-bold text-[var(--e3)] whitespace-nowrap">
+                              Nest
+                            </span>
+                          )}
+                          {node.childCount > 0 && dropPos !== 'inside' && (
                             <span
                               title={`${node.childCount} sub-topic${node.childCount === 1 ? '' : 's'}`}
                               className="font-mono-num rounded bg-[var(--bg)] px-1 py-0.5 text-[10px] font-semibold text-[var(--mute)]"
@@ -1206,6 +1365,31 @@ export function NotesStudioView({
                     </div>
                   );
                 })}
+              {draggedTopicId && (
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    setTopicDropTarget({ targetId: 'root-end', position: 'root-end' });
+                  }}
+                  onDragLeave={() => {
+                    setTopicDropTarget((cur) =>
+                      cur?.targetId === 'root-end' ? null : cur
+                    );
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleDropTopic(null, 'root-end');
+                  }}
+                  className={`mt-1 rounded-xl border border-dashed px-3 py-2 text-center text-[11px] font-semibold transition-colors ${
+                    topicDropTarget?.targetId === 'root-end'
+                      ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))] text-[var(--e3)]'
+                      : 'border-[var(--line)] text-[var(--mute)]'
+                  }`}
+                >
+                  Drop here to move to top level
+                </div>
+              )}
               {subjectTopics.length === 0 && (
                 <div className="rounded-xl border border-dashed border-[var(--line)] p-3 text-xs text-[var(--mute)]">
                   No topics in {activeSubject?.name}. Click &ldquo;+ Topic&rdquo; above.
@@ -1243,11 +1427,9 @@ export function NotesStudioView({
           const activeColorOpt =
             NOTE_COLOR_OPTIONS.find((c) => c.id === activeNoteColor) ||
             NOTE_COLOR_OPTIONS[0];
-          const isDocViewActive =
-            hasDocHtml &&
-            activeTopic.notes.preferOriginalFormat !== false &&
-            !preferStructuredInRead &&
-            !isPdfPageDoc;
+          const isPreferringDocView =
+            hasDocHtml && activeTopic.notes.preferOriginalFormat !== false;
+          const isDocViewActive = isPreferringDocView && !isPdfPageDoc;
           const isEditingAnything =
             viewMode === 'edit' || (viewMode === 'read' && isDocViewActive && editingDocHtml);
 
@@ -1557,6 +1739,55 @@ export function NotesStudioView({
               </div>
             )}
 
+            {/* Persistent Notes View / Document Default View Switcher after importing */}
+            {hasDocHtml && viewMode !== 'timeline' && (
+              <div className="sd-card flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="sd-seg" role="group" aria-label="Topic format view">
+                    <button
+                      type="button"
+                      aria-pressed={!isPreferringDocView}
+                      onClick={() => switchTopicDefaultView('notes')}
+                      className="sd-seg-btn inline-flex items-center gap-1.5 whitespace-nowrap"
+                    >
+                      <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Notes View</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={isPreferringDocView}
+                      onClick={() => switchTopicDefaultView('document')}
+                      className="sd-seg-btn inline-flex items-center gap-1.5 whitespace-nowrap"
+                    >
+                      <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Document Default</span>
+                    </button>
+                  </div>
+                  <span className="hidden text-[11px] text-[var(--mute)] sm:inline">
+                    {isPreferringDocView
+                      ? 'Showing original imported document'
+                      : 'Showing structured revision notes'}
+                  </span>
+                </div>
+
+                {isPreferringDocView && viewMode === 'read' && (
+                  <div className="sd-seg" role="group" aria-label="Document zoom">
+                    {[85, 100, 115].map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        aria-pressed={docZoom === pct}
+                        onClick={() => setDocZoom(pct)}
+                        className="sd-seg-btn font-mono-num"
+                      >
+                        {pct}%
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {confirmDeleteTopicId === activeTopic.id && (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--bad)]/40 bg-[color-mix(in_srgb,var(--bad)_7%,var(--card))] px-4 py-2.5 text-xs">
                 <span className="font-semibold text-[var(--ink)]">
@@ -1600,61 +1831,12 @@ export function NotesStudioView({
               const populatedSections = activeTopic.notes.sections.filter(
                 (s) => s.points.length > 0 || s.heading.trim()
               );
-              const hasStructuredContent =
-                Boolean(activeTopic.notes.summary.trim()) ||
-                populatedSections.some((s) => s.points.length > 0) ||
-                activeTopic.notes.keyTerms.length > 0 ||
-                Boolean(activeTopic.notes.workedExample.trim()) ||
-                Boolean(activeTopic.notes.examTip.trim());
-
               const showDocumentInRead =
-                hasDocHtml &&
-                activeTopic.notes.preferOriginalFormat !== false &&
-                !preferStructuredInRead;
+                hasDocHtml && activeTopic.notes.preferOriginalFormat !== false;
 
               if (showDocumentInRead) {
                 return (
                   <div className="space-y-4">
-                    {/* Compact Document Controls inside Read */}
-                    <div className="sd-card flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-xs">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 font-bold text-[var(--e3)]">
-                          <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>Document View</span>
-                        </span>
-                        <span aria-hidden="true" className="text-[var(--line)]">|</span>
-                        <div className="sd-seg" role="group" aria-label="Document zoom">
-                          {[85, 100, 115].map((pct) => (
-                            <button
-                              key={pct}
-                              type="button"
-                              aria-pressed={docZoom === pct}
-                              onClick={() => setDocZoom(pct)}
-                              className="sd-seg-btn font-mono-num"
-                            >
-                              {pct}%
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        {hasStructuredContent && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingDocHtml(false);
-                              setPreferStructuredInRead(true);
-                            }}
-                            className="sd-btn px-3 py-1 text-xs whitespace-nowrap"
-                          >
-                            <BookOpen className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                            <span>Structured Notes</span>
-                          </button>
-                        )}
-
-                      </div>
-                    </div>
 
                     {/* Enhanced Word/Docs Formatting & One-Click Study Ribbon */}
                     {editingDocHtml && !isPdfPageDoc && (
@@ -2120,30 +2302,6 @@ export function NotesStudioView({
 
               return (
                 <div className="space-y-9 text-[16.5px] leading-[1.75] text-[var(--ink)]">
-                  {hasDocHtml && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-3 text-sm">
-                      <span className="inline-flex items-center gap-2 font-semibold text-[var(--mute)]">
-                        <FileCheck2 className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
-                        <span>Showing structured notes view</span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPreferStructuredInRead(false);
-                          if (!activeTopic.notes.preferOriginalFormat) {
-                            replaceActiveNote({
-                              ...activeTopic.notes,
-                              preferOriginalFormat: true,
-                            });
-                          }
-                        }}
-                        className="sd-btn px-3.5 py-1.5 text-xs font-semibold text-[var(--e3)] whitespace-nowrap"
-                      >
-                        <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Original Document View</span>
-                      </button>
-                    </div>
-                  )}
 
                   {/* Quick Section Jump Index (TOC) */}
                   {populatedSections.length >= 2 && (
@@ -2231,36 +2389,82 @@ export function NotesStudioView({
                           const secCount = child.notes.sections.filter(
                             (s) => s.points.length > 0
                           ).length;
+                          const isCardDragging = draggedTopicId === child.id;
+                          const isCardDrop = topicDropTarget?.targetId === child.id;
                           return (
                             <button
                               key={child.id}
                               type="button"
+                              draggable
+                              onDragStart={(e) => {
+                                e.stopPropagation();
+                                setDraggedTopicId(child.id);
+                                e.dataTransfer.effectAllowed = 'move';
+                                e.dataTransfer.setData('text/plain', child.id);
+                              }}
+                              onDragEnd={() => {
+                                setDraggedTopicId(null);
+                                setTopicDropTarget(null);
+                              }}
+                              onDragOver={(e) => {
+                                if (!draggedTopicId || !canDropTopicOn(draggedTopicId, child.id)) return;
+                                e.preventDefault();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const pos: TopicDropPosition =
+                                  e.clientX - rect.left < rect.width * 0.5 ? 'before' : 'after';
+                                setTopicDropTarget((cur) =>
+                                  cur?.targetId === child.id && cur.position === pos
+                                    ? cur
+                                    : { targetId: child.id, position: pos }
+                                );
+                              }}
+                              onDrop={(e) => {
+                                if (!draggedTopicId || !canDropTopicOn(draggedTopicId, child.id)) return;
+                                e.preventDefault();
+                                const pos =
+                                  topicDropTarget?.targetId === child.id
+                                    ? topicDropTarget.position
+                                    : 'after';
+                                handleDropTopic(child.id, pos);
+                              }}
                               onClick={() => setSelectedTopicId(child.id)}
-                              className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--card)] px-4 py-3.5 text-left transition-colors hover:border-[var(--note-accent)]"
+                              className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-[var(--card)] px-4 py-3.5 text-left transition-colors hover:border-[var(--note-accent)] ${
+                                isCardDragging ? 'opacity-45' : ''
+                              } ${
+                                isCardDrop
+                                  ? 'border-[var(--e3)] ring-1 ring-[var(--e3)]'
+                                  : 'border-[var(--line)]'
+                              }`}
                             >
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  {child.specCode && (
-                                    <span className="font-mono-num shrink-0 text-xs font-bold text-[var(--note-accent)]">
-                                      {child.specCode}
+                              <div className="min-w-0 flex items-center gap-2">
+                                <GripVertical
+                                  className="h-3.5 w-3.5 shrink-0 cursor-grab text-[var(--mute)]/50"
+                                  aria-hidden="true"
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    {child.specCode && (
+                                      <span className="font-mono-num shrink-0 text-xs font-bold text-[var(--note-accent)]">
+                                        {child.specCode}
+                                      </span>
+                                    )}
+                                    <span className="truncate text-[15.5px] font-bold text-[var(--ink)]">
+                                      {child.name}
                                     </span>
-                                  )}
-                                  <span className="truncate text-[15.5px] font-bold text-[var(--ink)]">
-                                    {child.name}
-                                  </span>
-                                  {child.completed && (
-                                    <CheckCircle2
-                                      className="h-4 w-4 shrink-0 text-[var(--ok)]"
-                                      aria-label="Studied"
-                                    />
-                                  )}
-                                </div>
-                                <div className="mt-0.5 truncate text-[13px] text-[var(--mute)]">
-                                  {child.notes.summary.trim()
-                                    ? child.notes.summary.trim()
-                                    : `${secCount} section${secCount === 1 ? '' : 's'} · ${estimateNoteReadingMinutes(child.notes)} min read${
-                                        childSubCount > 0 ? ` · ${childSubCount} sub-topic${childSubCount === 1 ? '' : 's'}` : ''
-                                      }`}
+                                    {child.completed && (
+                                      <CheckCircle2
+                                        className="h-4 w-4 shrink-0 text-[var(--ok)]"
+                                        aria-label="Studied"
+                                      />
+                                    )}
+                                  </div>
+                                  <div className="mt-0.5 truncate text-[13px] text-[var(--mute)]">
+                                    {child.notes.summary.trim()
+                                      ? child.notes.summary.trim()
+                                      : `${secCount} section${secCount === 1 ? '' : 's'} · ${estimateNoteReadingMinutes(child.notes)} min read${
+                                          childSubCount > 0 ? ` · ${childSubCount} sub-topic${childSubCount === 1 ? '' : 's'}` : ''
+                                        }`}
+                                  </div>
                                 </div>
                               </div>
                               <ArrowRight
@@ -2529,17 +2733,30 @@ export function NotesStudioView({
                     </div>
                   ) : !activeTopic.notes.summary.trim() &&
                     !activeTopic.notes.keyTerms.length &&
-                    !activeTopic.notes.legacyHtml &&
                     directChildTopics.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-[var(--line)] bg-[var(--card)] p-10 text-center">
                       <p className="text-base text-[var(--mute)]">
                         This topic doesn&apos;t have structured notes yet.
                       </p>
                       <div className="mt-5 flex flex-wrap justify-center gap-2.5">
+                        {hasDocHtml && (
+                          <button
+                            type="button"
+                            onClick={handleExtractStructuredFromDoc}
+                            className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+                          >
+                            <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Extract Notes from Document</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setViewMode('edit')}
-                          className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+                          className={
+                            hasDocHtml
+                              ? 'sd-btn px-4 py-2 text-xs whitespace-nowrap'
+                              : 'sd-btn-pri px-4 py-2 text-xs whitespace-nowrap'
+                          }
                         >
                           <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
                           <span>Write Notes</span>

@@ -1226,9 +1226,10 @@ export default function App() {
             setImportModalOpen(false);
             handleNavigate('vault', { vaultSection: 'data' });
           }}
-          onApplyImport={(updater, _msg, targetSubjectId) => {
+          onApplyImport={(updater, _msg, targetSubjectId, targetTopicId) => {
             updateWorkspace(updater);
             if (targetSubjectId) setSelectedSubjectId(targetSubjectId);
+            if (targetTopicId) setSelectedTopicId(targetTopicId);
             setImportModalOpen(false);
           }}
         />

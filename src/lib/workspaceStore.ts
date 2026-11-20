@@ -284,6 +284,66 @@ export function deleteTopicPromotingChildren(
   );
 }
 
+export type TopicDropPosition = 'before' | 'after' | 'inside' | 'root-end';
+
+export function moveTopicInList(
+  allTopics: StudyTopic[],
+  subjectId: string,
+  draggedId: string,
+  targetId: string | null,
+  position: TopicDropPosition
+): StudyTopic[] {
+  const subjectTopics = allTopics.filter((t) => t.subjectId === subjectId);
+  const otherTopics = allTopics.filter((t) => t.subjectId !== subjectId);
+  const dragged = subjectTopics.find((t) => t.id === draggedId);
+  if (!dragged) return allTopics;
+
+  const withoutDragged = subjectTopics.filter((t) => t.id !== draggedId);
+  const orderedWithout = buildTopicTreeList(withoutDragged).map((n) => n.topic);
+
+  if (position === 'root-end' || !targetId) {
+    const { parentTopicId: _drop, ...asRoot } = dragged;
+    return sanitizeTopicParents([...otherTopics, ...orderedWithout, asRoot]);
+  }
+
+  if (targetId === draggedId) return allTopics;
+  const descendants = getTopicDescendantIds(subjectTopics, draggedId);
+  if (descendants.has(targetId)) return allTopics;
+
+  const target = orderedWithout.find((t) => t.id === targetId);
+  if (!target) return allTopics;
+
+  const nextParentId =
+    position === 'inside' ? target.id : target.parentTopicId || undefined;
+
+  const updatedDragged: StudyTopic = nextParentId
+    ? { ...dragged, parentTopicId: nextParentId }
+    : (() => {
+        const { parentTopicId: _drop, ...rest } = dragged;
+        return rest;
+      })();
+
+  const targetIdx = orderedWithout.findIndex((t) => t.id === targetId);
+  if (targetIdx < 0) return allTopics;
+
+  let insertAt = targetIdx;
+  if (position === 'after' || position === 'inside') {
+    const targetDesc = getTopicDescendantIds(orderedWithout, targetId);
+    insertAt = targetIdx + 1;
+    while (
+      insertAt < orderedWithout.length &&
+      targetDesc.has(orderedWithout[insertAt].id)
+    ) {
+      insertAt += 1;
+    }
+  }
+
+  const nextSubjectTopics = [...orderedWithout];
+  nextSubjectTopics.splice(insertAt, 0, updatedDragged);
+
+  return sanitizeTopicParents([...otherTopics, ...nextSubjectTopics]);
+}
+
 export function normalizeWorkspace(raw: unknown): WorkspaceData {
   const empty = createEmptyWorkspace();
   if (!raw || typeof raw !== 'object') return empty;
