@@ -25,6 +25,7 @@ import {
   incrementSharedCopyCount,
   lookupSharedItemByCode,
 } from '../lib/communityService';
+import { NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints } from '../lib/noteFormat';
 import {
   SharedItemType,
@@ -83,14 +84,19 @@ function StructuredNoteReader({
 
   if (!hasAnyContent) {
     return (
-      <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-5 text-center text-xs text-[var(--mute)]">
+      <div className="rounded-2xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-8 text-center text-sm text-[var(--mute)]">
         This topic does not have written notes yet.
       </div>
     );
   }
 
+  let sectionIdx = 0;
+
   return (
-    <div className="space-y-4 text-sm leading-relaxed">
+    <div
+      className="sd-note-scope space-y-8 text-[16px] leading-[1.72] text-[var(--ink)]"
+      data-note-color={normalizeNoteColor(notes.accentColor)}
+    >
       {docHtml && notes.preferOriginalFormat && (
         <div className="sd-doc-canvas">
           <div className="sd-doc-sheet" dangerouslySetInnerHTML={{ __html: docHtml }} />
@@ -98,30 +104,52 @@ function StructuredNoteReader({
       )}
 
       {notes.summary.trim() && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
-            Topic Overview
-          </div>
-          <p className="mt-1 text-[var(--ink)]">{renderInlineBold(notes.summary)}</p>
+        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--note-accent)_28%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--card))] px-5 py-4">
+          <div className="text-sm font-bold text-[var(--note-accent)]">Topic Overview</div>
+          <p className="mt-1.5 text-[16px] leading-[1.72] text-[var(--ink)]">
+            {renderInlineBold(notes.summary)}
+          </p>
         </div>
       )}
 
       {notes.sections.map((sec) => {
         if (!sec.heading.trim() && sec.points.length === 0) return null;
+        sectionIdx += 1;
+        const secNum = String(sectionIdx).padStart(2, '0');
+        const secAccent = normalizeNoteColor(sec.accentColor);
+        const roleInfo = sec.partRole ? NOTE_PART_ROLE_MAP[sec.partRole] : undefined;
         return (
-          <div
+          <section
             key={sec.id}
-            className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4"
+            data-note-color={secAccent !== 'default' ? secAccent : undefined}
+            className="space-y-3.5"
           >
-            <h3 className="font-display text-base font-bold text-[var(--ink)]">
-              {sec.heading || 'Key Points'}
-            </h3>
+            <div className="flex flex-wrap items-baseline justify-between gap-2 border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] pb-2.5">
+              <div className="flex min-w-0 items-baseline gap-2.5">
+                <span className="font-mono-num text-base font-extrabold text-[var(--note-accent)]">
+                  {secNum}.
+                </span>
+                <h3 className="font-display text-xl font-extrabold tracking-tight text-[var(--ink)] sm:text-2xl">
+                  {sec.heading || 'Key Points'}
+                </h3>
+              </div>
+              {roleInfo && (
+                <span className="text-xs font-bold text-[var(--note-accent)]">
+                  {roleInfo.label}
+                </span>
+              )}
+            </div>
             {sec.points.length > 0 && (
-              <div className="mt-2.5 space-y-2 text-[13px] text-[var(--ink)]">
+              <div className="space-y-3 text-[15.5px] leading-[1.7] text-[var(--ink)] sm:text-[16px]">
                 {groupSectionPoints(sec.points).map((blk, i) => {
                   if (blk.kind === 'subheading') {
                     return (
-                      <h4 key={i} className="pt-2 text-xs font-bold uppercase tracking-wide text-[var(--e3)]">
+                      <h4
+                        key={i}
+                        className={`font-display text-lg font-bold text-[var(--note-accent)] ${
+                          i > 0 ? 'pt-3' : ''
+                        }`}
+                      >
                         {renderInlineBold(blk.text)}
                       </h4>
                     );
@@ -130,12 +158,12 @@ function StructuredNoteReader({
                     return (
                       <div
                         key={i}
-                        className="my-1.5 rounded-lg border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] px-3 py-2"
+                        className="my-3 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--card))] px-4 py-3.5"
                       >
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                        <div className="text-sm font-bold text-[var(--note-accent)]">
                           {blk.title || 'Key Fact'}
                         </div>
-                        <div className="mt-0.5 text-xs leading-relaxed text-[var(--ink)]">
+                        <div className="mt-1 text-[15.5px] leading-[1.68] text-[var(--ink)]">
                           {renderInlineBold(blk.text)}
                         </div>
                       </div>
@@ -143,12 +171,15 @@ function StructuredNoteReader({
                   }
                   if (blk.kind === 'table') {
                     return (
-                      <div key={i} className="my-1.5 overflow-x-auto rounded-lg border border-[var(--line)]">
-                        <table className="w-full border-collapse text-left text-xs">
-                          <thead className="border-b border-[var(--line)] bg-[var(--card)]">
+                      <div
+                        key={i}
+                        className="my-4 overflow-x-auto rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[var(--card)]"
+                      >
+                        <table className="w-full border-collapse text-left text-[15px]">
+                          <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_12%,var(--card))]">
                             <tr>
                               {blk.headers.map((h, hi) => (
-                                <th key={hi} className="px-3 py-2 font-bold text-[var(--ink)]">
+                                <th key={hi} className="px-4 py-3 font-bold text-[var(--ink)]">
                                   {renderInlineBold(h)}
                                 </th>
                               ))}
@@ -156,9 +187,21 @@ function StructuredNoteReader({
                           </thead>
                           <tbody className="divide-y divide-[var(--line)]">
                             {blk.rows.map((row, ri) => (
-                              <tr key={ri}>
+                              <tr
+                                key={ri}
+                                className={
+                                  ri % 2 === 1
+                                    ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
+                                    : ''
+                                }
+                              >
                                 {row.map((cell, ci) => (
-                                  <td key={ci} className="px-3 py-1.5 align-top text-[var(--ink)]">
+                                  <td
+                                    key={ci}
+                                    className={`px-4 py-3 align-top leading-relaxed text-[var(--ink)] ${
+                                      ci === 0 ? 'font-semibold' : ''
+                                    }`}
+                                  >
                                     {renderInlineBold(cell)}
                                   </td>
                                 ))}
@@ -171,21 +214,28 @@ function StructuredNoteReader({
                   }
                   if (blk.kind === 'flow') {
                     return (
-                      <div key={i} className="my-1.5 rounded-lg border border-[var(--line)] bg-[var(--card)] p-3">
+                      <div
+                        key={i}
+                        className="my-3 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))] p-4"
+                      >
                         {blk.label && (
-                          <div className="mb-1.5 text-[11px] font-bold text-[var(--e3)]">
+                          <div className="mb-2.5 text-sm font-bold text-[var(--note-accent)]">
                             {blk.label}
                           </div>
                         )}
-                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <div className="flex flex-wrap items-center gap-2 text-[14.5px]">
                           {blk.steps.map((step, sIdx) => (
-                            <span key={sIdx} className="inline-flex items-center gap-1.5">
-                              <span className="rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1">
-                                <strong className="font-mono-num text-[var(--e3)]">{sIdx + 1}.</strong>{' '}
+                            <span key={sIdx} className="inline-flex items-center gap-2">
+                              <span className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5">
+                                <strong className="font-mono-num text-[var(--note-accent)]">
+                                  {sIdx + 1}.
+                                </strong>{' '}
                                 {renderInlineBold(step)}
                               </span>
                               {sIdx < blk.steps.length - 1 && (
-                                <span className="text-[var(--mute)]" aria-hidden="true">→</span>
+                                <span className="text-[var(--note-accent)]" aria-hidden="true">
+                                  →
+                                </span>
                               )}
                             </span>
                           ))}
@@ -195,7 +245,7 @@ function StructuredNoteReader({
                   }
                   if (blk.kind === 'paragraph') {
                     return (
-                      <p key={i} className="whitespace-pre-line leading-relaxed">
+                      <p key={i} className="max-w-[70ch] whitespace-pre-line leading-[1.75]">
                         {renderInlineBold(blk.text)}
                       </p>
                     );
@@ -204,74 +254,89 @@ function StructuredNoteReader({
                   return (
                     <div
                       key={i}
-                      className={`flex items-start gap-2 ${isSubBullet ? 'pl-6' : 'pl-1'}`}
+                      className={`flex items-start gap-3 ${isSubBullet ? 'pl-7' : 'pl-1'}`}
                     >
                       <span
-                        className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
+                        className={`mt-[11px] h-2 w-2 shrink-0 rounded-full ${
                           isSubBullet
-                            ? 'border border-[var(--ink)] bg-transparent'
-                            : 'bg-[var(--ink)]'
+                            ? 'border-[1.5px] border-[var(--note-accent)] bg-transparent'
+                            : 'bg-[var(--note-accent)]'
                         }`}
                         aria-hidden="true"
                       />
-                      <span>{renderInlineBold(blk.text)}</span>
+                      <span className="max-w-[70ch]">{renderInlineBold(blk.text)}</span>
                     </div>
                   );
                 })}
               </div>
             )}
-          </div>
+          </section>
         );
       })}
 
       {notes.keyTerms.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)]">
-          <div className="border-b border-[var(--line)] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+        <section className="space-y-3">
+          <h3 className="font-display border-b-2 border-[color-mix(in_srgb,var(--note-accent)_32%,var(--line))] pb-2 text-lg font-extrabold text-[var(--ink)] sm:text-xl">
             Key Terms &amp; Definitions ({notes.keyTerms.length})
+          </h3>
+          <div className="overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[var(--card)]">
+            <table className="w-full border-collapse text-left text-[15px]">
+              <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_35%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_11%,var(--card))]">
+                <tr>
+                  <th className="w-1/3 px-4 py-2.5 font-bold text-[var(--ink)]">Term</th>
+                  <th className="px-4 py-2.5 font-bold text-[var(--ink)]">Definition</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--line)]">
+                {notes.keyTerms.map((kt, idx) => (
+                  <tr
+                    key={kt.id}
+                    className={
+                      idx % 2 === 1
+                        ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
+                        : ''
+                    }
+                  >
+                    <td className="px-4 py-3 align-top font-bold text-[color-mix(in_srgb,var(--note-accent)_55%,var(--ink))]">
+                      {kt.term}
+                    </td>
+                    <td className="px-4 py-3 align-top text-[var(--ink)]/92">{kt.definition}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div className="divide-y divide-[var(--line)]">
-            {notes.keyTerms.map((kt) => (
-              <div key={kt.id} className="grid gap-1.5 px-4 py-2.5 text-xs sm:grid-cols-3">
-                <div className="font-bold text-[var(--ink)]">{kt.term}</div>
-                <div className="text-[var(--mute)] sm:col-span-2">{kt.definition}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+        </section>
       )}
 
       {notes.workedExample.trim() && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--ok)]">
-            Worked Example
-          </div>
-          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-[var(--ink)]">
+        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--ok)_32%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_5%,var(--card))] p-5">
+          <div className="text-sm font-bold text-[var(--ok)]">Worked Example</div>
+          <p className="mt-1.5 whitespace-pre-line text-[15.5px] leading-[1.7] text-[var(--ink)]">
             {renderInlineBold(notes.workedExample)}
           </p>
         </div>
       )}
 
       {notes.examTip.trim() && (
-        <div className="rounded-xl border border-[var(--e2)] bg-[var(--bg)] p-4">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--e2)]">
-            Examiner Tip
-          </div>
-          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-[var(--ink)]">
+        <div className="rounded-2xl border border-[color-mix(in_srgb,var(--e2)_38%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_6%,var(--card))] p-5">
+          <div className="text-sm font-bold text-[var(--e2)]">Examiner Tip</div>
+          <p className="mt-1.5 whitespace-pre-line text-[15.5px] leading-[1.7] text-[var(--ink)]">
             {renderInlineBold(notes.examTip)}
           </p>
         </div>
       )}
 
       {timelineEvents && timelineEvents.length > 0 && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 space-y-2">
-          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
-            <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
+        <div className="space-y-3 rounded-2xl border border-[var(--line)] bg-[var(--card)] p-5">
+          <div className="flex items-center gap-2 text-sm font-bold text-[var(--e3)]">
+            <Calendar className="h-4 w-4" aria-hidden="true" />
             <span>Timeline Events ({timelineEvents.length})</span>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {timelineEvents.map((ev) => (
-              <div key={ev.id} className="flex items-start gap-3 text-xs">
-                <span className="font-mono-num shrink-0 rounded border border-[var(--line)] bg-[var(--card)] px-2 py-0.5 font-bold text-[var(--e3)]">
+              <div key={ev.id} className="flex items-start gap-3 text-[15px]">
+                <span className="font-mono-num shrink-0 rounded-md border border-[var(--line)] bg-[var(--bg)] px-2.5 py-0.5 text-xs font-bold text-[var(--e3)]">
                   {ev.date}
                 </span>
                 <div>

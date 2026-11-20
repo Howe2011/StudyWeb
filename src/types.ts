@@ -113,10 +113,14 @@ export interface PlannerUiSettings {
 // Unified Native Workspace Data Model (v2)
 // ============================================================================
 
+export type NotePartRole = 'core' | 'process' | 'compare' | 'example' | 'risk';
+
 export interface NoteSectionBlock {
   id: string;
   heading: string;
   points: string[];
+  accentColor?: NoteAccentColor;
+  partRole?: NotePartRole;
 }
 
 export interface KeyTermPair {
@@ -135,12 +139,15 @@ export interface TimelineEventItem {
   keyEvent?: boolean;
 }
 
+export type NoteAccentColor = 'default' | 'blue' | 'green' | 'purple' | 'amber' | 'rose';
+
 export interface StructuredNoteData {
   summary: string;
   sections: NoteSectionBlock[];
   keyTerms: KeyTermPair[];
   examTip: string;
   workedExample: string;
+  accentColor?: NoteAccentColor;
   legacyHtml?: string;
   originalHtml?: string;
   preferOriginalFormat?: boolean;

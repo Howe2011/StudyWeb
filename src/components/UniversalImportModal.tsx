@@ -51,6 +51,12 @@ import {
   signInWithGoogleDocs,
 } from '../lib/googleDocsImport';
 import {
+  applyVerifiedPartColors,
+  NOTE_PART_ROLE_MAP,
+  normalizeNoteColor,
+  stripSectionPartColors,
+} from '../lib/noteColors';
+import {
   assessExistingFormattingQuality,
   AutoFormatOptions,
   createEmptyStructuredNote,
@@ -74,6 +80,8 @@ import {
 } from '../lib/workspaceStore';
 import {
   KeyTermPair,
+  NoteAccentColor,
+  NotePartRole,
   NoteSectionBlock,
   StudyFlashcard,
   StudySubject,
@@ -217,6 +225,7 @@ export function UniversalImportModal({
     splitDenseParagraphs: true,
     strictHeadings: false,
   });
+  const [colorCodeParts, setColorCodeParts] = useState<boolean>(true);
   const [deckDelimiter, setDeckDelimiter] = useState<QuizletDelimiterMode>('auto');
 
   const [targetSubjectId, setTargetSubjectId] = useState<string>(
@@ -357,6 +366,8 @@ export function UniversalImportModal({
         id: s.id,
         heading: s.heading,
         points: [...s.points],
+        ...(s.accentColor ? { accentColor: s.accentColor } : {}),
+        ...(s.partRole ? { partRole: s.partRole } : {}),
       }))
     );
     setDraftKeyTerms(parsedPreview.note.keyTerms.map((k) => ({ ...k })));
@@ -968,7 +979,16 @@ export function UniversalImportModal({
     if (!forceRewrite && existingFormatQuality.isGood) {
       setKeptGoodFormatNotice(true);
       setPreviewNotesMode(originalHtml && preferOriginalFormat ? 'original' : 'visual');
-      setStatusNote(`${existingFormatQuality.reason} — kept existing layout (0 AI tokens used).`);
+      if (colorCodeParts) {
+        setDraftSections((prev) => applyVerifiedPartColors(prev, true));
+      } else {
+        setDraftSections((prev) => stripSectionPartColors(prev));
+      }
+      setStatusNote(
+        `${existingFormatQuality.reason} — kept existing layout${
+          colorCodeParts ? ' & colour-coded parts' : ''
+        } (0 AI tokens used).`
+      );
       return;
     }
 
@@ -1006,6 +1026,7 @@ export function UniversalImportModal({
           includeTimeline: wantsTimeline,
           detectFlowDiagrams: formatOptions.detectFlowDiagrams !== false,
           autoTables: formatOptions.autoTables !== false,
+          colorCodeParts,
           forceRewrite,
           stream: true,
           byok: byokConfig,
@@ -1015,7 +1036,12 @@ export function UniversalImportModal({
       type FormattedData = {
         title?: string;
         summary: string;
-        sections: Array<{ heading: string; points: string[] }>;
+        sections: Array<{
+          heading: string;
+          points: string[];
+          partRole?: NotePartRole;
+          accentColor?: NoteAccentColor;
+        }>;
         keyTerms: Array<{ term: string; definition: string }>;
         examTip: string;
         workedExample: string;
@@ -1122,6 +1148,10 @@ export function UniversalImportModal({
           id: makeNoteId('sec'),
           heading: s.heading,
           points: [...s.points],
+          ...(colorCodeParts && s.partRole ? { partRole: s.partRole } : {}),
+          ...(colorCodeParts && s.accentColor && s.accentColor !== 'default'
+            ? { accentColor: s.accentColor }
+            : {}),
         }))
       );
       setDraftKeyTerms(
@@ -1231,6 +1261,18 @@ export function UniversalImportModal({
       ...prev,
       [key]: !(prev[key] ?? (key === 'strictHeadings' ? false : true)),
     }));
+  };
+
+  const handleToggleColorCodeParts = () => {
+    setColorCodeParts((prev) => {
+      const next = !prev;
+      if (!next) {
+        setDraftSections((secs) => stripSectionPartColors(secs));
+      } else if (aiFormattedApplied || keptGoodFormatNotice) {
+        setDraftSections((secs) => applyVerifiedPartColors(secs, true));
+      }
+      return next;
+    });
   };
 
   const totalDraftPoints = draftSections.reduce((acc, s) => acc + s.points.length, 0);
@@ -2117,6 +2159,25 @@ export function UniversalImportModal({
                         />
                         <span>Strict # Headings</span>
                       </label>
+                      <label
+                        title="AI identifies Core Theory, Processes, Comparisons, Examples & Risks and verifies distinct colours per section"
+                        className="inline-flex cursor-pointer items-center gap-1.5 font-semibold text-[var(--ink)]"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={colorCodeParts}
+                          onChange={handleToggleColorCodeParts}
+                          className="accent-[var(--e3)]"
+                        />
+                        <span>AI Colour-Code Parts</span>
+                        <span className="inline-flex items-center gap-0.5" aria-hidden="true">
+                          <span className="h-2 w-2 rounded-full bg-[#2563EB]" />
+                          <span className="h-2 w-2 rounded-full bg-[#16A34A]" />
+                          <span className="h-2 w-2 rounded-full bg-[#7C3AED]" />
+                          <span className="h-2 w-2 rounded-full bg-[#D97706]" />
+                          <span className="h-2 w-2 rounded-full bg-[#E11D48]" />
+                        </span>
+                      </label>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -2338,13 +2399,13 @@ export function UniversalImportModal({
                         </div>
                       </div>
                     ) : previewNotesMode === 'visual' ? (
-                      <div className="max-h-80 space-y-3.5 overflow-y-auto pr-1">
+                      <div className="sd-note-scope max-h-96 space-y-6 overflow-y-auto rounded-2xl border border-[var(--line)] bg-[var(--card)] p-5 sm:p-6">
                         {draftSummary.trim() && (
-                          <div className="rounded-xl border border-[var(--line)] bg-[var(--card)] p-3.5">
-                            <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                          <div className="rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_5%,var(--bg))] px-4 py-3.5">
+                            <div className="text-xs font-bold text-[var(--note-accent)]">
                               Topic Overview
                             </div>
-                            <p className="mt-1 text-xs leading-relaxed text-[var(--ink)]">
+                            <p className="mt-1 text-[15px] leading-relaxed text-[var(--ink)]">
                               {renderPreviewBold(draftSummary)}
                             </p>
                           </div>
@@ -2352,28 +2413,38 @@ export function UniversalImportModal({
 
                         {draftSections.map((sec, sIdx) => {
                           const blocks = groupSectionPoints(sec.points);
+                          const secAccent = normalizeNoteColor(sec.accentColor);
+                          const roleInfo = sec.partRole ? NOTE_PART_ROLE_MAP[sec.partRole] : undefined;
                           return (
-                            <div
+                            <section
                               key={sec.id}
-                              className="rounded-xl border border-[var(--line)] bg-[var(--card)] p-4"
+                              data-note-color={secAccent !== 'default' ? secAccent : undefined}
+                              className="space-y-3"
                             >
-                              <div className="flex items-baseline gap-2 border-b border-[var(--line)] pb-2">
-                                <span className="font-mono-num text-xs font-bold text-[var(--e3)]">
-                                  {String(sIdx + 1).padStart(2, '0')}.
-                                </span>
-                                <h4 className="font-display text-sm font-bold text-[var(--ink)]">
-                                  {sec.heading || 'Key Points'}
-                                </h4>
+                              <div className="flex flex-wrap items-baseline justify-between gap-2 border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] pb-2">
+                                <div className="flex min-w-0 items-baseline gap-2">
+                                  <span className="font-mono-num text-sm font-extrabold text-[var(--note-accent)]">
+                                    {String(sIdx + 1).padStart(2, '0')}.
+                                  </span>
+                                  <h4 className="font-display text-lg font-extrabold tracking-tight text-[var(--ink)]">
+                                    {sec.heading || 'Key Points'}
+                                  </h4>
+                                </div>
+                                {roleInfo && (
+                                  <span className="text-[11px] font-bold text-[var(--note-accent)]">
+                                    {roleInfo.label}
+                                  </span>
+                                )}
                               </div>
                               {blocks.length > 0 && (
-                                <div className="mt-3 space-y-2.5 text-xs text-[var(--ink)]">
+                                <div className="space-y-2.5 text-[15px] leading-relaxed text-[var(--ink)]">
                                   {blocks.map((blk, bi) => {
                                     if (blk.kind === 'subheading') {
                                       return (
                                         <div
                                           key={bi}
-                                          className={`font-display text-xs font-bold text-[var(--e3)] ${
-                                            bi > 0 ? 'mt-3 border-t border-[var(--line)] pt-2.5' : ''
+                                          className={`font-display text-base font-bold text-[var(--note-accent)] ${
+                                            bi > 0 ? 'mt-4 pt-2' : ''
                                           }`}
                                         >
                                           {renderPreviewBold(blk.text)}
@@ -2384,12 +2455,12 @@ export function UniversalImportModal({
                                       return (
                                         <div
                                           key={bi}
-                                          className="rounded-lg border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-3 py-2"
+                                          className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_5%,var(--bg))] px-4 py-3"
                                         >
-                                          <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                                          <div className="text-xs font-bold text-[var(--note-accent)]">
                                             {blk.title || 'Key Fact'}
                                           </div>
-                                          <div className="mt-0.5 leading-relaxed">
+                                          <div className="mt-1 text-[14.5px] leading-relaxed">
                                             {renderPreviewBold(blk.text)}
                                           </div>
                                         </div>
@@ -2399,13 +2470,13 @@ export function UniversalImportModal({
                                       return (
                                         <div
                                           key={bi}
-                                          className="overflow-x-auto rounded-lg border border-[var(--line)]"
+                                          className="my-3 overflow-x-auto rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[var(--card)]"
                                         >
-                                          <table className="w-full border-collapse text-left text-[11px]">
-                                            <thead className="border-b border-[var(--line)] bg-[var(--bg)]">
+                                          <table className="w-full border-collapse text-left text-sm">
+                                            <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_10%,var(--card))]">
                                               <tr>
                                                 {blk.headers.map((h, hi) => (
-                                                  <th key={hi} className="px-2.5 py-1.5 font-bold">
+                                                  <th key={hi} className="px-3.5 py-2.5 font-bold text-[var(--ink)]">
                                                     {renderPreviewBold(h)}
                                                   </th>
                                                 ))}
@@ -2413,9 +2484,21 @@ export function UniversalImportModal({
                                             </thead>
                                             <tbody className="divide-y divide-[var(--line)]">
                                               {blk.rows.map((row, ri) => (
-                                                <tr key={ri}>
+                                                <tr
+                                                  key={ri}
+                                                  className={
+                                                    ri % 2 === 1
+                                                      ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
+                                                      : ''
+                                                  }
+                                                >
                                                   {row.map((cell, ci) => (
-                                                    <td key={ci} className="px-2.5 py-1.5 align-top">
+                                                    <td
+                                                      key={ci}
+                                                      className={`px-3.5 py-2.5 align-top ${
+                                                        ci === 0 ? 'font-semibold' : ''
+                                                      }`}
+                                                    >
                                                       {renderPreviewBold(cell)}
                                                     </td>
                                                   ))}
@@ -2430,24 +2513,24 @@ export function UniversalImportModal({
                                       return (
                                         <div
                                           key={bi}
-                                          className="rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2.5"
+                                          className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))] p-3.5"
                                         >
                                           {blk.label && (
-                                            <div className="mb-1.5 text-[10px] font-bold text-[var(--e3)]">
+                                            <div className="mb-2 text-xs font-bold text-[var(--note-accent)]">
                                               {blk.label}
                                             </div>
                                           )}
-                                          <div className="flex flex-wrap items-center gap-1.5">
+                                          <div className="flex flex-wrap items-center gap-2 text-sm">
                                             {blk.steps.map((step, stepIdx) => (
-                                              <span key={stepIdx} className="inline-flex items-center gap-1">
-                                                <span className="rounded border border-[var(--line)] bg-[var(--card)] px-2 py-0.5 text-[11px]">
-                                                  <strong className="font-mono-num text-[var(--e3)]">
+                                              <span key={stepIdx} className="inline-flex items-center gap-1.5">
+                                                <span className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-2.5 py-1">
+                                                  <strong className="font-mono-num text-[var(--note-accent)]">
                                                     {stepIdx + 1}.
                                                   </strong>{' '}
                                                   {renderPreviewBold(step)}
                                                 </span>
                                                 {stepIdx < blk.steps.length - 1 && (
-                                                  <span className="text-[var(--mute)]">→</span>
+                                                  <span className="text-[var(--note-accent)]">→</span>
                                                 )}
                                               </span>
                                             ))}
@@ -2457,7 +2540,7 @@ export function UniversalImportModal({
                                     }
                                     if (blk.kind === 'paragraph') {
                                       return (
-                                        <p key={bi} className="leading-relaxed text-[var(--ink)]">
+                                        <p key={bi} className="leading-[1.7] text-[var(--ink)]">
                                           {renderPreviewBold(blk.text)}
                                         </p>
                                       );
@@ -2466,13 +2549,15 @@ export function UniversalImportModal({
                                     return (
                                       <div
                                         key={bi}
-                                        className={`flex items-start gap-2 leading-relaxed ${
-                                          isSub ? 'pl-5 text-[var(--mute)]' : 'pl-0.5'
+                                        className={`flex items-start gap-2.5 leading-[1.68] ${
+                                          isSub ? 'pl-6 text-[var(--mute)]' : 'pl-0.5'
                                         }`}
                                       >
                                         <span
-                                          className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                                            isSub ? 'bg-[var(--mute)]' : 'bg-[var(--e3)]'
+                                          className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                            isSub
+                                              ? 'border-[1.5px] border-[var(--note-accent)] bg-transparent'
+                                              : 'bg-[var(--note-accent)]'
                                           }`}
                                           aria-hidden="true"
                                         />
@@ -2484,7 +2569,7 @@ export function UniversalImportModal({
                                   })}
                                 </div>
                               )}
-                            </div>
+                            </section>
                           );
                         })}
                       </div>

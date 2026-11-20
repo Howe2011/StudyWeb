@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import type { Express, Request, Response } from 'express';
+import { applyVerifiedPartColors, normalizeNotePartRole } from '../src/lib/noteColors.ts';
+import type { NoteAccentColor, NotePartRole } from '../src/types.ts';
 
 export type UserAiProvider = 'gemini' | 'grok' | 'openai-compatible';
 
@@ -18,6 +20,8 @@ export interface CompactFormattedOutput {
   sections: Array<{
     heading: string;
     points: string[];
+    partRole?: NotePartRole;
+    accentColor?: NoteAccentColor;
   }>;
   keyTerms: Array<{
     term: string;
@@ -487,6 +491,7 @@ function buildCompactOptionsLine(params: {
   includeCards: boolean;
   detectFlowDiagrams: boolean;
   autoTables: boolean;
+  colorCodeParts: boolean;
 }): string {
   return [
     `[OPT] ${getPresetDirective(params.preset)}`,
@@ -494,11 +499,31 @@ function buildCompactOptionsLine(params: {
     params.autoTables ? 'Tables=ON("| H1 | H2 |").' : 'Tables=OFF.',
     params.includeTimeline ? 'Dates=ON(extract dated events into e[]).' : 'Dates=OFF.',
     params.includeCards ? 'Cards=ON(add 4-6 crisp Q/A cards in c[]).' : 'Cards=OFF.',
+    params.colorCodeParts
+      ? 'ColorParts=ON(group distinct parts cleanly & classify each section s[].r strictly as core|process|compare|example|risk: core=theory/definitions, process=steps/mechanisms/solutions, compare=tables/types/evaluation, example=case-studies/dates/examples, risk=limitations/disadvantages/risks/pitfalls).'
+      : 'ColorParts=OFF.',
     'Limits: 2-6 sections, <=18 words/bullet, 3-8 key terms max.',
   ].join(' ');
 }
 
-function buildAutoformatSchema(opts: { includeTimeline: boolean; includeCards: boolean }) {
+function buildAutoformatSchema(opts: {
+  includeTimeline: boolean;
+  includeCards: boolean;
+  colorCodeParts: boolean;
+}) {
+  const sectionProps: Record<string, unknown> = {
+    h: { type: Type.STRING },
+    p: { type: Type.ARRAY, items: { type: Type.STRING } },
+  };
+  if (opts.colorCodeParts) {
+    sectionProps.r = {
+      type: Type.STRING,
+      enum: ['core', 'process', 'compare', 'example', 'risk'],
+      description:
+        'Part type: core (theory/definitions), process (steps/mechanisms/benefits), compare (tables/types/evaluation), example (case study/dates/examples), risk (limits/disadvantages/pitfalls)',
+    };
+  }
+
   const properties: Record<string, unknown> = {
     t: { type: Type.STRING, description: 'Short title' },
     u: { type: Type.STRING, description: '1-sentence summary' },
@@ -506,11 +531,8 @@ function buildAutoformatSchema(opts: { includeTimeline: boolean; includeCards: b
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
-        properties: {
-          h: { type: Type.STRING },
-          p: { type: Type.ARRAY, items: { type: Type.STRING } },
-        },
-        required: ['h', 'p'],
+        properties: sectionProps,
+        required: opts.colorCodeParts ? ['h', 'p', 'r'] : ['h', 'p'],
       },
     },
     k: {
@@ -570,7 +592,7 @@ function buildAutoformatSchema(opts: { includeTimeline: boolean; includeCards: b
 interface RawCompactSchemaPayload {
   t?: string;
   u?: string;
-  s?: Array<{ h?: string; p?: string[] }>;
+  s?: Array<{ h?: string; p?: string[]; r?: string }>;
   k?: Array<{ t?: string; d?: string }>;
   x?: string;
   w?: string;
@@ -578,17 +600,29 @@ interface RawCompactSchemaPayload {
   c?: Array<{ q?: string; a?: string; s?: string }>;
 }
 
-function expandCompactPayload(raw: RawCompactSchemaPayload): CompactFormattedOutput {
-  const sections = Array.isArray(raw.s)
+function expandCompactPayload(
+  raw: RawCompactSchemaPayload,
+  colorCodeParts = false
+): CompactFormattedOutput {
+  const baseSections = Array.isArray(raw.s)
     ? raw.s
         .map((sec) => ({
           heading: String(sec?.h || '').trim() || 'Key Points',
           points: Array.isArray(sec?.p)
             ? sec.p.map((pt) => String(pt || '').trimEnd()).filter((pt) => pt.trim().length > 0)
             : [],
+          partRole: colorCodeParts ? normalizeNotePartRole(sec?.r) : undefined,
         }))
         .filter((sec) => sec.points.length > 0)
     : [];
+
+  const nonEmptySections = baseSections.length
+    ? baseSections
+    : [{ heading: 'Key Points', points: [] as string[], partRole: undefined }];
+
+  const sections = colorCodeParts
+    ? applyVerifiedPartColors(nonEmptySections, true)
+    : nonEmptySections.map(({ heading, points }) => ({ heading, points }));
 
   const keyTerms = Array.isArray(raw.k)
     ? raw.k
@@ -624,7 +658,7 @@ function expandCompactPayload(raw: RawCompactSchemaPayload): CompactFormattedOut
   return {
     title: typeof raw.t === 'string' && raw.t.trim() ? raw.t.trim() : undefined,
     summary: String(raw.u || '').trim(),
-    sections: sections.length ? sections : [{ heading: 'Key Points', points: [] }],
+    sections,
     keyTerms,
     examTip: String(raw.x || '').trim(),
     workedExample: String(raw.w || '').trim(),
@@ -646,6 +680,7 @@ export async function runByokAutoformat(params: {
   includeTimeline?: boolean;
   detectFlowDiagrams?: boolean;
   autoTables?: boolean;
+  colorCodeParts?: boolean;
   onProgress?: (ev: { type: 'status' | 'progress'; message?: string; model?: string; chars?: number }) => void;
 }): Promise<{ formatted: CompactFormattedOutput; usage: AiUsageMeta }> {
   const mismatch = detectKeyProviderMismatch(params.config);
@@ -662,18 +697,24 @@ export async function runByokAutoformat(params: {
 
   const includeTimeline = params.includeTimeline !== false;
   const includeCards = Boolean(params.includeCards);
+  const colorCodeParts = Boolean(params.colorCodeParts);
   const optionsLine = buildCompactOptionsLine({
     preset: params.preset || 'balanced-visual',
     includeTimeline,
     includeCards,
     detectFlowDiagrams: params.detectFlowDiagrams !== false,
     autoTables: params.autoTables !== false,
+    colorCodeParts,
   });
 
   if (params.config.provider === 'gemini') {
     const ai = createGeminiClient(params.config.apiKey);
     const candidates = buildGeminiCandidateList(params.config);
-    const responseSchema = buildAutoformatSchema({ includeTimeline, includeCards });
+    const responseSchema = buildAutoformatSchema({
+      includeTimeline,
+      includeCards,
+      colorCodeParts,
+    });
 
     let lastErr: unknown = null;
     for (let i = 0; i < candidates.length; i++) {
@@ -740,7 +781,7 @@ export async function runByokAutoformat(params: {
 
           const parsed = extractJsonPayload(fullText);
           return {
-            formatted: expandCompactPayload(parsed),
+            formatted: expandCompactPayload(parsed, colorCodeParts),
             usage: {
               provider: 'gemini',
               model,
@@ -763,7 +804,7 @@ export async function runByokAutoformat(params: {
         const usageMeta = response.usageMetadata;
 
         return {
-          formatted: expandCompactPayload(parsed),
+          formatted: expandCompactPayload(parsed, colorCodeParts),
           usage: {
             provider: 'gemini',
             model,
@@ -920,7 +961,7 @@ export async function runByokAutoformat(params: {
 
       const parsed = extractJsonPayload(fullContent);
       return {
-        formatted: expandCompactPayload(parsed),
+        formatted: expandCompactPayload(parsed, colorCodeParts),
         usage: {
           provider: params.config.provider,
           model,
@@ -951,7 +992,7 @@ export async function runByokAutoformat(params: {
     const parsed = extractJsonPayload(content);
 
     return {
-      formatted: expandCompactPayload(parsed),
+      formatted: expandCompactPayload(parsed, colorCodeParts),
       usage: {
         provider: params.config.provider,
         model,
@@ -1063,6 +1104,7 @@ export function registerAiRoutes(app: Express): void {
       includeTimeline?: boolean;
       detectFlowDiagrams?: boolean;
       autoTables?: boolean;
+      colorCodeParts?: boolean;
       stream?: boolean;
       byok?: unknown;
     };
@@ -1106,6 +1148,7 @@ export function registerAiRoutes(app: Express): void {
           includeTimeline: body.includeTimeline !== false,
           detectFlowDiagrams: body.detectFlowDiagrams !== false,
           autoTables: body.autoTables !== false,
+          colorCodeParts: Boolean(body.colorCodeParts),
           onProgress: (ev) => sendSse(ev),
         });
         sendSse({ type: 'done', ...result });
@@ -1121,6 +1164,7 @@ export function registerAiRoutes(app: Express): void {
         includeTimeline: body.includeTimeline !== false,
         detectFlowDiagrams: body.detectFlowDiagrams !== false,
         autoTables: body.autoTables !== false,
+        colorCodeParts: Boolean(body.colorCodeParts),
       });
 
       res.json(result);

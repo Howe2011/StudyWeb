@@ -35,8 +35,9 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
+import { NOTE_COLOR_OPTIONS, NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints, makeNoteId } from '../lib/noteFormat';
-import { NoteSectionBlock, StructuredNoteData } from '../types';
+import { NoteAccentColor, NotePartRole, NoteSectionBlock, StructuredNoteData } from '../types';
 
 export type NotionBlockType =
   | 'summary'
@@ -59,6 +60,8 @@ export interface NotionBlock {
   indent?: number;
   steps?: string[];
   rows?: string[][];
+  accentColor?: NoteAccentColor;
+  partRole?: NotePartRole;
 }
 
 const SLASH_OPTIONS: Array<{
@@ -179,6 +182,8 @@ export function structuredNoteToBlocks(note: StructuredNoteData): NotionBlock[] 
         id: sec.id || makeNoteId('blk'),
         type: 'heading',
         text: sec.heading,
+        ...(sec.accentColor && sec.accentColor !== 'default' ? { accentColor: sec.accentColor } : {}),
+        ...(sec.partRole ? { partRole: sec.partRole } : {}),
       });
     }
     const grouped = groupSectionPoints(sec.points || []);
@@ -297,6 +302,8 @@ export function blocksToStructuredNote(
         id: b.id,
         heading: b.text,
         points: [],
+        ...(b.accentColor && b.accentColor !== 'default' ? { accentColor: b.accentColor } : {}),
+        ...(b.partRole ? { partRole: b.partRole } : {}),
       };
       sections.push(currentSection);
     } else if (b.type === 'subheading') {
@@ -1179,7 +1186,7 @@ export function NotionTopicEditor({
               onClick={() => insertFromRibbon(type)}
               className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
             >
-              <Icon className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+              <Icon className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
               <span>+ {label}</span>
             </button>
           ))}
@@ -1225,6 +1232,10 @@ export function NotionTopicEditor({
             </span>
           </div>
 
+          <div
+            className="h-1 w-14 rounded-full bg-[var(--note-accent,var(--e3))]"
+            aria-hidden="true"
+          />
           <input
             type="text"
             value={topicName}
@@ -1236,25 +1247,42 @@ export function NotionTopicEditor({
 
         {/* Borderless Fluid Document Body */}
         <div className="space-y-2">
-          {blocks.map((block, idx) => {
-            const isFocused = focusedBlockId === block.id || openMenuBlockId === block.id;
-            const showSlash =
-              slashBlockId === block.id && block.text.startsWith('/') && !block.text.includes('\n');
-            const isDropHere = dropTargetIdx === idx;
+          {(() => {
+            let activeSectionAccent: NoteAccentColor = 'default';
+            return blocks.map((block, idx) => {
+              if (block.type === 'heading') {
+                activeSectionAccent = normalizeNoteColor(block.accentColor);
+              } else if (
+                block.type === 'summary' ||
+                block.type === 'key_term' ||
+                block.type === 'worked_example' ||
+                block.type === 'exam_tip'
+              ) {
+                activeSectionAccent = 'default';
+              }
+              const blockAccent =
+                block.type === 'heading'
+                  ? normalizeNoteColor(block.accentColor)
+                  : activeSectionAccent;
+              const isFocused = focusedBlockId === block.id || openMenuBlockId === block.id;
+              const showSlash =
+                slashBlockId === block.id && block.text.startsWith('/') && !block.text.includes('\n');
+              const isDropHere = dropTargetIdx === idx;
 
-            return (
-              <div
-                key={block.id}
-                onDragOver={(e) => {
-                  if (!dragBlockId) return;
-                  e.preventDefault();
-                  setDropTargetIdx(idx);
-                }}
-                onDrop={(e) => handleDropOnBlock(e, idx)}
-                className={`group relative flex items-start gap-2 transition-all ${
-                  isDropHere ? 'border-t-2 border-t-[var(--e3)] pt-1.5' : ''
-                } ${dragBlockId === block.id ? 'opacity-45' : ''}`}
-              >
+              return (
+                <div
+                  key={block.id}
+                  data-note-color={blockAccent !== 'default' ? blockAccent : undefined}
+                  onDragOver={(e) => {
+                    if (!dragBlockId) return;
+                    e.preventDefault();
+                    setDropTargetIdx(idx);
+                  }}
+                  onDrop={(e) => handleDropOnBlock(e, idx)}
+                  className={`group relative flex items-start gap-2 transition-all ${
+                    isDropHere ? 'border-t-2 border-t-[var(--note-accent,var(--e3))] pt-1.5' : ''
+                  } ${dragBlockId === block.id ? 'opacity-45' : ''}`}
+                >
                 {/* Unobtrusive Left Margin Drag/Menu Handle */}
                 <div
                   className={`flex w-6 shrink-0 items-center justify-center pt-1.5 transition-opacity ${
@@ -1303,6 +1331,39 @@ export function NotionTopicEditor({
                         <span>{opt.label}</span>
                       </button>
                     ))}
+                    {block.type === 'heading' && (
+                      <>
+                        <div className="my-1 border-t border-[var(--line)]" />
+                        <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                          Section Colour
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5 pt-0.5">
+                          {NOTE_COLOR_OPTIONS.map((opt) => {
+                            const selected = normalizeNoteColor(block.accentColor) === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                title={opt.label}
+                                aria-label={`Set section colour to ${opt.label}`}
+                                onClick={() => {
+                                  updateBlock(block.id, {
+                                    accentColor: opt.id === 'default' ? undefined : opt.id,
+                                  });
+                                  setOpenMenuBlockId(null);
+                                }}
+                                className={`h-5 w-5 cursor-pointer rounded-full border transition-transform hover:scale-110 ${
+                                  selected
+                                    ? 'border-[var(--ink)] ring-2 ring-[var(--ink)]/25'
+                                    : 'border-black/15'
+                                }`}
+                                style={{ backgroundColor: opt.swatch }}
+                              />
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                     <div className="my-1 border-t border-[var(--line)]" />
                     <div className="flex items-center gap-1 px-1">
                       <button
@@ -1349,9 +1410,9 @@ export function NotionTopicEditor({
                 {/* Block Content */}
                 <div className="relative min-w-0 flex-1">
                   {block.type === 'summary' && (
-                    <div className="my-2 rounded-r-xl border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-4 py-3">
-                      <div className="mb-1 flex items-center justify-between">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                    <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_28%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_7%,var(--card))] px-5 py-4">
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <span className="text-sm font-bold text-[var(--note-accent,var(--e3))]">
                           Topic Overview
                         </span>
                         <button
@@ -1360,47 +1421,54 @@ export function NotionTopicEditor({
                           aria-label="Remove Topic Overview"
                           className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                         >
-                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          <X className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </div>
                       <AutoGrowTextarea
                         inputRef={(el) => registerInputRef(block.id, el)}
                         value={block.text}
-                        minHeight={34}
+                        minHeight={36}
                         onFocus={() => setFocusedBlockId(block.id)}
                         onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
                         onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
                         placeholder="Short 1–2 sentence topic summary…"
-                        className="text-base leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                        className="text-[16.5px] leading-[1.72] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
                       />
                     </div>
                   )}
 
                   {block.type === 'heading' && (
-                    <AutoGrowTextarea
-                      inputRef={(el) => registerInputRef(block.id, el)}
-                      value={block.text}
-                      minHeight={38}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                      onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                      onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder="Section Heading…"
-                      className="font-display mt-5 border-b border-[var(--line)]/65 pb-1.5 text-[22px] font-extrabold leading-snug text-[var(--ink)] placeholder:text-[var(--mute)]/50 sm:text-[25px]"
-                    />
+                    <div className="mt-6 border-b-2 border-[color-mix(in_srgb,var(--note-accent,var(--e3))_34%,var(--line))] pb-2">
+                      {block.partRole && NOTE_PART_ROLE_MAP[block.partRole] && (
+                        <div className="mb-0.5 text-[11px] font-bold text-[var(--note-accent,var(--e3))]">
+                          {NOTE_PART_ROLE_MAP[block.partRole].label}
+                        </div>
+                      )}
+                      <AutoGrowTextarea
+                        inputRef={(el) => registerInputRef(block.id, el)}
+                        value={block.text}
+                        minHeight={42}
+                        onFocus={() => setFocusedBlockId(block.id)}
+                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                        onPaste={(e) => handlePasteMultiLine(e, block, idx)}
+                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
+                        placeholder="Section Heading…"
+                        className="font-display text-[24px] font-extrabold leading-tight tracking-tight text-[var(--ink)] placeholder:text-[var(--mute)]/50 sm:text-[28px]"
+                      />
+                    </div>
                   )}
 
                   {block.type === 'subheading' && (
                     <AutoGrowTextarea
                       inputRef={(el) => registerInputRef(block.id, el)}
                       value={block.text}
-                      minHeight={32}
+                      minHeight={34}
                       onFocus={() => setFocusedBlockId(block.id)}
                       onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
                       onPaste={(e) => handlePasteMultiLine(e, block, idx)}
                       onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
                       placeholder="Subheading…"
-                      className="font-display mt-3 pb-0.5 text-[17px] font-bold leading-snug text-[var(--e3)] placeholder:text-[var(--mute)]/50 sm:text-[18px]"
+                      className="font-display mt-4 pb-0.5 text-[19px] font-bold leading-snug text-[var(--note-accent,var(--e3))] placeholder:text-[var(--mute)]/50 sm:text-[20px]"
                     />
                   )}
 
@@ -1412,8 +1480,8 @@ export function NotionTopicEditor({
                       <span
                         className={`mt-[11px] shrink-0 rounded-full ${
                           (block.indent || 0) > 0
-                            ? 'h-1.5 w-1.5 border border-[var(--e3)] bg-transparent'
-                            : 'h-2 w-2 bg-[var(--ink)]'
+                            ? 'h-2 w-2 border-[1.5px] border-[var(--note-accent,var(--e3))] bg-transparent'
+                            : 'h-2 w-2 bg-[var(--note-accent,var(--e3))]'
                         }`}
                         aria-hidden="true"
                       />
@@ -1450,15 +1518,15 @@ export function NotionTopicEditor({
                   )}
 
                   {block.type === 'factbox' && (
-                    <div className="my-2 rounded-r-xl border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-4 py-3">
-                      <div className="mb-1 flex items-center justify-between gap-2">
+                    <div className="my-2.5 rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_7%,var(--bg))] px-5 py-4">
+                      <div className="mb-1.5 flex items-center justify-between gap-2">
                         <input
                           type="text"
                           value={block.extra || ''}
                           onFocus={() => setFocusedBlockId(block.id)}
                           onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
                           placeholder="Fact Box Title (e.g. Key Formula)"
-                          className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--e3)] outline-none placeholder:text-[var(--e3)]/60"
+                          className="flex-1 border-0 bg-transparent text-sm font-bold text-[var(--note-accent,var(--e3))] outline-none placeholder:text-[var(--note-accent,var(--e3))]/60"
                         />
                         <button
                           type="button"
@@ -1466,24 +1534,24 @@ export function NotionTopicEditor({
                           aria-label="Remove Fact Box"
                           className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                         >
-                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          <X className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </div>
                       <AutoGrowTextarea
                         inputRef={(el) => registerInputRef(block.id, el)}
                         value={block.text}
-                        minHeight={32}
+                        minHeight={34}
                         onFocus={() => setFocusedBlockId(block.id)}
                         onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
                         onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
                         placeholder="Core rule, formula, or key evidence…"
-                        className="text-[15.5px] leading-[1.65] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
                       />
                     </div>
                   )}
 
                   {block.type === 'flow' && (
-                    <div className="my-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+                    <div className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_4%,var(--card))] p-4">
                       <div className="mb-2.5 flex items-center justify-between gap-2">
                         <input
                           type="text"
@@ -1491,7 +1559,7 @@ export function NotionTopicEditor({
                           onFocus={() => setFocusedBlockId(block.id)}
                           onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
                           placeholder="Process / Causal Flow Label (optional)"
-                          className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--e3)] outline-none placeholder:text-[var(--mute)]/60"
+                          className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))] outline-none placeholder:text-[var(--mute)]/60"
                         />
                         <div className="flex items-center gap-2">
                           <button
@@ -1517,7 +1585,7 @@ export function NotionTopicEditor({
                         {(block.steps || ['', '']).map((stepVal, sIdx, arr) => (
                           <div key={sIdx} className="flex items-center gap-1.5">
                             <div className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5">
-                              <span className="font-mono-num text-xs font-bold text-[var(--e3)]">
+                              <span className="font-mono-num text-xs font-bold text-[var(--note-accent,var(--e3))]">
                                 {sIdx + 1}.
                               </span>
                               <input
@@ -1558,7 +1626,7 @@ export function NotionTopicEditor({
                             </div>
                             {sIdx < arr.length - 1 && (
                               <ArrowRight
-                                className="h-4 w-4 shrink-0 text-[var(--e3)]"
+                                className="h-4 w-4 shrink-0 text-[var(--note-accent,var(--e3))]"
                                 aria-hidden="true"
                               />
                             )}
@@ -1577,9 +1645,9 @@ export function NotionTopicEditor({
                         ];
                     const colCount = Math.max(1, rows[0]?.length || 2);
                     return (
-                      <div className="my-2.5 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)]">
+                      <div className="my-2.5 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_26%,var(--line))] bg-[var(--bg)]">
                         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-3.5 py-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
+                          <span className="text-xs font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))]">
                             Table ({rows.length} × {colCount})
                           </span>
                           <div className="flex flex-wrap items-center gap-1.5">
@@ -1632,14 +1700,14 @@ export function NotionTopicEditor({
                           </div>
                         </div>
                         <div className="overflow-x-auto bg-[var(--card)]">
-                          <table className="w-full border-collapse text-sm">
+                          <table className="w-full border-collapse text-[15px]">
                             <tbody>
                               {rows.map((r, ri) => (
                                 <tr
                                   key={ri}
                                   className={
                                     ri === 0
-                                      ? 'border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--ink)_4%,var(--card))] font-bold'
+                                      ? 'border-b-2 border-[color-mix(in_srgb,var(--note-accent,var(--e3))_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_12%,var(--card))] font-bold'
                                       : 'border-b border-[var(--line)] last:border-b-0'
                                   }
                                 >
@@ -1650,7 +1718,7 @@ export function NotionTopicEditor({
                                     >
                                       <AutoGrowTextarea
                                         value={r[ci] || ''}
-                                        minHeight={36}
+                                        minHeight={40}
                                         onFocus={() => setFocusedBlockId(block.id)}
                                         onChange={(e) => {
                                           const nextRows = rows.map((rowItem, rowIdx) =>
@@ -1663,7 +1731,7 @@ export function NotionTopicEditor({
                                           updateBlock(block.id, { rows: nextRows });
                                         }}
                                         placeholder={ri === 0 ? `Header ${ci + 1}` : 'Type…'}
-                                        className={`min-w-[120px] px-3 py-2 text-[14.5px] leading-snug focus:bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] ${
+                                        className={`min-w-[130px] px-4 py-2.5 text-[15.5px] leading-relaxed focus:bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] ${
                                           ri === 0 ? 'font-bold text-[var(--ink)]' : 'text-[var(--ink)]'
                                         }`}
                                       />
@@ -1709,11 +1777,11 @@ export function NotionTopicEditor({
                             setSlashBlockId(val.startsWith('/') ? block.id : null);
                           }}
                           placeholder="Key Term"
-                          className="rounded-lg border border-transparent bg-[var(--card)] px-3 py-2 text-sm font-bold text-[var(--ink)] outline-none focus:border-[var(--e3)] sm:col-span-4"
+                          className="rounded-lg border border-transparent bg-[var(--card)] px-3.5 py-2.5 text-[15.5px] font-bold text-[var(--ink)] outline-none focus:border-[var(--e3)] sm:col-span-4"
                         />
                         <AutoGrowTextarea
                           value={block.extra || ''}
-                          minHeight={36}
+                          minHeight={40}
                           onFocus={() => setFocusedBlockId(block.id)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
@@ -1723,7 +1791,7 @@ export function NotionTopicEditor({
                           }}
                           onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
                           placeholder="Clear exam definition…"
-                          className="rounded-lg border border-transparent bg-[var(--card)] px-3 py-2 text-sm leading-snug text-[var(--ink)] focus:border-[var(--e3)] sm:col-span-8"
+                          className="rounded-lg border border-transparent bg-[var(--card)] px-3.5 py-2.5 text-[15.5px] leading-relaxed text-[var(--ink)] focus:border-[var(--e3)] sm:col-span-8"
                         />
                       </div>
                       <button
@@ -1738,9 +1806,9 @@ export function NotionTopicEditor({
                   )}
 
                   {block.type === 'worked_example' && (
-                    <div className="my-2 rounded-r-xl border border-[var(--line)] border-l-4 border-l-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_5%,var(--bg))] px-4 py-3.5">
-                      <div className="mb-1 flex items-center justify-between">
-                        <span className="text-xs font-bold uppercase tracking-wider text-[var(--ok)]">
+                    <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--ok)_32%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_5%,var(--bg))] px-5 py-4">
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <span className="text-sm font-bold text-[var(--ok)]">
                           Worked Example
                         </span>
                         <button
@@ -1749,26 +1817,26 @@ export function NotionTopicEditor({
                           aria-label="Remove Worked Example"
                           className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                         >
-                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          <X className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </div>
                       <AutoGrowTextarea
                         inputRef={(el) => registerInputRef(block.id, el)}
                         value={block.text}
-                        minHeight={36}
+                        minHeight={38}
                         onFocus={() => setFocusedBlockId(block.id)}
                         onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
                         onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
                         placeholder="Step-by-step calculation, quote analysis, or model answer…"
-                        className="text-[15.5px] leading-[1.68] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
                       />
                     </div>
                   )}
 
                   {block.type === 'exam_tip' && (
-                    <div className="my-2 rounded-r-xl border border-[color-mix(in_srgb,var(--e2)_45%,var(--line))] border-l-4 border-l-[var(--e2)] bg-[color-mix(in_srgb,var(--e2)_6%,var(--bg))] px-4 py-3.5">
-                      <div className="mb-1 flex items-center justify-between">
-                        <span className="text-xs font-bold uppercase tracking-wider text-[var(--e2)]">
+                    <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--e2)_40%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_6%,var(--bg))] px-5 py-4">
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <span className="text-sm font-bold text-[var(--e2)]">
                           Examiner Tip
                         </span>
                         <button
@@ -1777,18 +1845,18 @@ export function NotionTopicEditor({
                           aria-label="Remove Examiner Tip"
                           className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                         >
-                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          <X className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </div>
                       <AutoGrowTextarea
                         inputRef={(el) => registerInputRef(block.id, el)}
                         value={block.text}
-                        minHeight={36}
+                        minHeight={38}
                         onFocus={() => setFocusedBlockId(block.id)}
                         onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
                         onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
                         placeholder="Common mark-scheme mistake or phrase examiners reward…"
-                        className="text-[15.5px] leading-[1.68] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
                       />
                     </div>
                   )}
@@ -1832,7 +1900,8 @@ export function NotionTopicEditor({
                 </div>
               </div>
             );
-          })}
+            });
+          })()}
 
           {/* Spacious Word Click-Below-To-Write Area */}
           <div

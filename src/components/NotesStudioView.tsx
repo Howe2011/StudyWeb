@@ -30,6 +30,7 @@ import {
   List,
   ListOrdered,
   ListPlus,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -44,6 +45,13 @@ import {
 } from 'lucide-react';
 import { sanitizeDocumentHtml } from '../lib/documentRenderer';
 import {
+  applyVerifiedPartColors,
+  NOTE_COLOR_OPTIONS,
+  NOTE_PART_ROLE_MAP,
+  normalizeNoteColor,
+  stripSectionPartColors,
+} from '../lib/noteColors';
+import {
   createEmptyStructuredNote,
   estimateNoteReadingMinutes,
   groupSectionPoints,
@@ -56,6 +64,7 @@ import {
   makeId,
 } from '../lib/workspaceStore';
 import {
+  NoteAccentColor,
   StructuredNoteData,
   StudyFlashcard,
   StudyTopic,
@@ -248,6 +257,26 @@ export function NotesStudioView({
   const [cardsFeedback, setCardsFeedback] = useState<string | null>(null);
   const [glossaryExpanded, setGlossaryExpanded] = useState(false);
   const [glossaryFilter, setGlossaryFilter] = useState('');
+  const [colorMenuOpen, setColorMenuOpen] = useState(false);
+  const colorMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!colorMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (colorMenuRef.current && !colorMenuRef.current.contains(e.target as Node)) {
+        setColorMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setColorMenuOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [colorMenuOpen]);
 
   // History Timeline state
   const [hideTimelineDates, setHideTimelineDates] = useState(false);
@@ -375,6 +404,7 @@ export function NotesStudioView({
       setTimelineSearch('');
       setTimelineKeyOnly(false);
       setGlossaryFilter('');
+      setColorMenuOpen(false);
       setGlossaryExpanded((activeTopic?.notes.keyTerms.length || 0) <= 8);
     }
 
@@ -1099,8 +1129,22 @@ export function NotesStudioView({
           <div className="mx-auto max-w-2xl sd-card p-6 text-center text-sm text-[var(--mute)]">
             Select or create a topic on the left to start writing structured notes.
           </div>
-        ) : (
-          <div className="mx-auto space-y-6" style={{ maxWidth: 'var(--mw, 860px)' }}>
+        ) : (() => {
+          const activeNoteColor: NoteAccentColor = normalizeNoteColor(
+            activeTopic.notes.accentColor
+          );
+          const hasMultiPartColors = activeTopic.notes.sections.some(
+            (s) => Boolean(s.accentColor && s.accentColor !== 'default')
+          );
+          const activeColorOpt =
+            NOTE_COLOR_OPTIONS.find((c) => c.id === activeNoteColor) ||
+            NOTE_COLOR_OPTIONS[0];
+          return (
+          <div
+            className="sd-note-scope mx-auto space-y-6"
+            data-note-color={activeNoteColor}
+            style={{ maxWidth: 'var(--mw, 860px)' }}
+          >
             {/* Topic Header & Action Toolbar */}
             <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] pb-4">
               <div className="min-w-0 flex-1">
@@ -1110,21 +1154,23 @@ export function NotesStudioView({
                       <button
                         type="button"
                         onClick={toggleSidebarCompressed}
-                        className="cursor-pointer font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                        className="cursor-pointer font-semibold text-[var(--note-accent)] hover:underline whitespace-nowrap"
                       >
                         Show Topics ({subjectTopics.length})
                       </button>
                       <span aria-hidden="true">·</span>
                     </>
                   )}
-                  <span>{activeSubject?.name}</span>
+                  <span className="font-semibold text-[var(--note-accent)]">
+                    {activeSubject?.name}
+                  </span>
                   {activeTreeNode?.ancestors.map((anc) => (
                     <span key={anc.id} className="inline-flex items-center gap-1.5">
                       <ChevronRight className="h-3 w-3 opacity-70" aria-hidden="true" />
                       <button
                         type="button"
                         onClick={() => setSelectedTopicId(anc.id)}
-                        className="cursor-pointer font-semibold text-[var(--e3)] hover:underline"
+                        className="cursor-pointer font-semibold text-[var(--note-accent)] hover:underline"
                       >
                         {anc.name}
                       </button>
@@ -1149,9 +1195,18 @@ export function NotesStudioView({
                   </span>
                 </div>
                 {viewMode !== 'edit' && (
-                  <h1 className="font-display mt-1 text-2xl font-extrabold tracking-tight text-[var(--ink)] sm:text-3xl">
-                    {activeTopic.name}
-                  </h1>
+                  <div className="mt-2.5">
+                    <div
+                      className="mb-2 h-1 w-14 rounded-full bg-[var(--note-accent)]"
+                      aria-hidden="true"
+                    />
+                    <h1
+                      className="font-display text-3xl font-extrabold tracking-tight text-[var(--ink)] sm:text-[2.4rem] sm:leading-[1.14]"
+                      style={{ textWrap: 'balance' }}
+                    >
+                      {activeTopic.name}
+                    </h1>
+                  </div>
                 )}
               </div>
 
@@ -1185,13 +1240,132 @@ export function NotesStudioView({
                   )}
                 </div>
 
+                {/* Note Colour Option */}
+                <div className="relative" ref={colorMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setColorMenuOpen((v) => !v)}
+                    aria-expanded={colorMenuOpen}
+                    aria-label="Note colour"
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0"
+                  >
+                    {hasMultiPartColors ? (
+                      <span
+                        className="h-3 w-3 shrink-0 rounded-full border border-black/15"
+                        style={{
+                          background:
+                            'conic-gradient(#2563EB 0 25%, #16A34A 25% 50%, #7C3AED 50% 75%, #E11D48 75% 100%)',
+                        }}
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <span
+                        className="h-3 w-3 shrink-0 rounded-full border border-black/15"
+                        style={{ backgroundColor: activeColorOpt.swatch }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <Palette className="h-3.5 w-3.5 text-[var(--mute)]" aria-hidden="true" />
+                    <span>{hasMultiPartColors ? 'By Part' : 'Colour'}</span>
+                  </button>
+
+                  {colorMenuOpen && (
+                    <div
+                      role="menu"
+                      aria-label="Choose note colour"
+                      className="sd-card absolute right-0 z-30 mt-2 w-56 p-2"
+                    >
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={hasMultiPartColors}
+                        onClick={() => {
+                          replaceActiveNote({
+                            ...activeTopic.notes,
+                            accentColor: 'default',
+                            sections: applyVerifiedPartColors(activeTopic.notes.sections, true),
+                          });
+                          setColorMenuOpen(false);
+                        }}
+                        className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-semibold transition-colors ${
+                          hasMultiPartColors
+                            ? 'bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))] text-[var(--ink)]'
+                            : 'text-[var(--ink)] hover:bg-[var(--bg)]'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/15"
+                            style={{
+                              background:
+                                'conic-gradient(#2563EB 0 25%, #16A34A 25% 50%, #7C3AED 50% 75%, #E11D48 75% 100%)',
+                            }}
+                            aria-hidden="true"
+                          />
+                          <span>Colour-Code by Part</span>
+                        </span>
+                        {hasMultiPartColors && (
+                          <Check className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                        )}
+                      </button>
+
+                      <div className="my-1.5 border-t border-[var(--line)]" />
+
+                      <div className="px-2 py-0.5 text-[11px] font-bold text-[var(--mute)]">
+                        Single Note Colour
+                      </div>
+                      <div className="mt-1 space-y-0.5">
+                        {NOTE_COLOR_OPTIONS.map((opt) => {
+                          const selected = !hasMultiPartColors && activeNoteColor === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={selected}
+                              onClick={() => {
+                                replaceActiveNote({
+                                  ...activeTopic.notes,
+                                  accentColor: opt.id,
+                                  sections: stripSectionPartColors(activeTopic.notes.sections),
+                                });
+                                setColorMenuOpen(false);
+                              }}
+                              className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-semibold transition-colors ${
+                                selected
+                                  ? 'bg-[color-mix(in_srgb,var(--note-accent)_12%,var(--bg))] text-[var(--ink)]'
+                                  : 'text-[var(--ink)] hover:bg-[var(--bg)]'
+                              }`}
+                            >
+                              <span className="flex items-center gap-2.5">
+                                <span
+                                  className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/15"
+                                  style={{ backgroundColor: opt.swatch }}
+                                  aria-hidden="true"
+                                />
+                                <span>{opt.label}</span>
+                              </span>
+                              {selected && (
+                                <Check
+                                  className="h-3.5 w-3.5 text-[var(--note-accent)]"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <button
                   type="button"
                   onClick={() => startAddingTopic(activeTopic.id)}
                   title={`Create a sub-topic under ${activeTopic.name}`}
                   className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0"
                 >
-                  <FolderPlus className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                  <FolderPlus className="h-3.5 w-3.5 text-[var(--note-accent)]" aria-hidden="true" />
                   <span>+ Sub-topic</span>
                 </button>
 
@@ -1567,11 +1741,11 @@ export function NotesStudioView({
               });
 
               return (
-                <div className="space-y-6 text-[15px] leading-relaxed">
+                <div className="space-y-9 text-[16.5px] leading-[1.75] text-[var(--ink)]">
                   {hasDocHtml && (
-                    <div className="sd-card flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-xs">
-                      <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--ink)]">
-                        <FileCheck2 className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-3 text-sm">
+                      <span className="inline-flex items-center gap-2 font-semibold text-[var(--mute)]">
+                        <FileCheck2 className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
                         <span>Showing structured notes view</span>
                       </span>
                       <button
@@ -1585,7 +1759,7 @@ export function NotesStudioView({
                             });
                           }
                         }}
-                        className="sd-btn px-3 py-1 text-xs font-semibold text-[var(--e3)] whitespace-nowrap"
+                        className="sd-btn px-3.5 py-1.5 text-xs font-semibold text-[var(--e3)] whitespace-nowrap"
                       >
                         <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Original Document View</span>
@@ -1597,28 +1771,30 @@ export function NotesStudioView({
                   {populatedSections.length >= 2 && (
                     <nav
                       aria-label="Topic section contents"
-                      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-[var(--line)] pb-3 text-xs"
+                      className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-[var(--line)] pb-3.5 text-sm"
                     >
-                      <span className="font-bold text-[var(--mute)]">Jump to:</span>
+                      <span className="font-bold text-[var(--mute)]">Contents</span>
                       {populatedSections.map((sec, idx) => {
                         const meta = cleanSectionTitle(sec.heading);
+                        const secAccent = normalizeNoteColor(sec.accentColor);
                         return (
                           <a
                             key={sec.id}
                             href={`#note-sec-${sec.id}`}
-                            className="inline-flex items-baseline gap-1 font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                            data-note-color={secAccent !== 'default' ? secAccent : undefined}
+                            className="inline-flex items-baseline gap-1.5 font-semibold text-[var(--note-accent)] hover:underline whitespace-nowrap"
                           >
-                            <span className="font-mono-num text-[11px] opacity-75">
+                            <span className="font-mono-num text-xs opacity-85">
                               {meta.isCaseStudy ? 'CS' : String(idx + 1).padStart(2, '0')}
                             </span>
-                            <span className="max-w-[180px] truncate">{meta.title}</span>
+                            <span className="max-w-[220px] truncate">{meta.title}</span>
                           </a>
                         );
                       })}
                       {activeTopic.notes.keyTerms.length > 0 && (
                         <a
                           href="#note-key-terms"
-                          className="font-semibold text-[var(--mute)] hover:text-[var(--ink)] hover:underline whitespace-nowrap"
+                          className="font-semibold text-[var(--mute)] hover:text-[var(--note-accent)] hover:underline whitespace-nowrap"
                         >
                           Key Terms ({activeTopic.notes.keyTerms.length})
                         </a>
@@ -1626,28 +1802,28 @@ export function NotesStudioView({
                     </nav>
                   )}
 
-                  {/* Summary Callout */}
+                  {/* Summary Lead-In (Open Tinted Callout) */}
                   {activeTopic.notes.summary.trim() ? (
-                    <section className="sd-card p-6">
-                      <div className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
+                    <section className="rounded-2xl border border-[color-mix(in_srgb,var(--note-accent)_28%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--card))] px-6 py-5 sm:px-7 sm:py-6">
+                      <div className="text-sm font-bold text-[var(--note-accent)]">
                         Topic Overview
                       </div>
-                      <p className="mt-2 max-w-[72ch] whitespace-pre-line text-[15px] leading-[1.7] text-[var(--ink)]">
+                      <p className="mt-2 max-w-[70ch] whitespace-pre-line text-[17px] leading-[1.76] text-[var(--ink)]">
                         {renderInlineBold(activeTopic.notes.summary)}
                       </p>
                     </section>
                   ) : null}
 
-                  {/* Nested Sub-topics Index Card */}
+                  {/* Nested Sub-topics Index (Clean Hairline Directory) */}
                   {directChildTopics.length > 0 && (
-                    <section className="sd-card overflow-hidden">
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-5 py-3.5">
+                    <section className="space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
                         <div className="flex items-center gap-2">
                           <CornerDownRight
-                            className="h-4 w-4 text-[var(--e3)]"
+                            className="h-4 w-4 text-[var(--note-accent)]"
                             aria-hidden="true"
                           />
-                          <h2 className="font-display text-sm font-bold text-[var(--ink)] sm:text-base">
+                          <h2 className="font-display text-lg font-bold text-[var(--ink)] sm:text-xl">
                             Sub-topics ({directChildTopics.length})
                           </h2>
                         </div>
@@ -1656,23 +1832,23 @@ export function NotesStudioView({
                             <button
                               type="button"
                               onClick={() => setViewMode('edit')}
-                              className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                              className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                             >
-                              <Edit3 className="h-3 w-3" aria-hidden="true" />
+                              <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
                               <span>Write Overview</span>
                             </button>
                           )}
                           <button
                             type="button"
                             onClick={() => startAddingTopic(activeTopic.id)}
-                            className="sd-btn-pri px-2.5 py-1 text-xs whitespace-nowrap"
+                            className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
                           >
-                            <Plus className="h-3 w-3" aria-hidden="true" />
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                             <span>Add Sub-topic</span>
                           </button>
                         </div>
                       </div>
-                      <div className="grid gap-px bg-[var(--line)] sm:grid-cols-2">
+                      <div className="grid gap-3 sm:grid-cols-2">
                         {directChildTopics.map((child) => {
                           const childSubCount = subjectTopics.filter(
                             (t) => t.parentTopicId === child.id
@@ -1685,26 +1861,26 @@ export function NotesStudioView({
                               key={child.id}
                               type="button"
                               onClick={() => setSelectedTopicId(child.id)}
-                              className="flex cursor-pointer items-center justify-between gap-3 bg-[var(--card)] px-4 py-3 text-left transition-colors hover:bg-[var(--bg)]"
+                              className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--card)] px-4 py-3.5 text-left transition-colors hover:border-[var(--note-accent)]"
                             >
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2">
                                   {child.specCode && (
-                                    <span className="font-mono-num shrink-0 text-[11px] font-bold text-[var(--e3)]">
+                                    <span className="font-mono-num shrink-0 text-xs font-bold text-[var(--note-accent)]">
                                       {child.specCode}
                                     </span>
                                   )}
-                                  <span className="truncate text-sm font-bold text-[var(--ink)]">
+                                  <span className="truncate text-[15.5px] font-bold text-[var(--ink)]">
                                     {child.name}
                                   </span>
                                   {child.completed && (
                                     <CheckCircle2
-                                      className="h-3.5 w-3.5 shrink-0 text-[var(--ok)]"
+                                      className="h-4 w-4 shrink-0 text-[var(--ok)]"
                                       aria-label="Studied"
                                     />
                                   )}
                                 </div>
-                                <div className="mt-0.5 truncate text-xs text-[var(--mute)]">
+                                <div className="mt-0.5 truncate text-[13px] text-[var(--mute)]">
                                   {child.notes.summary.trim()
                                     ? child.notes.summary.trim()
                                     : `${secCount} section${secCount === 1 ? '' : 's'} · ${estimateNoteReadingMinutes(child.notes)} min read${
@@ -1713,7 +1889,7 @@ export function NotesStudioView({
                                 </div>
                               </div>
                               <ArrowRight
-                                className="h-4 w-4 shrink-0 text-[var(--mute)]"
+                                className="h-4 w-4 shrink-0 text-[var(--note-accent)]"
                                 aria-hidden="true"
                               />
                             </button>
@@ -1723,56 +1899,78 @@ export function NotesStudioView({
                     </section>
                   )}
 
-                  {/* Specification Sections */}
+                  {/* Specification Sections (Open Editorial Flowing Layout — Big Bold Titles, Clear Typography, Clear Tables) */}
                   {populatedSections.length > 0 ? (
-                    <div className="space-y-5">
+                    <div className="space-y-12 pt-1">
                       {populatedSections.map((sec) => {
                         const meta = cleanSectionTitle(sec.heading);
                         if (!meta.isCaseStudy) theorySectionCounter += 1;
                         const sectionNumber = String(theorySectionCounter).padStart(2, '0');
                         const blocks = groupSectionPoints(sec.points);
+                        const secAccent = normalizeNoteColor(sec.accentColor);
+                        const roleInfo = sec.partRole ? NOTE_PART_ROLE_MAP[sec.partRole] : undefined;
+                        const hasCustomAccent = secAccent !== 'default';
 
                         return (
                           <section
                             id={`note-sec-${sec.id}`}
                             key={sec.id}
-                            className={`sd-card scroll-mt-4 p-6 ${
+                            data-note-color={hasCustomAccent ? secAccent : undefined}
+                            className={`scroll-mt-6 ${
                               meta.isCaseStudy
-                                ? 'border-[color-mix(in_srgb,var(--e2)_45%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_3%,var(--card))]'
+                                ? hasCustomAccent
+                                  ? 'rounded-2xl border border-[color-mix(in_srgb,var(--note-accent)_32%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_6%,var(--card))] px-6 py-6 sm:px-8 sm:py-7'
+                                  : 'rounded-2xl border border-[color-mix(in_srgb,var(--e2)_35%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_5%,var(--card))] px-6 py-6 sm:px-8 sm:py-7'
                                 : ''
                             }`}
                           >
-                            <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[var(--line)] pb-3">
+                            <div
+                              className={`flex flex-wrap items-baseline justify-between gap-3 border-b-2 pb-3 ${
+                                meta.isCaseStudy && !hasCustomAccent
+                                  ? 'border-[color-mix(in_srgb,var(--e2)_40%,var(--line))]'
+                                  : 'border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))]'
+                              }`}
+                            >
                               <div className="flex min-w-0 items-baseline gap-3">
                                 {meta.isCaseStudy ? (
-                                  <span className="text-xs font-bold uppercase tracking-wider text-[var(--e2)] whitespace-nowrap">
+                                  <span
+                                    className={`text-sm font-bold whitespace-nowrap ${
+                                      hasCustomAccent ? 'text-[var(--note-accent)]' : 'text-[var(--e2)]'
+                                    }`}
+                                  >
                                     Case Study
                                   </span>
                                 ) : (
-                                  <span className="font-mono-num text-sm font-bold text-[var(--e3)]">
+                                  <span className="font-mono-num text-lg font-extrabold text-[var(--note-accent)] sm:text-xl">
                                     {sectionNumber}.
                                   </span>
                                 )}
-                                <h2 className="font-display text-lg font-bold text-[var(--ink)] sm:text-xl">
+                                <h2
+                                  className="font-display text-2xl font-extrabold tracking-tight text-[var(--ink)] sm:text-[1.75rem] sm:leading-[1.22]"
+                                  style={{ textWrap: 'balance' }}
+                                >
                                   {meta.title}
                                 </h2>
                               </div>
-                              {meta.contextTag && (
-                                <span className="font-mono-num text-xs font-semibold text-[var(--mute)]">
-                                  {meta.contextTag}
+                              {(roleInfo || meta.contextTag) && (
+                                <span className="flex items-baseline gap-2.5 text-sm font-semibold text-[var(--note-accent)]">
+                                  {roleInfo && <span>{roleInfo.label}</span>}
+                                  {meta.contextTag && (
+                                    <span className="font-mono-num opacity-90">{meta.contextTag}</span>
+                                  )}
                                 </span>
                               )}
                             </div>
 
                             {blocks.length > 0 && (
-                              <div className="mt-4 space-y-3.5 text-[var(--ink)]">
+                              <div className="mt-5 space-y-4 text-[var(--ink)]">
                                 {blocks.map((blk, i) => {
                                   if (blk.kind === 'subheading') {
                                     return (
                                       <h3
                                         key={i}
-                                        className={`font-display text-[15px] font-bold text-[var(--e3)] ${
-                                          i > 0 ? 'mt-5 border-t border-[var(--line)] pt-4' : ''
+                                        className={`font-display text-lg font-bold leading-snug text-[var(--note-accent)] sm:text-[1.3rem] ${
+                                          i > 0 ? 'mt-7 border-t border-[var(--line)]/70 pt-5' : ''
                                         }`}
                                       >
                                         {renderInlineBold(blk.text)}
@@ -1784,12 +1982,12 @@ export function NotesStudioView({
                                     return (
                                       <div
                                         key={i}
-                                        className="my-2.5 rounded-xl border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-4 py-3"
+                                        className="my-5 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--card))] px-5 py-4 sm:px-6 sm:py-4.5"
                                       >
-                                        <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                                        <div className="text-sm font-bold text-[var(--note-accent)]">
                                           {blk.title || 'Key Fact'}
                                         </div>
-                                        <div className="mt-1 text-sm leading-relaxed text-[var(--ink)]">
+                                        <div className="mt-1.5 text-[16px] leading-[1.72] text-[var(--ink)]">
                                           {renderInlineBold(blk.text)}
                                         </div>
                                       </div>
@@ -1800,28 +1998,28 @@ export function NotesStudioView({
                                     return (
                                       <div
                                         key={i}
-                                        className="my-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4"
+                                        className="my-5 rounded-2xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))] p-5"
                                       >
                                         {blk.label && (
-                                          <div className="mb-2.5 text-xs font-bold text-[var(--e3)]">
+                                          <div className="mb-3 text-sm font-bold text-[var(--note-accent)]">
                                             {blk.label}
                                           </div>
                                         )}
-                                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-stretch">
+                                        <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-stretch">
                                           {blk.steps.map((step, sIdx) => (
                                             <div
                                               key={sIdx}
-                                              className="flex items-center gap-2 sm:max-w-[240px]"
+                                              className="flex items-center gap-2.5 sm:max-w-[270px]"
                                             >
-                                              <div className="flex-1 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-xs leading-snug text-[var(--ink)]">
-                                                <span className="font-mono-num mr-1.5 font-bold text-[var(--e3)]">
+                                              <div className="flex-1 rounded-xl border border-[var(--line)] bg-[var(--card)] px-4 py-3 text-[15px] leading-snug text-[var(--ink)]">
+                                                <span className="font-mono-num mr-2 font-bold text-[var(--note-accent)]">
                                                   {sIdx + 1}.
                                                 </span>
                                                 {renderInlineBold(step)}
                                               </div>
                                               {sIdx < blk.steps.length - 1 && (
                                                 <ArrowRight
-                                                  className="hidden h-3.5 w-3.5 shrink-0 text-[var(--mute)] sm:block"
+                                                  className="hidden h-4 w-4 shrink-0 text-[var(--note-accent)] sm:block"
                                                   aria-hidden="true"
                                                 />
                                               )}
@@ -1836,15 +2034,15 @@ export function NotesStudioView({
                                     return (
                                       <div
                                         key={i}
-                                        className="my-2 overflow-x-auto rounded-xl border border-[var(--line)]"
+                                        className="my-5 overflow-x-auto rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[var(--card)]"
                                       >
-                                        <table className="w-full border-collapse text-left text-xs sm:text-sm">
-                                          <thead className="border-b border-[var(--line)] bg-[var(--bg)]">
+                                        <table className="w-full border-collapse text-left text-[15px] sm:text-[16px]">
+                                          <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_12%,var(--card))]">
                                             <tr>
                                               {blk.headers.map((h, hi) => (
                                                 <th
                                                   key={hi}
-                                                  className="px-4 py-2.5 font-bold text-[var(--ink)]"
+                                                  className="px-5 py-3.5 text-[15px] font-bold text-[var(--ink)] sm:text-[16px]"
                                                 >
                                                   {renderInlineBold(h)}
                                                 </th>
@@ -1857,14 +2055,18 @@ export function NotesStudioView({
                                                 key={ri}
                                                 className={
                                                   ri % 2 === 1
-                                                    ? 'bg-[color-mix(in_srgb,var(--bg)_55%,var(--card))]'
+                                                    ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
                                                     : ''
                                                 }
                                               >
                                                 {row.map((cell, ci) => (
                                                   <td
                                                     key={ci}
-                                                    className="px-4 py-2.5 align-top leading-relaxed text-[var(--ink)]"
+                                                    className={`px-5 py-3.5 align-top leading-[1.65] text-[var(--ink)] ${
+                                                      ci === 0
+                                                        ? 'font-semibold text-[color-mix(in_srgb,var(--note-accent)_45%,var(--ink))]'
+                                                        : ''
+                                                    }`}
                                                   >
                                                     {renderInlineBold(cell)}
                                                   </td>
@@ -1881,7 +2083,7 @@ export function NotesStudioView({
                                     return (
                                       <p
                                         key={i}
-                                        className="max-w-[72ch] whitespace-pre-line leading-[1.7] text-[var(--ink)]"
+                                        className="max-w-[70ch] whitespace-pre-line text-[16.5px] leading-[1.78] text-[var(--ink)] sm:text-[17px]"
                                       >
                                         {renderInlineBold(blk.text)}
                                       </p>
@@ -1894,23 +2096,23 @@ export function NotesStudioView({
                                     return (
                                       <div
                                         key={i}
-                                        className={`flex items-start gap-2.5 leading-relaxed ${
-                                          isSubBullet ? 'pl-6' : 'pl-1'
+                                        className={`flex items-start gap-3 text-[16px] leading-[1.72] sm:text-[16.5px] ${
+                                          isSubBullet ? 'pl-7' : 'pl-1'
                                         }`}
                                       >
                                         <span
-                                          className={`mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                          className={`mt-[11px] h-2 w-2 shrink-0 rounded-full ${
                                             isSubBullet
-                                              ? 'border border-[var(--e3)] bg-transparent'
-                                              : 'bg-[var(--e3)]'
+                                              ? 'border-[1.5px] border-[var(--note-accent)] bg-transparent'
+                                              : 'bg-[var(--note-accent)]'
                                           }`}
                                           aria-hidden="true"
                                         />
-                                        <div className="max-w-[72ch]">
-                                          <span className="font-bold text-[var(--ink)]">
+                                        <div className="max-w-[70ch]">
+                                          <span className="font-bold text-[color-mix(in_srgb,var(--note-accent)_55%,var(--ink))]">
                                             {kv.term}:{' '}
                                           </span>
-                                          <span className="text-[var(--ink)]/90">
+                                          <span className="text-[var(--ink)]/92">
                                             {renderInlineBold(kv.body)}
                                           </span>
                                         </div>
@@ -1921,19 +2123,19 @@ export function NotesStudioView({
                                   return (
                                     <div
                                       key={i}
-                                      className={`flex items-start gap-2.5 leading-relaxed ${
-                                        isSubBullet ? 'pl-6' : 'pl-1'
+                                      className={`flex items-start gap-3 text-[16px] leading-[1.72] sm:text-[16.5px] ${
+                                        isSubBullet ? 'pl-7' : 'pl-1'
                                       }`}
                                     >
                                       <span
-                                        className={`mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                        className={`mt-[11px] h-2 w-2 shrink-0 rounded-full ${
                                           isSubBullet
-                                            ? 'border border-[var(--mute)] bg-transparent'
-                                            : 'bg-[var(--mute)]'
+                                            ? 'border-[1.5px] border-[var(--note-accent)] bg-transparent'
+                                            : 'bg-[var(--note-accent)]'
                                         }`}
                                         aria-hidden="true"
                                       />
-                                      <span className="max-w-[72ch]">
+                                      <span className="max-w-[70ch]">
                                         {renderInlineBold(blk.text)}
                                       </span>
                                     </div>
@@ -1949,18 +2151,18 @@ export function NotesStudioView({
                     !activeTopic.notes.keyTerms.length &&
                     !activeTopic.notes.legacyHtml &&
                     directChildTopics.length === 0 ? (
-                    <div className="sd-card p-8 text-center">
-                      <p className="text-sm text-[var(--mute)]">
+                    <div className="rounded-2xl border border-dashed border-[var(--line)] bg-[var(--card)] p-10 text-center">
+                      <p className="text-base text-[var(--mute)]">
                         This topic doesn&apos;t have structured notes yet.
                       </p>
-                      <div className="mt-4 flex flex-wrap justify-center gap-2">
+                      <div className="mt-5 flex flex-wrap justify-center gap-2.5">
                         <button
                           type="button"
                           onClick={() => setViewMode('edit')}
                           className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                         >
                           <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>Write in Notion Editor</span>
+                          <span>Write Notes</span>
                         </button>
                         <button
                           type="button"
@@ -1978,7 +2180,7 @@ export function NotesStudioView({
                   {(activeTopic.notes.workedExample.trim() ||
                     activeTopic.notes.examTip.trim()) && (
                     <div
-                      className={`grid gap-4 ${
+                      className={`grid gap-5 pt-2 ${
                         activeTopic.notes.workedExample.trim() &&
                         activeTopic.notes.examTip.trim()
                           ? 'lg:grid-cols-2'
@@ -1986,22 +2188,22 @@ export function NotesStudioView({
                       }`}
                     >
                       {activeTopic.notes.workedExample.trim() && (
-                        <section className="sd-card p-5">
-                          <div className="text-xs font-bold uppercase tracking-wider text-[var(--ok)]">
+                        <section className="rounded-2xl border border-[color-mix(in_srgb,var(--ok)_34%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_7%,var(--card))] p-6">
+                          <div className="text-base font-bold text-[var(--ok)]">
                             Worked Example
                           </div>
-                          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-[var(--ink)]">
+                          <p className="mt-2.5 whitespace-pre-line text-[16px] leading-[1.72] text-[var(--ink)]">
                             {renderInlineBold(activeTopic.notes.workedExample)}
                           </p>
                         </section>
                       )}
 
                       {activeTopic.notes.examTip.trim() && (
-                        <section className="sd-card border-[var(--e2)] p-5">
-                          <div className="text-xs font-bold uppercase tracking-wider text-[var(--e2)]">
+                        <section className="rounded-2xl border border-[color-mix(in_srgb,var(--e2)_40%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_7%,var(--card))] p-6">
+                          <div className="text-base font-bold text-[var(--e2)]">
                             Examiner Tip
                           </div>
-                          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-[var(--ink)]">
+                          <p className="mt-2.5 whitespace-pre-line text-[16px] leading-[1.72] text-[var(--ink)]">
                             {renderInlineBold(activeTopic.notes.examTip)}
                           </p>
                         </section>
@@ -2011,23 +2213,23 @@ export function NotesStudioView({
 
                   {/* Key Terms & Definitions Table + Explicit Make Flashcards */}
                   {activeTopic.notes.keyTerms.length > 0 && (
-                    <section id="note-key-terms" className="sd-card scroll-mt-4 overflow-hidden">
-                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-6 py-4">
+                    <section id="note-key-terms" className="scroll-mt-6 space-y-4 pt-2">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-[color-mix(in_srgb,var(--note-accent)_32%,var(--line))] pb-3">
                         <button
                           type="button"
                           onClick={() => setGlossaryExpanded((v) => !v)}
-                          className="flex cursor-pointer items-center gap-2 text-left"
+                          className="flex cursor-pointer items-center gap-2.5 text-left"
                         >
                           {glossaryExpanded ? (
-                            <ChevronDown className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                            <ChevronDown className="h-5 w-5 text-[var(--note-accent)]" aria-hidden="true" />
                           ) : (
-                            <ChevronRight className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                            <ChevronRight className="h-5 w-5 text-[var(--note-accent)]" aria-hidden="true" />
                           )}
                           <div>
-                            <h2 className="font-display text-base font-bold text-[var(--ink)] sm:text-lg">
+                            <h2 className="font-display text-xl font-extrabold text-[var(--ink)] sm:text-2xl">
                               Key Terms &amp; Definitions ({activeTopic.notes.keyTerms.length})
                             </h2>
-                            <p className="text-xs text-[var(--mute)]">
+                            <p className="text-sm text-[var(--mute)]">
                               Click Make Flashcards whenever you want spaced-repetition cards from these terms.
                             </p>
                           </div>
@@ -2036,7 +2238,7 @@ export function NotesStudioView({
                           <button
                             type="button"
                             onClick={() => setGlossaryExpanded((v) => !v)}
-                            className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                            className="sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap"
                           >
                             {glossaryExpanded ? 'Collapse' : 'Show Glossary'}
                           </button>
@@ -2052,12 +2254,12 @@ export function NotesStudioView({
                       </div>
 
                       {glossaryExpanded && (
-                        <>
+                        <div className="overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[var(--card)]">
                           {activeTopic.notes.keyTerms.length > 6 && (
-                            <div className="border-b border-[var(--line)] bg-[var(--bg)] px-6 py-2.5">
-                              <div className="relative max-w-xs">
+                            <div className="border-b border-[var(--line)] bg-[var(--bg)] px-5 py-3">
+                              <div className="relative max-w-sm">
                                 <Search
-                                  className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--mute)]"
                                   aria-hidden="true"
                                 />
                                 <input
@@ -2065,30 +2267,46 @@ export function NotesStudioView({
                                   value={glossaryFilter}
                                   onChange={(e) => setGlossaryFilter(e.target.value)}
                                   placeholder="Filter glossary terms…"
-                                  className="sd-input py-1 pl-8 text-xs"
+                                  className="sd-input py-1.5 pl-9 text-sm"
                                 />
                               </div>
                             </div>
                           )}
-                          <div className="divide-y divide-[var(--line)]">
-                            {filteredTerms.map((kt) => (
-                              <div
-                                key={kt.id}
-                                className="grid gap-1.5 px-6 py-3 text-sm sm:grid-cols-3 sm:gap-4"
-                              >
-                                <div className="font-bold text-[var(--ink)]">{kt.term}</div>
-                                <div className="text-[var(--mute)] sm:col-span-2">
-                                  {kt.definition}
-                                </div>
-                              </div>
-                            ))}
-                            {filteredTerms.length === 0 && (
-                              <div className="px-6 py-4 text-xs text-[var(--mute)]">
-                                No key terms match &ldquo;{glossaryFilter}&rdquo;.
-                              </div>
-                            )}
-                          </div>
-                        </>
+                          <table className="w-full border-collapse text-left text-[15.5px] sm:text-[16px]">
+                            <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_35%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_11%,var(--card))]">
+                              <tr>
+                                <th className="w-1/3 px-5 py-3 font-bold text-[var(--ink)]">Term</th>
+                                <th className="px-5 py-3 font-bold text-[var(--ink)]">Definition</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[var(--line)]">
+                              {filteredTerms.map((kt, idx) => (
+                                <tr
+                                  key={kt.id}
+                                  className={
+                                    idx % 2 === 1
+                                      ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
+                                      : ''
+                                  }
+                                >
+                                  <td className="px-5 py-3.5 align-top font-bold text-[color-mix(in_srgb,var(--note-accent)_55%,var(--ink))]">
+                                    {kt.term}
+                                  </td>
+                                  <td className="px-5 py-3.5 align-top leading-[1.65] text-[var(--ink)]/92">
+                                    {kt.definition}
+                                  </td>
+                                </tr>
+                              ))}
+                              {filteredTerms.length === 0 && (
+                                <tr>
+                                  <td colSpan={2} className="px-5 py-5 text-sm text-[var(--mute)]">
+                                    No key terms match &ldquo;{glossaryFilter}&rdquo;.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
                       )}
                     </section>
                   )}
@@ -2102,7 +2320,7 @@ export function NotesStudioView({
                         ? siblingTopics[sibIdx + 1]
                         : null;
                     return (
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-4 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-5 text-xs">
                         <div>
                           {activeTreeNode?.parentTopic && (
                             <button
@@ -2754,7 +2972,8 @@ export function NotesStudioView({
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

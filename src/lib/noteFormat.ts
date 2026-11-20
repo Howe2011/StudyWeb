@@ -19,6 +19,7 @@ export interface AutoFormatOptions {
   autoTables?: boolean;
   splitDenseParagraphs?: boolean;
   strictHeadings?: boolean;
+  colorCodeParts?: boolean;
 }
 
 export function makeNoteId(prefix: string): string {
