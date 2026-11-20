@@ -1,4 +1,5 @@
 import { NoteAccentColor, NotePartRole } from '../types';
+import { countRightArrows } from './noteSymbols';
 
 export interface NoteColorOption {
   id: NoteAccentColor;
@@ -131,7 +132,7 @@ function inferSecondaryRoleFromPoints(points: string[]): NotePartRole | undefine
   const joined = points.join('\n');
   if (!joined.trim()) return undefined;
   if (points.some((p) => /^\|.+\|$/.test(p.trim()))) return 'compare';
-  if (points.some((p) => p.includes('⇒ ') || (p.match(/\s*→\s*/g) || []).length >= 2)) {
+  if (points.some((p) => p.includes('⇒ ') || countRightArrows(p) >= 2)) {
     return 'process';
   }
   if (/\b(?:disadvantage|limitation|drawback|risk|hazard|threat|pitfall|fails?\s+to|side[- ]effect|harmful)\b/i.test(joined)) {
@@ -161,7 +162,7 @@ export function verifySectionPartRole(
   const h = String(heading || '').trim();
   const hasTable = points.some((p) => /^\|.+\|$/.test(p.trim()));
   const hasFlow = points.some(
-    (p) => p.includes('⇒ ') || (p.match(/\s*→\s*/g) || []).length >= 2
+    (p) => p.includes('⇒ ') || countRightArrows(p) >= 2
   );
 
   if (EXAMPLE_HEADING_RE.test(h)) return 'example';

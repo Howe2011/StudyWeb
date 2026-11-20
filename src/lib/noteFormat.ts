@@ -4,6 +4,11 @@ import {
   StructuredNoteData,
   TimelineEventItem,
 } from '../types';
+import {
+  countRightArrows,
+  normalizeStudySymbols,
+  splitRightArrowSteps,
+} from './noteSymbols';
 
 export type NoteFormatPreset =
   | 'balanced-visual'
@@ -167,7 +172,7 @@ export interface FormattingQualityReport {
  * or raw webpage chrome). If true, autoformatting should keep the existing structure intact!
  */
 export function assessExistingFormattingQuality(rawInput: string): FormattingQualityReport {
-  const normalized = String(rawInput || '').replace(/\u00a0/g, ' ').replace(/\r/g, '').trim();
+  const normalized = normalizeStudySymbols(rawInput, { preserveLeadingFlowMarker: true }).trim();
   if (!normalized) {
     return {
       isGood: false,
@@ -225,7 +230,7 @@ export function assessExistingFormattingQuality(rawInput: string): FormattingQua
       tablesOrFlows++;
       continue;
     }
-    if (/^(?:[-*•▪◦‣↳]|\d+[.)])\s+\S/.test(t)) {
+    if (/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳]|[☐☑✓✔✅]|\[[ xX✓✔]?\]|\d+[.)])\s+\S/.test(t)) {
       bulletsCount++;
       continue;
     }
@@ -276,10 +281,7 @@ function preprocessPlainStudyText(
   rawInput: string,
   opts: AutoFormatOptions
 ): string {
-  const normalized = String(rawInput || '')
-    .replace(/\u00a0/g, ' ')
-    .replace(/\r/g, '')
-    .trim();
+  const normalized = normalizeStudySymbols(rawInput, { preserveLeadingFlowMarker: true }).trim();
   if (!normalized) return '';
 
   const rawLines = normalized.split('\n');
@@ -307,7 +309,7 @@ function preprocessPlainStudyText(
 
     // Preserve indentation before bullet markers so sub-bullets keep hierarchy
     const indentLead = line.match(/^(\s{2,}|\t+)(.*)$/);
-    if (indentLead && /^(?:[-*•▪◦‣–—]|\d+[.)])\s+/.test(indentLead[2])) {
+    if (indentLead && /^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]|\d+[.)])\s+/.test(indentLead[2])) {
       outLines.push(`  ${indentLead[2].trim()}`);
       continue;
     }
@@ -331,7 +333,7 @@ function preprocessPlainStudyText(
       trimmed.length > 260 &&
       !trimmed.startsWith('|') &&
       !trimmed.startsWith('#') &&
-      !/^(?:[-*•▪◦‣↳⇒📌¶]|\d+[.)])\s+/.test(trimmed)
+      !/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳⇒📌¶]|[☐☑✓✔✅]|\d+[.)])\s+/.test(trimmed)
     ) {
       const sentences = splitRespectingAbbreviations(trimmed);
       if (sentences.length >= 2) {
@@ -345,10 +347,13 @@ function preprocessPlainStudyText(
 }
 
 function tryBuildSequentialFlow(line: string): string | null {
-  const clean = line.replace(/\*\*/g, '').replace(/^⇒\s*/, '').trim();
-  // Explicit arrows (A -> B -> C or A => B => C or A → B → C)
-  const arrowParts = clean.split(/\s*(?:->|=>|→)\s*/).filter(Boolean);
-  if (arrowParts.length >= 3 && arrowParts.every((p) => p.length <= 90)) {
+  const normalized = normalizeStudySymbols(line, { preserveLeadingFlowMarker: true }).trim();
+  const hasExplicitFlowLead = /^⇒\s+/.test(normalized);
+  const clean = normalized.replace(/\*\*/g, '').replace(/^⇒\s*/, '').trim();
+  // Explicit arrows (A -> B -> C or A => B => C or A → B → C or A ➜ B ➜ C)
+  const arrowParts = splitRightArrowSteps(clean);
+  const minParts = hasExplicitFlowLead ? 2 : 3;
+  if (arrowParts.length >= minParts && arrowParts.every((p) => p.length <= 90)) {
     return `⇒ ${arrowParts.join(' → ')}`;
   }
 
@@ -473,14 +478,14 @@ export function parseTextIntoStructuredNote(
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i];
-    const isNestedBullet = /^\s{2,}(?:[-*•▪◦‣–—]|\d+[.)])\s+/.test(rawLine);
+    const isNestedBullet = /^\s{2,}(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]|\d+[.)])\s+/.test(rawLine);
     let line = rawLine.trim();
     if (!line) continue;
 
     // Extract Gizmo / revision cloze deletions `{{answer}}` or `==answer==` into flashcards
     if (/\{\{[^}]+\}\}|==[^=]+==/.test(line)) {
       const cleanStatement = line
-        .replace(/^(?:[-*•▪◦‣–—]|\d+[.)])\s+/, '')
+        .replace(/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]|\d+[.)])\s+/, '')
         .replace(/\{\{([^}]+)\}\}/g, '**$1**')
         .replace(/==([^=]+)==/g, '**$1**')
         .trim();
@@ -491,7 +496,7 @@ export function parseTextIntoStructuredNote(
         const answer = (match[1] || match[2] || '').trim();
         if (answer) {
           const prompt = line
-            .replace(/^(?:[-*•▪◦‣–—]|\d+[.)])\s+/, '')
+            .replace(/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]|\d+[.)])\s+/, '')
             .replace(match[0], '[____]')
             .replace(/\{\{([^}]+)\}\}/g, '$1')
             .replace(/==([^=]+)==/g, '$1')
@@ -674,8 +679,13 @@ export function parseTextIntoStructuredNote(
       }
     }
 
-    const isExplicitBullet = /^(?:[-*•▪◦‣–—]|\d+[.)])\s+/.test(line);
-    const cleanBullet = line.replace(/^(?:[-*•▪◦‣–—]|\d+[.)])\s+/, '').trim();
+    const isExplicitBullet =
+      /^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]|\[[ xX✓✔]?\]|[☐☑✓✔✅]|\d+[.)])\s+/.test(line);
+    const cleanBullet = line
+      .replace(/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]|\d+[.)])\s+/, '')
+      .replace(/^\[[ ]\]\s+/, '☐ ')
+      .replace(/^\[[xX✓✔]\]\s+/, '✓ ')
+      .trim();
     if (!cleanBullet) continue;
 
     // Detect sequential process / cause-effect flows when enabled
@@ -1008,11 +1018,14 @@ function extractInlineFormattedText(el: Element): string {
   };
 
   Array.from(el.childNodes).forEach(walkNode);
-  return parts
-    .join('')
-    .replace(/\s+/g, ' ')
-    .replace(/\*\*([^*]+?):\*\*/g, '**$1**:')
-    .trim();
+  return normalizeStudySymbols(
+    parts
+      .join('')
+      .replace(/\s+/g, ' ')
+      .replace(/\*\*([^*]+?):\*\*/g, '**$1**:')
+      .trim(),
+    { preserveLeadingFlowMarker: true }
+  );
 }
 
 /**
@@ -1058,7 +1071,7 @@ export function legacyHtmlToStructuredNote(html: string): StructuredNoteData {
       }
 
       // Preserve flow sequences intact without mis-splitting as key-value terms
-      if (clean.includes('⇒ ') || (clean.match(/\s*→\s*/g) || []).length >= 2) {
+      if (clean.includes('⇒ ') || countRightArrows(clean) >= 2) {
         current.points.push(clean);
         return;
       }
@@ -1220,18 +1233,23 @@ function splitPipeRow(line: string): string[] {
 }
 
 function parseFlowLine(raw: string): { label?: string; steps: string[] } | null {
-  const arrowCount = (raw.match(/\s*→\s*/g) || []).length;
-  if (!raw.includes('⇒ ') && arrowCount < 2) return null;
+  const normalized = normalizeStudySymbols(raw, { preserveLeadingFlowMarker: true });
+  const arrowCount = (normalized.match(/\s*→\s*/g) || []).length;
+  if (!normalized.includes('⇒ ') && arrowCount < 2) return null;
 
   let label: string | undefined;
-  let body = raw;
-  const flowMarkerIdx = raw.indexOf('⇒ ');
+  let body = normalized;
+  const flowMarkerIdx = normalized.indexOf('⇒ ');
   if (flowMarkerIdx >= 0) {
-    const prefix = raw.slice(0, flowMarkerIdx).replace(/\*\*/g, '').replace(/:\s*$/, '').trim();
+    const prefix = normalized
+      .slice(0, flowMarkerIdx)
+      .replace(/\*\*/g, '')
+      .replace(/:\s*$/, '')
+      .trim();
     if (prefix) label = prefix;
-    body = raw.slice(flowMarkerIdx + 2).trim();
+    body = normalized.slice(flowMarkerIdx + 2).trim();
   } else {
-    const colonSplit = raw.match(/^(?:\*\*)?([^:*→]{2,48})(?:\*\*)?:\s*(.+)$/);
+    const colonSplit = normalized.match(/^(?:\*\*)?([^:*→]{2,48})(?:\*\*)?:\s*(.+)$/);
     if (colonSplit && (colonSplit[2].match(/\s*→\s*/g) || []).length >= 2) {
       label = colonSplit[1].trim();
       body = colonSplit[2].trim();

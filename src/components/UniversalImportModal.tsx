@@ -985,7 +985,8 @@ export function UniversalImportModal({
     aiAbortRef.current?.abort();
     const controller = new AbortController();
     aiAbortRef.current = controller;
-    const clientTimeout = window.setTimeout(() => controller.abort('timeout'), 35000);
+    const timeoutMs = rawText.length > 15000 ? 120000 : 90000;
+    const clientTimeout = window.setTimeout(() => controller.abort('timeout'), timeoutMs);
     const startedAt = Date.now();
 
     setAiFormatting(true);
@@ -1197,7 +1198,7 @@ export function UniversalImportModal({
       if (controller.signal.aborted) {
         setErrorMsg(
           controller.signal.reason === 'timeout'
-            ? 'AI Autoformat timed out after 35s. Try shorter text or check your API key.'
+            ? `AI Autoformat timed out after ${Math.round(timeoutMs / 1000)}s. Try shorter text or check your API key.`
             : 'AI Autoformat cancelled.'
         );
       } else {

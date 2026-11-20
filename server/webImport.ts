@@ -3,6 +3,7 @@ import net from 'net';
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import type { Express, Request, Response } from 'express';
+import { normalizeStudySymbols } from '../src/lib/noteSymbols.ts';
 
 export interface WebImportedCard {
   q: string;
@@ -239,8 +240,8 @@ function extractQuizletOrGizmoFromHtml(
   const seen = new Set<string>();
 
   const add = (q: string, a: string) => {
-    const cq = q.replace(/\s+/g, ' ').trim();
-    const ca = a.replace(/\s+/g, ' ').trim();
+    const cq = normalizeStudySymbols(q.replace(/\s+/g, ' ').trim());
+    const ca = normalizeStudySymbols(a.replace(/\s+/g, ' ').trim());
     if (!cq || !ca) return;
     const key = `${cq.toLowerCase()}::${ca.toLowerCase()}`;
     if (seen.has(key)) return;
@@ -641,7 +642,7 @@ function extractArticleMarkdown($: cheerio.CheerioAPI, domain: string): {
 
   return {
     title,
-    markdown,
+    markdown: normalizeStudySymbols(markdown),
   };
 }
 

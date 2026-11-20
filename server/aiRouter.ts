@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import type { Express, Request, Response } from 'express';
 import { applyVerifiedPartColors, normalizeNotePartRole } from '../src/lib/noteColors.ts';
+import { normalizeStudySymbols } from '../src/lib/noteSymbols.ts';
 import type { NoteAccentColor, NotePartRole } from '../src/types.ts';
 
 export type UserAiProvider = 'gemini' | 'grok' | 'openai-compatible';
@@ -83,10 +84,11 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
   'You are StudyDeck AI, an elite academic note synthesizer. Convert raw study material or scraped webpage text into crisp, naturally structured revision JSON.',
   'SELECTIVE EXTRACTION: Source text often comes from webpages. IGNORE navigation bars, author bios, filler intros, repetition, and tangents. Extract ONLY core examinable concepts, mechanisms, definitions, data/dates, comparisons, and formulas.',
+  'COMPLETENESS (CRITICAL): Cover ALL distinct topics and sections from the beginning to the very end of [SOURCE]. Never stop early, cut off mid-document, or drop trailing sections—if notes are dense, keep bullets concise (<=16 words) rather than omitting later topics.',
   'NATURAL HIERARCHY (NEVER rigidly split into artificial 01/02 mini-sections or filler boxes):',
   '- Keep coherent ideas together under natural headings h (keep meaningful source numbering like "1. Topic", do NOT invent 01./02. prefixes).',
   '- Start with a clean "| Date/Key | Event/Point |" summary table (under e.g. "Key Dates" or "Key Data") when the material covers multiple dates, stats, or terms.',
-  '- Use "⇒ Step 1 → Step 2 → Step 3" for 2–5 parallel causes, agreements, or sequential steps.',
+  '- Use "⇒ Step 1 → Step 2 → Step 3" for 2–5 parallel causes, agreements, or sequential steps (convert any external arrow variants like ->, =>, ➜ into "→", and reversible reactions into "⇌" or "↔").',
   '- Use "### Question or Sub-group" for natural sub-points, "**Term**: concise point" + "↳ sub-detail" for bullets, "| A | B |" tables for contrasts, and "📌 Label | Key stat/formula" ONLY for standout facts.',
   '- Keep u (overview) empty "" unless an introductory summary genuinely helps.',
   'Never invent facts not grounded in the source.',
@@ -191,14 +193,14 @@ function getGeminiModelTuning(model: string): {
   if (/^gemini-3\./i.test(model)) {
     return {
       thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-      maxOutputTokens: 2048,
+      maxOutputTokens: 8192,
       seed: 42,
     };
   }
   if (/^gemini-2\.5-flash-lite/i.test(model)) {
     return {
       thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: 2048,
+      maxOutputTokens: 8192,
       temperature: 0.15,
       topP: 0.85,
     };
@@ -206,7 +208,7 @@ function getGeminiModelTuning(model: string): {
   if (/^gemini-2\.5-/i.test(model)) {
     return {
       thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: 2048,
+      maxOutputTokens: 8192,
       temperature: 0.2,
       topP: 0.9,
     };
@@ -214,11 +216,11 @@ function getGeminiModelTuning(model: string): {
   if (/^gemini-4-/i.test(model)) {
     return {
       thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      maxOutputTokens: 2560,
+      maxOutputTokens: 8192,
       seed: 42,
     };
   }
-  return { maxOutputTokens: 2048, temperature: 0.2 };
+  return { maxOutputTokens: 8192, temperature: 0.2 };
 }
 
 function getOpenAiModelTuning(
@@ -226,9 +228,9 @@ function getOpenAiModelTuning(
   model: string
 ): { temperature: number; max_tokens: number; reasoning_effort?: 'low' } {
   if (provider === 'grok' && /grok-3-mini/i.test(model)) {
-    return { temperature: 0.2, max_tokens: 2048, reasoning_effort: 'low' };
+    return { temperature: 0.2, max_tokens: 8192, reasoning_effort: 'low' };
   }
-  return { temperature: 0.2, max_tokens: 2048 };
+  return { temperature: 0.2, max_tokens: 8192 };
 }
 
 async function resolveExplicitGeminiCache(
@@ -385,7 +387,73 @@ function extractReadableErrorMessage(err: unknown, config: UserAiConfig): string
   return detail.slice(0, 260);
 }
 
-function extractJsonPayload(rawText: string): RawCompactSchemaPayload {
+function tryRepairTruncatedJson(raw: string): RawCompactSchemaPayload | null {
+  const start = raw.indexOf('{');
+  if (start === -1) return null;
+  let candidate = raw.slice(start).trim();
+
+  // Walk JSON state to close any open string, object, or array cleanly
+  const stack: Array<'{' | '['> = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{' || ch === '[') {
+      stack.push(ch);
+    } else if (ch === '}' && stack[stack.length - 1] === '{') {
+      stack.pop();
+    } else if (ch === ']' && stack[stack.length - 1] === '[') {
+      stack.pop();
+    }
+  }
+
+  if (inString) {
+    if (escaped) candidate = candidate.slice(0, -1);
+    candidate += '"';
+  }
+
+  // Strip dangling colon / comma / incomplete key before closing brackets
+  candidate = candidate.replace(/,\s*$/, '').replace(/:\s*$/, ': ""');
+  while (stack.length > 0) {
+    const open = stack.pop();
+    candidate = candidate.replace(/,\s*$/, '');
+    candidate += open === '{' ? '}' : ']';
+  }
+
+  try {
+    const parsed = JSON.parse(candidate) as RawCompactSchemaPayload;
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.s)) {
+      return parsed;
+    }
+  } catch {
+    // Fallback: trim back to last complete object inside `"s":[...]` or overall braces
+    const lastCompleteBrace = raw.lastIndexOf('}', raw.length - 1);
+    if (lastCompleteBrace > start) {
+      try {
+        const sub = raw.slice(start, lastCompleteBrace + 1);
+        return JSON.parse(sub) as RawCompactSchemaPayload;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return null;
+}
+
+function extractJsonPayload(rawText: string, allowRepair = true): RawCompactSchemaPayload {
   const cleaned = String(rawText || '')
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
@@ -402,18 +470,26 @@ function extractJsonPayload(rawText: string): RawCompactSchemaPayload {
     const firstBrace = cleaned.indexOf('{');
     const lastBrace = cleaned.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace > firstBrace) {
-      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as RawCompactSchemaPayload;
+      try {
+        return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as RawCompactSchemaPayload;
+      } catch {
+        // fall through to repair
+      }
+    }
+    if (allowRepair) {
+      const repaired = tryRepairTruncatedJson(cleaned);
+      if (repaired) return repaired;
     }
     throw new Error('The AI model returned malformed JSON. Try again or pick another model.');
   }
 }
 
 /**
- * Smart webpage & note pre-filter: strips trailing Reference/See-Also sections,
- * Wikipedia footnotes, media captions, conversational filler, URLs, and duplicate lines
- * BEFORE sending tokens to the AI.
+ * Smart webpage & note pre-filter: normalizes variant external symbols, strips trailing
+ * Reference/See-Also sections, Wikipedia footnotes, media captions, filler, URLs, and duplicate lines
+ * BEFORE sending tokens to the AI — without slicing away valid notes.
  */
-export function compactInputForAi(rawText: string, maxChars = 11000): string {
+export function compactInputForAi(rawText: string, maxChars = 60000): string {
   const noiseLine =
     /^(?:skip to (?:main )?content|cookie (?:policy|preferences|settings)|accept all cookies|sign in|log in|subscribe|advertisement|sponsored|menu|breadcrumbs?|back to top|all rights reserved|©\s*\d{4}|table of contents|edit section|\[edit\]|jump to navigation|share this page|print page|related topics?|did this page help you\??|yes\s*no|test yourself|join now|sign up|download pdf|view all topics)$/i;
   const webFluffPrefix =
@@ -422,9 +498,10 @@ export function compactInputForAi(rawText: string, maxChars = 11000): string {
     /^(?:#{1,4}\s*)?(?:see\s+also|references?|external\s+links?|further\s+reading|bibliography|notes\s+and\s+references|citations|related\s+(?:topics?|articles?|guides?|resources?)|more\s+on\s+this\s+topic|watch\s+and\s+listen)$/i;
 
   const seen = new Set<string>();
-  const rawLines = String(rawText || '')
-    .replace(/\u200B|\uFEFF/g, '')
-    .replace(/\r/g, '')
+  const normalizedRaw = normalizeStudySymbols(String(rawText || ''), {
+    preserveLeadingFlowMarker: true,
+  });
+  const rawLines = normalizedRaw
     .replace(/\[([^\]\n]{1,120})\]\(https?:\/\/[^)\s]+\)/g, '$1')
     .replace(/https?:\/\/\S+/g, '')
     .replace(/\[(?:\d+|citation needed|edit|note\s*\d*)\]/gi, '')
@@ -439,7 +516,7 @@ export function compactInputForAi(rawText: string, maxChars = 11000): string {
       continue;
     }
 
-    if (kept.length >= 6 && trailingJunkHeading.test(t.replace(/[:*]/g, '').trim())) {
+    if (kept.length >= 14 && trailingJunkHeading.test(t.replace(/[:*]/g, '').trim())) {
       break;
     }
 
@@ -458,7 +535,158 @@ export function compactInputForAi(rawText: string, maxChars = 11000): string {
     .trim();
 
   if (collapsed.length <= maxChars) return collapsed;
-  return `${collapsed.slice(0, maxChars)}\n...[truncated]`;
+  const cutIdx = collapsed.lastIndexOf('\n', maxChars);
+  return collapsed.slice(0, cutIdx > maxChars * 0.7 ? cutIdx : maxChars).trim();
+}
+
+const SINGLE_PASS_CHUNK_LIMIT = 12500;
+const CHUNK_TARGET_CHARS = 10500;
+
+function splitTextIntoBalancedChunks(text: string, maxChunkChars = CHUNK_TARGET_CHARS): string[] {
+  const clean = text.trim();
+  if (clean.length <= maxChunkChars) return [clean];
+
+  const blocks = clean.split(/\n{2,}/);
+  const chunks: string[] = [];
+  let buf = '';
+
+  const flushBuf = () => {
+    if (buf.trim()) {
+      chunks.push(buf.trim());
+      buf = '';
+    }
+  };
+
+  for (const blk of blocks) {
+    if (blk.length > maxChunkChars) {
+      flushBuf();
+      const lines = blk.split('\n');
+      let lineBuf = '';
+      for (const ln of lines) {
+        if (lineBuf && lineBuf.length + ln.length + 1 > maxChunkChars) {
+          chunks.push(lineBuf.trim());
+          lineBuf = ln;
+        } else {
+          lineBuf = lineBuf ? `${lineBuf}\n${ln}` : ln;
+        }
+      }
+      if (lineBuf.trim()) chunks.push(lineBuf.trim());
+      continue;
+    }
+
+    const isMajorHeading = /^#{1,2}\s+\S/.test(blk.trim());
+    if (buf && (buf.length + blk.length + 2 > maxChunkChars || (isMajorHeading && buf.length >= maxChunkChars * 0.55))) {
+      flushBuf();
+    }
+    buf = buf ? `${buf}\n\n${blk}` : blk;
+  }
+  flushBuf();
+
+  return chunks.length > 0 ? chunks : [clean];
+}
+
+function splitChunkInHalf(text: string): [string, string] | null {
+  const clean = text.trim();
+  if (clean.length < 1800) return null;
+  const mid = Math.floor(clean.length / 2);
+
+  // Prefer splitting on a heading or blank line near the midpoint
+  const searchStart = Math.floor(clean.length * 0.3);
+  const searchEnd = Math.floor(clean.length * 0.7);
+  let splitIdx = -1;
+
+  const headingAfter = clean.indexOf('\n#', mid);
+  if (headingAfter !== -1 && headingAfter <= searchEnd) splitIdx = headingAfter;
+  if (splitIdx === -1) {
+    const headingBefore = clean.lastIndexOf('\n#', mid);
+    if (headingBefore >= searchStart) splitIdx = headingBefore;
+  }
+  if (splitIdx === -1) {
+    const paraAfter = clean.indexOf('\n\n', mid);
+    const paraBefore = clean.lastIndexOf('\n\n', mid);
+    if (paraAfter !== -1 && paraAfter <= searchEnd) splitIdx = paraAfter;
+    else if (paraBefore >= searchStart) splitIdx = paraBefore;
+  }
+  if (splitIdx === -1) {
+    const lineAfter = clean.indexOf('\n', mid);
+    const lineBefore = clean.lastIndexOf('\n', mid);
+    if (lineAfter !== -1 && lineAfter <= searchEnd) splitIdx = lineAfter;
+    else if (lineBefore >= searchStart) splitIdx = lineBefore;
+  }
+  if (splitIdx === -1) splitIdx = mid;
+
+  const left = clean.slice(0, splitIdx).trim();
+  const right = clean.slice(splitIdx).trim();
+  if (!left || !right) return null;
+  return [left, right];
+}
+
+function mergeCompactFormattedOutputs(parts: CompactFormattedOutput[]): CompactFormattedOutput {
+  if (parts.length === 1) return parts[0];
+
+  const mergedSections: CompactFormattedOutput['sections'] = [];
+  const mergedTerms: CompactFormattedOutput['keyTerms'] = [];
+  const seenTerms = new Set<string>();
+  const mergedEvents: CompactFormattedOutput['timelineEvents'] = [];
+  const seenEvents = new Set<string>();
+  const mergedCards: CompactFormattedOutput['cards'] = [];
+  const seenCards = new Set<string>();
+  const tipParts: string[] = [];
+  const exParts: string[] = [];
+
+  let title: string | undefined;
+  let summary = '';
+
+  for (const part of parts) {
+    if (!title && part.title) title = part.title;
+    if (!summary && part.summary) summary = part.summary;
+    if (part.examTip && !tipParts.includes(part.examTip)) tipParts.push(part.examTip);
+    if (part.workedExample && !exParts.includes(part.workedExample)) exParts.push(part.workedExample);
+
+    for (const sec of part.sections) {
+      const prev = mergedSections[mergedSections.length - 1];
+      if (prev && prev.heading.trim().toLowerCase() === sec.heading.trim().toLowerCase()) {
+        prev.points.push(...sec.points);
+      } else {
+        mergedSections.push({ ...sec, points: [...sec.points] });
+      }
+    }
+
+    for (const kt of part.keyTerms) {
+      const key = kt.term.trim().toLowerCase();
+      if (!seenTerms.has(key)) {
+        seenTerms.add(key);
+        mergedTerms.push(kt);
+      }
+    }
+
+    for (const ev of part.timelineEvents) {
+      const key = `${ev.date.toLowerCase()}::${ev.title.toLowerCase()}`;
+      if (!seenEvents.has(key)) {
+        seenEvents.add(key);
+        mergedEvents.push(ev);
+      }
+    }
+
+    for (const c of part.cards) {
+      const key = c.q.trim().toLowerCase();
+      if (!seenCards.has(key)) {
+        seenCards.add(key);
+        mergedCards.push(c);
+      }
+    }
+  }
+
+  return {
+    title,
+    summary,
+    sections: mergedSections.length ? mergedSections : [{ heading: 'Key Points', points: [] }],
+    keyTerms: mergedTerms,
+    examTip: tipParts.join('\n\n'),
+    workedExample: exParts.join('\n\n'),
+    timelineEvents: mergedEvents,
+    cards: mergedCards.slice(0, 12),
+  };
 }
 
 function getPresetDirective(preset?: string): string {
@@ -587,7 +815,8 @@ function buildAutoformatSchema(opts: {
 }
 
 function detectAlreadyGoodFormatting(text: string): boolean {
-  const lines = text.split('\n').filter((l) => l.trim().length > 0);
+  const normalized = normalizeStudySymbols(text, { preserveLeadingFlowMarker: true });
+  const lines = normalized.split('\n').filter((l) => l.trim().length > 0);
   if (lines.length < 4) return false;
 
   let headings = 0;
@@ -599,7 +828,12 @@ function detectAlreadyGoodFormatting(text: string): boolean {
     const t = raw.trim();
     totalChars += t.length;
     if (/^#{1,3}\s+\S/.test(t)) headings++;
-    else if (/^\|.+\|$/.test(t) || /^⇒\s+/.test(t) || /^📌\s+/.test(t) || /^(?:[-*•↳]|\d+[.)])\s+\S/.test(t)) {
+    else if (
+      /^\|.+\|$/.test(t) ||
+      /^⇒\s+/.test(t) ||
+      /^📌\s+/.test(t) ||
+      /^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳]|[☐☑✓✔✅]|\[[ xX✓✔]?\]|\d+[.)])\s+\S/.test(t)
+    ) {
       structured++;
     } else if (t.length > 360) {
       denseBlobs++;
@@ -608,7 +842,7 @@ function detectAlreadyGoodFormatting(text: string): boolean {
 
   const avgLen = totalChars / Math.max(1, lines.length);
   if (denseBlobs > 0 || avgLen > 165) return false;
-  if (text.length < 900) return headings >= 1 && structured >= 3;
+  if (normalized.length < 900) return headings >= 1 && structured >= 3;
   return headings >= 2 && structured >= 4;
 }
 
@@ -633,8 +867,10 @@ function preserveWellFormattedText(
     }
   };
 
-  for (const raw of text.split('\n')) {
-    const isSub = /^\s{2,}(?:[-*•▪◦‣↳]|\d+[.)])\s+/.test(raw) || raw.trim().startsWith('↳ ');
+  const normalizedText = normalizeStudySymbols(text, { preserveLeadingFlowMarker: true });
+  for (const raw of normalizedText.split('\n')) {
+    const isSub =
+      /^\s{2,}(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳]|\d+[.)])\s+/.test(raw) || raw.trim().startsWith('↳ ');
     const line = raw.trim();
     if (!line) continue;
     if (/^\|\s*[-:]+(?:\s*\|\s*[-:]+)+\s*\|$/.test(line)) continue;
@@ -680,8 +916,14 @@ function preserveWellFormattedText(
       continue;
     }
 
-    const cleanedBullet = line.replace(/^(?:[-*•▪◦‣↳]|\d+[.)])\s+/, '').trim();
-    const isBullet = /^(?:[-*•▪◦‣↳]|\d+[.)])\s+/.test(line);
+    const bulletRe = /^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳]|\d+[.)])\s+/;
+    const cleanedBullet = line
+      .replace(bulletRe, '')
+      .replace(/^\[[ ]\]\s+/, '☐ ')
+      .replace(/^\[[xX✓✔]\]\s+/, '✓ ')
+      .trim();
+    const isBullet =
+      bulletRe.test(line) || /^(?:\[[ xX✓✔]?\]|[☐☑✓✔✅])\s+/.test(line);
 
     const kv = cleanedBullet.match(/^\*\*(.+?)\*\*\s*[:–—-]\s*(.+)$/);
     if (kv && kv[1].length <= 65 && !seenTerms.has(kv[1].toLowerCase())) {
@@ -732,12 +974,17 @@ function expandCompactPayload(
   raw: RawCompactSchemaPayload,
   colorCodeParts = false
 ): CompactFormattedOutput {
+  const norm = (v: unknown, preserveFlow = false) =>
+    normalizeStudySymbols(String(v || ''), { preserveLeadingFlowMarker: preserveFlow }).trim();
+
   const baseSections = Array.isArray(raw.s)
     ? raw.s
         .map((sec) => ({
-          heading: String(sec?.h || '').trim() || 'Key Points',
+          heading: norm(sec?.h) || 'Key Points',
           points: Array.isArray(sec?.p)
-            ? sec.p.map((pt) => String(pt || '').trimEnd()).filter((pt) => pt.trim().length > 0)
+            ? sec.p
+                .map((pt) => norm(pt, true))
+                .filter((pt) => pt.length > 0)
             : [],
           partRole: colorCodeParts ? normalizeNotePartRole(sec?.r) : undefined,
         }))
@@ -755,8 +1002,8 @@ function expandCompactPayload(
   const keyTerms = Array.isArray(raw.k)
     ? raw.k
         .map((kt) => ({
-          term: String(kt?.t || '').trim(),
-          definition: String(kt?.d || '').trim(),
+          term: norm(kt?.t),
+          definition: norm(kt?.d),
         }))
         .filter((kt) => kt.term && kt.definition)
     : [];
@@ -764,10 +1011,10 @@ function expandCompactPayload(
   const timelineEvents = Array.isArray(raw.e)
     ? raw.e
         .map((ev) => ({
-          date: String(ev?.d || '').trim() || 'Undated',
-          title: String(ev?.t || '').trim(),
-          detail: String(ev?.x || '').trim(),
-          significance: String(ev?.g || '').trim() || undefined,
+          date: norm(ev?.d) || 'Undated',
+          title: norm(ev?.t),
+          detail: norm(ev?.x),
+          significance: norm(ev?.g) || undefined,
           keyEvent: Boolean(ev?.k) || undefined,
         }))
         .filter((ev) => ev.title)
@@ -776,20 +1023,20 @@ function expandCompactPayload(
   const cards = Array.isArray(raw.c)
     ? raw.c
         .map((fc) => ({
-          q: String(fc?.q || '').trim(),
-          a: String(fc?.a || '').trim(),
-          sectionName: String(fc?.s || '').trim() || 'AI Key Cards',
+          q: norm(fc?.q),
+          a: norm(fc?.a),
+          sectionName: norm(fc?.s) || 'AI Key Cards',
         }))
         .filter((fc) => fc.q && fc.a)
     : [];
 
   return {
-    title: typeof raw.t === 'string' && raw.t.trim() ? raw.t.trim() : undefined,
-    summary: String(raw.u || '').trim(),
+    title: typeof raw.t === 'string' && norm(raw.t) ? norm(raw.t) : undefined,
+    summary: norm(raw.u),
     sections,
     keyTerms,
-    examTip: String(raw.x || '').trim(),
-    workedExample: String(raw.w || '').trim(),
+    examTip: norm(raw.x),
+    workedExample: norm(raw.w),
     timelineEvents,
     cards,
   };
@@ -798,34 +1045,25 @@ function expandCompactPayload(
 /**
  * Formats messy study notes using the USER's own API key (never the website key)
  * with invariant prefix + explicit Gemini context caching, model-specific parameter tuning,
- * smart webpage noise filtering, and balanced visual hierarchy rules.
+ * automatic chunking for long notes, MAX_TOKENS truncation recovery, and symbol normalization.
  */
-export async function runByokAutoformat(params: {
+async function runSingleChunkByokAutoformat(params: {
   config: UserAiConfig;
-  rawText: string;
+  chunkText: string;
   preset?: string;
   includeCards?: boolean;
   includeTimeline?: boolean;
   detectFlowDiagrams?: boolean;
   autoTables?: boolean;
   colorCodeParts?: boolean;
+  chunkLabel?: string;
+  depth?: number;
   onProgress?: (ev: { type: 'status' | 'progress'; message?: string; model?: string; chars?: number }) => void;
 }): Promise<{ formatted: CompactFormattedOutput; usage: AiUsageMeta }> {
-  const mismatch = detectKeyProviderMismatch(params.config);
-  if (mismatch) {
-    throw new Error(mismatch);
-  }
-
-  const compacted = compactInputForAi(params.rawText);
-  if (!compacted) {
-    throw new Error(
-      'No useful study content found after filtering webpage navigation/noise. Paste study notes directly.'
-    );
-  }
-
   const includeTimeline = params.includeTimeline !== false;
   const includeCards = Boolean(params.includeCards);
   const colorCodeParts = Boolean(params.colorCodeParts);
+  const depth = params.depth ?? 0;
   const optionsLine = buildCompactOptionsLine({
     preset: params.preset || 'balanced-visual',
     includeTimeline,
@@ -834,6 +1072,66 @@ export async function runByokAutoformat(params: {
     autoTables: params.autoTables !== false,
     colorCodeParts,
   });
+
+  const handleTruncatedRecovery = async (
+    rawOutputText: string,
+    wasTruncated: boolean
+  ): Promise<{ formatted: CompactFormattedOutput; usage: AiUsageMeta } | null> => {
+    if (depth < 2 && params.chunkText.length >= 1800) {
+      const halves = splitChunkInHalf(params.chunkText);
+      if (halves) {
+        params.onProgress?.({
+          type: 'status',
+          message: 'Output limit reached — splitting section for full coverage…',
+        });
+        const leftRes = await runSingleChunkByokAutoformat({
+          ...params,
+          chunkText: halves[0],
+          depth: depth + 1,
+          chunkLabel: params.chunkLabel ? `${params.chunkLabel} (a)` : 'part 1 of 2',
+        });
+        const rightRes = await runSingleChunkByokAutoformat({
+          ...params,
+          chunkText: halves[1],
+          depth: depth + 1,
+          chunkLabel: params.chunkLabel ? `${params.chunkLabel} (b)` : 'part 2 of 2',
+        });
+        return {
+          formatted: mergeCompactFormattedOutputs([leftRes.formatted, rightRes.formatted]),
+          usage: {
+            provider: rightRes.usage.provider,
+            model: rightRes.usage.model,
+            inputTokens: leftRes.usage.inputTokens + rightRes.usage.inputTokens,
+            outputTokens: leftRes.usage.outputTokens + rightRes.usage.outputTokens,
+            totalTokens: leftRes.usage.totalTokens + rightRes.usage.totalTokens,
+            cachedTokens: (leftRes.usage.cachedTokens || 0) + (rightRes.usage.cachedTokens || 0),
+          },
+        };
+      }
+    }
+    if (wasTruncated && rawOutputText.trim()) {
+      const repaired = tryRepairTruncatedJson(
+        rawOutputText
+          .trim()
+          .replace(/^```(?:json)?\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim()
+      );
+      if (repaired) {
+        return {
+          formatted: expandCompactPayload(repaired, colorCodeParts),
+          usage: {
+            provider: params.config.provider,
+            model: params.config.model || DEFAULT_GEMINI_FORMAT_MODEL,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+          },
+        };
+      }
+    }
+    return null;
+  };
 
   if (params.config.provider === 'gemini') {
     const ai = createGeminiClient(params.config.apiKey);
@@ -853,28 +1151,29 @@ export async function runByokAutoformat(params: {
           ai,
           params.config.apiKey.trim(),
           model,
-          compacted
+          params.chunkText
         );
         const userContents = cachedContent
           ? optionsLine
-          : `${optionsLine}\n\n[SOURCE]\n${compacted}`;
+          : `${optionsLine}\n\n[SOURCE]\n${params.chunkText}`;
         const genConfig = {
           ...(cachedContent
             ? { cachedContent }
             : { systemInstruction: STATIC_GEMINI_SYSTEM_INSTRUCTION }),
           ...tuning,
-          abortSignal: AbortSignal.timeout(18000),
+          abortSignal: AbortSignal.timeout(45000),
           responseMimeType: 'application/json',
           responseSchema,
         };
 
         if (params.onProgress) {
+          const partPrefix = params.chunkLabel ? ` (${params.chunkLabel})` : '';
           params.onProgress({
             type: 'status',
             model,
             message: cachedContent
-              ? `Formatting with ${model} (cached context)…`
-              : `Formatting with ${model}…`,
+              ? `Formatting with ${model}${partPrefix} (cached context)…`
+              : `Formatting with ${model}${partPrefix}…`,
           });
           const stream = await ai.models.generateContentStream({
             model,
@@ -888,6 +1187,7 @@ export async function runByokAutoformat(params: {
           let outputTokens = 0;
           let totalTokens = 0;
           let cachedTokens = 0;
+          let lastFinishReason = '';
 
           for await (const chunk of stream) {
             const delta = extractGeminiResponseText(chunk);
@@ -899,6 +1199,8 @@ export async function runByokAutoformat(params: {
                 params.onProgress({ type: 'progress', model, chars: fullText.length });
               }
             }
+            const fr = chunk.candidates?.[0]?.finishReason;
+            if (fr) lastFinishReason = String(fr);
             if (chunk.usageMetadata) {
               inputTokens = Number(chunk.usageMetadata.promptTokenCount || inputTokens);
               outputTokens = Number(chunk.usageMetadata.candidatesTokenCount || outputTokens);
@@ -907,7 +1209,33 @@ export async function runByokAutoformat(params: {
             }
           }
 
-          const parsed = extractJsonPayload(fullText);
+          const truncated = lastFinishReason === 'MAX_TOKENS';
+          if (truncated) {
+            const recovered = await handleTruncatedRecovery(fullText, true);
+            if (recovered) {
+              return {
+                formatted: recovered.formatted,
+                usage: {
+                  provider: 'gemini',
+                  model,
+                  inputTokens: recovered.usage.inputTokens || inputTokens,
+                  outputTokens: recovered.usage.outputTokens || outputTokens,
+                  totalTokens: recovered.usage.totalTokens || totalTokens,
+                  cachedTokens: recovered.usage.cachedTokens || cachedTokens,
+                },
+              };
+            }
+          }
+
+          let parsed: RawCompactSchemaPayload;
+          try {
+            parsed = extractJsonPayload(fullText);
+          } catch (parseErr) {
+            const recovered = await handleTruncatedRecovery(fullText, true);
+            if (recovered) return recovered;
+            throw parseErr;
+          }
+
           return {
             formatted: expandCompactPayload(parsed, colorCodeParts),
             usage: {
@@ -928,7 +1256,20 @@ export async function runByokAutoformat(params: {
         });
 
         const jsonStr = extractGeminiResponseText(response);
-        const parsed = extractJsonPayload(jsonStr);
+        const finishReason = String(response.candidates?.[0]?.finishReason || '');
+        if (finishReason === 'MAX_TOKENS') {
+          const recovered = await handleTruncatedRecovery(jsonStr, true);
+          if (recovered) return recovered;
+        }
+
+        let parsed: RawCompactSchemaPayload;
+        try {
+          parsed = extractJsonPayload(jsonStr);
+        } catch (parseErr) {
+          const recovered = await handleTruncatedRecovery(jsonStr, true);
+          if (recovered) return recovered;
+          throw parseErr;
+        }
         const usageMeta = response.usageMetadata;
 
         return {
@@ -962,18 +1303,19 @@ export async function runByokAutoformat(params: {
     (params.config.model || (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL)).trim() ||
     (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL);
   const tuning = getOpenAiModelTuning(params.config.provider, model);
-  const userMsg = `${optionsLine}\n\n[SOURCE]\n${compacted}`;
+  const userMsg = `${optionsLine}\n\n[SOURCE]\n${params.chunkText}`;
 
   const sendChatCompletion = async (opts: {
     stream: boolean;
     withJsonFormat: boolean;
     withReasoningEffort: boolean;
+    maxTokens: number;
   }) => {
     const bodyObj: Record<string, unknown> = {
       model,
       stream: opts.stream,
       temperature: tuning.temperature,
-      max_tokens: tuning.max_tokens,
+      max_tokens: opts.maxTokens,
       messages: [
         { role: 'system', content: STATIC_OPENAI_SYSTEM_INSTRUCTION },
         { role: 'user', content: userMsg },
@@ -990,7 +1332,7 @@ export async function runByokAutoformat(params: {
     }
     return fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
-      signal: AbortSignal.timeout(22000),
+      signal: AbortSignal.timeout(45000),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${params.config.apiKey}`,
@@ -1002,20 +1344,28 @@ export async function runByokAutoformat(params: {
   const callWithCompatFallback = async (stream: boolean) => {
     let useJson = true;
     let useReasoning = Boolean(tuning.reasoning_effort);
+    let maxTokens = tuning.max_tokens;
     let res = await sendChatCompletion({
       stream,
       withJsonFormat: useJson,
       withReasoningEffort: useReasoning,
+      maxTokens,
     });
     if (!res.ok && res.status === 400) {
       const errText = await res.text().catch(() => '');
-      if (/response_format|json_object|stream_options|reasoning_effort|unsupported|unknown/i.test(errText)) {
+      if (
+        /response_format|json_object|stream_options|reasoning_effort|max_tokens|unsupported|unknown/i.test(
+          errText
+        )
+      ) {
         if (/response_format|json_object/i.test(errText)) useJson = false;
         if (/reasoning_effort/i.test(errText)) useReasoning = false;
+        if (/max_tokens/i.test(errText)) maxTokens = 4096;
         res = await sendChatCompletion({
           stream,
           withJsonFormat: useJson,
           withReasoningEffort: useReasoning,
+          maxTokens,
         });
       } else {
         throw new Error(`HTTP ${res.status}: ${errText}`);
@@ -1026,7 +1376,8 @@ export async function runByokAutoformat(params: {
 
   try {
     if (params.onProgress) {
-      params.onProgress({ type: 'status', model, message: `Formatting with ${model}…` });
+      const partPrefix = params.chunkLabel ? ` (${params.chunkLabel})` : '';
+      params.onProgress({ type: 'status', model, message: `Formatting with ${model}${partPrefix}…` });
       const res = await callWithCompatFallback(true);
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => '');
@@ -1042,6 +1393,7 @@ export async function runByokAutoformat(params: {
       let outputTokens = 0;
       let totalTokens = 0;
       let cachedTokens = 0;
+      let lastFinishReason = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1056,7 +1408,7 @@ export async function runByokAutoformat(params: {
           if (!payload || payload === '[DONE]') continue;
           try {
             const parsedChunk = JSON.parse(payload) as {
-              choices?: Array<{ delta?: { content?: string } }>;
+              choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
               usage?: {
                 prompt_tokens?: number;
                 completion_tokens?: number;
@@ -1065,6 +1417,9 @@ export async function runByokAutoformat(params: {
               };
             };
             const piece = parsedChunk.choices?.[0]?.delta?.content || '';
+            if (parsedChunk.choices?.[0]?.finish_reason) {
+              lastFinishReason = String(parsedChunk.choices[0].finish_reason);
+            }
             if (piece) {
               fullContent += piece;
               const now = Date.now();
@@ -1087,7 +1442,32 @@ export async function runByokAutoformat(params: {
         }
       }
 
-      const parsed = extractJsonPayload(fullContent);
+      if (lastFinishReason === 'length') {
+        const recovered = await handleTruncatedRecovery(fullContent, true);
+        if (recovered) {
+          return {
+            formatted: recovered.formatted,
+            usage: {
+              provider: params.config.provider,
+              model,
+              inputTokens: recovered.usage.inputTokens || inputTokens,
+              outputTokens: recovered.usage.outputTokens || outputTokens,
+              totalTokens: recovered.usage.totalTokens || totalTokens,
+              cachedTokens: recovered.usage.cachedTokens || cachedTokens,
+            },
+          };
+        }
+      }
+
+      let parsed: RawCompactSchemaPayload;
+      try {
+        parsed = extractJsonPayload(fullContent);
+      } catch (parseErr) {
+        const recovered = await handleTruncatedRecovery(fullContent, true);
+        if (recovered) return recovered;
+        throw parseErr;
+      }
+
       return {
         formatted: expandCompactPayload(parsed, colorCodeParts),
         usage: {
@@ -1108,7 +1488,7 @@ export async function runByokAutoformat(params: {
     }
 
     const data = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
       usage?: {
         prompt_tokens?: number;
         completion_tokens?: number;
@@ -1117,7 +1497,19 @@ export async function runByokAutoformat(params: {
       };
     };
     const content = (data.choices?.[0]?.message?.content || '').trim();
-    const parsed = extractJsonPayload(content);
+    if (data.choices?.[0]?.finish_reason === 'length') {
+      const recovered = await handleTruncatedRecovery(content, true);
+      if (recovered) return recovered;
+    }
+
+    let parsed: RawCompactSchemaPayload;
+    try {
+      parsed = extractJsonPayload(content);
+    } catch (parseErr) {
+      const recovered = await handleTruncatedRecovery(content, true);
+      if (recovered) return recovered;
+      throw parseErr;
+    }
 
     return {
       formatted: expandCompactPayload(parsed, colorCodeParts),
@@ -1133,6 +1525,90 @@ export async function runByokAutoformat(params: {
   } catch (err) {
     throw new Error(extractReadableErrorMessage(err, params.config));
   }
+}
+
+export async function runByokAutoformat(params: {
+  config: UserAiConfig;
+  rawText: string;
+  preset?: string;
+  includeCards?: boolean;
+  includeTimeline?: boolean;
+  detectFlowDiagrams?: boolean;
+  autoTables?: boolean;
+  colorCodeParts?: boolean;
+  onProgress?: (ev: { type: 'status' | 'progress'; message?: string; model?: string; chars?: number }) => void;
+}): Promise<{ formatted: CompactFormattedOutput; usage: AiUsageMeta }> {
+  const mismatch = detectKeyProviderMismatch(params.config);
+  if (mismatch) {
+    throw new Error(mismatch);
+  }
+
+  const compacted = compactInputForAi(params.rawText);
+  if (!compacted) {
+    throw new Error(
+      'No useful study content found after filtering webpage navigation/noise. Paste study notes directly.'
+    );
+  }
+
+  const chunks =
+    compacted.length <= SINGLE_PASS_CHUNK_LIMIT
+      ? [compacted]
+      : splitTextIntoBalancedChunks(compacted, CHUNK_TARGET_CHARS);
+
+  if (chunks.length === 1) {
+    return runSingleChunkByokAutoformat({
+      config: params.config,
+      chunkText: chunks[0],
+      preset: params.preset,
+      includeCards: params.includeCards,
+      includeTimeline: params.includeTimeline,
+      detectFlowDiagrams: params.detectFlowDiagrams,
+      autoTables: params.autoTables,
+      colorCodeParts: params.colorCodeParts,
+      onProgress: params.onProgress,
+    });
+  }
+
+  const formattedParts: CompactFormattedOutput[] = [];
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalTokens = 0;
+  let totalCached = 0;
+  let lastModel = params.config.model || DEFAULT_GEMINI_FORMAT_MODEL;
+
+  for (let idx = 0; idx < chunks.length; idx++) {
+    const label = `part ${idx + 1} of ${chunks.length}`;
+    const res = await runSingleChunkByokAutoformat({
+      config: params.config,
+      chunkText: chunks[idx],
+      preset: params.preset,
+      includeCards: Boolean(params.includeCards),
+      includeTimeline: params.includeTimeline,
+      detectFlowDiagrams: params.detectFlowDiagrams,
+      autoTables: params.autoTables,
+      colorCodeParts: params.colorCodeParts,
+      chunkLabel: label,
+      onProgress: params.onProgress,
+    });
+    formattedParts.push(res.formatted);
+    totalInput += res.usage.inputTokens;
+    totalOutput += res.usage.outputTokens;
+    totalTokens += res.usage.totalTokens;
+    totalCached += res.usage.cachedTokens || 0;
+    lastModel = res.usage.model;
+  }
+
+  return {
+    formatted: mergeCompactFormattedOutputs(formattedParts),
+    usage: {
+      provider: params.config.provider,
+      model: lastModel,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      totalTokens,
+      cachedTokens: totalCached,
+    },
+  };
 }
 
 export async function testUserApiKey(config: UserAiConfig): Promise<{ model: string }> {

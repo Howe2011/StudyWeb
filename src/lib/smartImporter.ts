@@ -5,6 +5,7 @@ import {
   isNoteEmpty,
   parseTextIntoStructuredNote,
 } from './noteFormat';
+import { normalizeStudySymbols } from './noteSymbols';
 import { convertLegacyEntriesToWorkspace, normalizeWorkspace } from './workspaceStore';
 import { StructuredNoteData, TimelineEventItem, WorkspaceData } from '../types';
 
@@ -712,15 +713,24 @@ export function parseQuizletOrGizmoCards(
   mode: QuizletDelimiterMode = 'auto',
   defaultSection = 'Imported Deck'
 ): Array<{ q: string; a: string; sectionName: string }> {
-  const clean = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
+  const clean = normalizeStudySymbols(String(rawText || ''), {
+    preserveLeadingFlowMarker: false,
+  })
+    .replace(/^\uFEFF/, '')
+    .replace(/\r/g, '')
+    .trim();
   if (!clean) return [];
 
   const cards: Array<{ q: string; a: string; sectionName: string }> = [];
   const seen = new Set<string>();
 
   const pushCard = (q: string, a: string, sec = defaultSection) => {
-    const cq = q.replace(/\*\*/g, '').trim();
-    const ca = a.replace(/\*\*/g, '').trim();
+    const cq = normalizeStudySymbols(q, { preserveLeadingFlowMarker: false })
+      .replace(/\*\*/g, '')
+      .trim();
+    const ca = normalizeStudySymbols(a, { preserveLeadingFlowMarker: false })
+      .replace(/\*\*/g, '')
+      .trim();
     if (!cq || !ca) return;
     const key = `${cq.toLowerCase()}::${ca.toLowerCase()}`;
     if (seen.has(key)) return;
@@ -827,7 +837,7 @@ export function parseQuizletOrGizmoCards(
       continue;
     }
 
-    const qaInline = t.match(/^Q:\s*(.+?)\s*(?:\||::|->)\s*A:\s*(.+)$/i);
+    const qaInline = t.match(/^Q:\s*(.+?)\s*(?:\||::|->|-->|=>|==>|[→⟶⟹➜➔➤➡↦])\s*A:\s*(.+)$/i);
     if (qaInline) {
       pushCard(qaInline[1], qaInline[2]);
       pendingQ = '';
@@ -853,8 +863,8 @@ export function parseQuizletOrGizmoCards(
       }
     }
 
-    if (t.includes('::') || t.includes('->') || t.includes('|')) {
-      const sep = t.includes('::') ? '::' : t.includes('->') ? '->' : '|';
+    if (t.includes('::') || t.includes('→') || t.includes('|')) {
+      const sep = t.includes('::') ? '::' : t.includes('→') ? '→' : '|';
       const parts = t.split(sep).map((x) => x.trim());
       if (parts.length >= 2 && parts[0] && parts[1]) {
         pushCard(parts[0], parts[1], parts[2] || defaultSection);
@@ -887,7 +897,12 @@ export function parseUniversalStudyImport(
     preExtractedCards?: Array<{ q: string; a: string; sectionName: string }>;
   }
 ): SmartImportPreview {
-  const cleanText = String(rawText || '').replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
+  const cleanText = normalizeStudySymbols(String(rawText || ''), {
+    preserveLeadingFlowMarker: true,
+  })
+    .replace(/^\uFEFF/, '')
+    .replace(/\r/g, '')
+    .trim();
   const lines = cleanText.split('\n');
   const cards: Array<{ q: string; a: string; sectionName: string }> = [];
   let detectedPureFlashcards = 0;
@@ -927,7 +942,7 @@ export function parseUniversalStudyImport(
         continue;
       }
 
-      const qaInline = t.match(/^Q:\s*(.+?)\s*(?:\||::|->)\s*A:\s*(.+)$/i);
+      const qaInline = t.match(/^Q:\s*(.+?)\s*(?:\||::|->|-->|=>|==>|[→⟶⟹➜➔➤➡↦])\s*A:\s*(.+)$/i);
       if (qaInline) {
         cards.push({ q: qaInline[1].trim(), a: qaInline[2].trim(), sectionName: 'Imported Deck' });
         detectedPureFlashcards++;
@@ -1270,9 +1285,10 @@ export function parseBulkTimelineNodes(rawText: string): ParsedBulkTimelineNode[
       }
     }
 
+    const normalizedLine = normalizeStudySymbols(line, { preserveLeadingFlowMarker: false });
     // "1923 — Hyperinflation: Value dropped" or "3 Oct 1929 - Stresemann Dies — Lost key statesman"
-    const dashMatch = line.match(
-      /^([A-Za-z0-9 ,./'-]{2,28}?)\s*(?:—|–|->|::|\s-\s|:\s+)\s*(.+)$/
+    const dashMatch = normalizedLine.match(
+      /^([A-Za-z0-9 ,./'-]{2,28}?)\s*(?:—|–|->|→|::|\s-\s|:\s+)\s*(.+)$/
     );
     if (dashMatch) {
       const date = dashMatch[1].trim();

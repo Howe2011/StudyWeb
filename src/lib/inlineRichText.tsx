@@ -1,4 +1,5 @@
 import { CSSProperties, Fragment, ReactNode } from 'react';
+import { normalizeStudySymbols } from './noteSymbols';
 
 export interface ColorSwatchOption {
   id: string;
@@ -223,7 +224,7 @@ function parseInlineNodes(input: string, keyPrefix: string, depth = 0): ReactNod
  * <span style="color:...">, <mark style="background-color:...">) without dangerouslySetInnerHTML.
  */
 export function renderRichInline(text: string): ReactNode {
-  const src = String(text || '');
+  const src = normalizeStudySymbols(String(text || ''), { preserveLeadingFlowMarker: true });
   if (!src) return null;
   return parseInlineNodes(src, 'rich');
 }
@@ -250,7 +251,7 @@ function escapeHtmlText(str: string): string {
  * Converts our compact inline markup into HTML suitable for contentEditable initialization.
  */
 export function inlineMarkupToHtml(markup: string): string {
-  const src = String(markup || '');
+  const src = normalizeStudySymbols(String(markup || ''), { preserveLeadingFlowMarker: true });
   if (!src) return '';
 
   let out = '';

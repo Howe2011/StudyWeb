@@ -50,6 +50,7 @@ import {
 } from '../lib/inlineRichText';
 import { NOTE_COLOR_OPTIONS, NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints, makeNoteId } from '../lib/noteFormat';
+import { countRightArrows, normalizeStudySymbols, splitRightArrowSteps } from '../lib/noteSymbols';
 import { NoteAccentColor, NotePartRole, NoteSectionBlock, StructuredNoteData } from '../types';
 
 export type NotionBlockType =
@@ -328,24 +329,26 @@ export function blocksToStructuredNote(
       }
     } else if (b.type === 'paragraph') {
       if (b.text.trim()) {
-        ensureSection().points.push(`¶ ${b.text}`);
+        ensureSection().points.push(`¶ ${normalizeStudySymbols(b.text, { preserveLeadingFlowMarker: true })}`);
       }
     } else if (b.type === 'bullet') {
       if (b.text.trim()) {
         const prefix = (b.indent || 0) > 0 ? '↳ ' : '';
-        ensureSection().points.push(`${prefix}${b.text}`);
+        ensureSection().points.push(`${prefix}${normalizeStudySymbols(b.text, { preserveLeadingFlowMarker: false })}`);
       }
     } else if (b.type === 'factbox') {
-      const body = b.text.trim();
-      const title = (b.extra || '').trim();
+      const body = normalizeStudySymbols(b.text.trim(), { preserveLeadingFlowMarker: false });
+      const title = normalizeStudySymbols((b.extra || '').trim(), { preserveLeadingFlowMarker: false });
       if (body || title) {
         const colorTag = b.tableColor && b.tableColor !== 'default' ? `[color:${b.tableColor}] ` : '';
         ensureSection().points.push(`📌 ${colorTag}${title || 'Key Point'} | ${body || title}`);
       }
     } else if (b.type === 'flow') {
-      const cleanSteps = (b.steps || []).map((s) => s.trim()).filter(Boolean);
+      const cleanSteps = (b.steps || [])
+        .map((s) => normalizeStudySymbols(s.trim(), { preserveLeadingFlowMarker: false }))
+        .filter(Boolean);
       if (cleanSteps.length >= 2) {
-        const label = (b.extra || '').trim();
+        const label = normalizeStudySymbols((b.extra || '').trim(), { preserveLeadingFlowMarker: false });
         ensureSection().points.push(
           `${label ? `${label}: ` : ''}⇒ ${cleanSteps.join(' → ')}`
         );
@@ -989,7 +992,7 @@ export function NotionTopicEditor({
         focusBlock(block.id);
         return;
       }
-      if (rawVal === '=> ' || rawVal === '-> ') {
+      if (rawVal === '=> ' || rawVal === '-> ' || rawVal === '==> ' || rawVal === '--> ') {
         const next = blocks.map((b) =>
           b.id === block.id ? { ...makeDefaultBlock('flow', ''), id: b.id } : b
         );
@@ -1009,12 +1012,26 @@ export function NotionTopicEditor({
     block: NotionBlock,
     idx: number
   ) => {
-    const pasted = e.clipboardData?.getData('text/plain') || '';
+    const rawPasted = e.clipboardData?.getData('text/plain') || '';
+    const pasted = normalizeStudySymbols(rawPasted, { preserveLeadingFlowMarker: true });
     const lines = pasted.replace(/\r/g, '').split('\n');
-    if (lines.length <= 1) return;
+    if (lines.length <= 1) {
+      if (rawPasted && rawPasted !== pasted) {
+        e.preventDefault();
+        try {
+          document.execCommand('insertText', false, pasted);
+        } catch {
+          // ignore
+        }
+        activeEditableCommitRef.current?.(el);
+      }
+      return;
+    }
     if (block.type !== 'paragraph' && block.type !== 'bullet' && block.type !== 'heading') return;
 
     e.preventDefault();
+    const bulletGlyphRe =
+      /^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣]|\d+[.)])\s+/;
     const newBlocks: NotionBlock[] = [];
     for (const rawLine of lines) {
       const trimmed = rawLine.trim();
@@ -1023,12 +1040,35 @@ export function NotionTopicEditor({
         newBlocks.push(makeDefaultBlock('heading', trimmed.replace(/^#{1,2}\s+/, '')));
       } else if (/^###\s+/.test(trimmed)) {
         newBlocks.push(makeDefaultBlock('subheading', trimmed.replace(/^###\s+/, '')));
-      } else if (/^(?:↳\s*|  [-*•]\s+)/.test(rawLine)) {
-        const nb = makeDefaultBlock('bullet', trimmed.replace(/^(?:↳|[-*•])\s*/, ''));
+      } else if (/^⇒\s+/.test(trimmed) || countRightArrows(trimmed) >= 2) {
+        const body = trimmed.replace(/^⇒\s+/, '').trim();
+        const steps = splitRightArrowSteps(body);
+        if (steps.length >= 2) {
+          newBlocks.push({ ...makeDefaultBlock('flow', ''), steps });
+        } else {
+          newBlocks.push(makeDefaultBlock('paragraph', trimmed));
+        }
+      } else if (trimmed.startsWith('📌 ')) {
+        const rest = trimmed.slice(2).trim();
+        const pipeIdx = rest.indexOf('|');
+        if (pipeIdx > 0 && pipeIdx < 42) {
+          newBlocks.push({
+            ...makeDefaultBlock('factbox', rest.slice(pipeIdx + 1).trim()),
+            extra: rest.slice(0, pipeIdx).trim(),
+          });
+        } else {
+          newBlocks.push(makeDefaultBlock('factbox', rest));
+        }
+      } else if (
+        trimmed.startsWith('↳ ') ||
+        /^(?:\s{2,}|\t+)(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣]|\d+[.)])\s+/.test(rawLine)
+      ) {
+        const cleanedSub = trimmed.replace(/^↳\s*/, '').replace(bulletGlyphRe, '');
+        const nb = makeDefaultBlock('bullet', cleanedSub);
         nb.indent = 1;
         newBlocks.push(nb);
-      } else if (/^[-*•]\s+/.test(trimmed)) {
-        newBlocks.push(makeDefaultBlock('bullet', trimmed.replace(/^[-*•]\s+/, '')));
+      } else if (bulletGlyphRe.test(trimmed)) {
+        newBlocks.push(makeDefaultBlock('bullet', trimmed.replace(bulletGlyphRe, '')));
       } else {
         newBlocks.push(makeDefaultBlock('paragraph', trimmed.replace(/^¶\s*/, '')));
       }
@@ -1086,6 +1126,50 @@ export function NotionTopicEditor({
       e.preventDefault();
       execInlineCommand('underline');
       return;
+    }
+
+    // Auto-convert inline arrow / operator shorthand on Spacebar (e.g. `A -> ` -> `A → `)
+    if (e.key === ' ' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const sel = window.getSelection();
+      if (sel && sel.isCollapsed && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const anchorNode = range.startContainer;
+        const inCode =
+          anchorNode.parentElement?.closest('code') ||
+          (anchorNode.nodeType === 1 && (anchorNode as Element).tagName.toLowerCase() === 'code');
+        if (!inCode && anchorNode.nodeType === 3) {
+          const txtBefore = (anchorNode.textContent || '').slice(0, range.startOffset);
+          const arrowMatch = txtBefore.match(/(<===>|<==>|<=+>|<--->|<-->|<->|<=>|--->|-->|->|===>|==>|=>|<---|<--|<-|!=)$/);
+          const fullBefore = el.textContent?.slice(0, range.startOffset) || txtBefore;
+          const isEmptyFlowTrigger =
+            (block.type === 'paragraph' || block.type === 'bullet') &&
+            (fullBefore === '=>' || fullBefore === '->' || fullBefore === '==>' || fullBefore === '-->');
+          if (arrowMatch && !isEmptyFlowTrigger) {
+            const token = arrowMatch[1];
+            const replacement =
+              token === '<->' || token === '<=>' || token === '<-->' || token === '<==>' || token === '<===>' || token === '<--->'
+                ? '↔ '
+                : token === '<-' || token === '<--' || token === '<---'
+                ? '← '
+                : token === '!='
+                ? '≠ '
+                : '→ ';
+            const replaceRange = document.createRange();
+            replaceRange.setStart(anchorNode, range.startOffset - token.length);
+            replaceRange.setEnd(anchorNode, range.startOffset);
+            sel.removeAllRanges();
+            sel.addRange(replaceRange);
+            e.preventDefault();
+            try {
+              document.execCommand('insertText', false, replacement);
+            } catch {
+              // ignore
+            }
+            activeEditableCommitRef.current?.(el);
+            return;
+          }
+        }
+      }
     }
 
     const slashVisible = slashBlockId === block.id && block.text.startsWith('/');
