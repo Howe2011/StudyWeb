@@ -337,10 +337,23 @@ export interface WorkspaceData {
 export type SharedItemType = 'notes' | 'flashcards' | 'subject';
 export type SharedItemVisibility = 'public' | 'unlisted';
 
-export interface SharedNotesPayload {
+export interface SharedNotesSubTopic {
+  oldId: string;
+  parentOldId?: string;
   topicName: string;
+  specCode?: string;
+  tags?: string[];
   notes: StructuredNoteData;
   timelineEvents?: TimelineEventItem[];
+}
+
+export interface SharedNotesPayload {
+  topicName: string;
+  topicOldId?: string;
+  specCode?: string;
+  notes: StructuredNoteData;
+  timelineEvents?: TimelineEventItem[];
+  subTopics?: SharedNotesSubTopic[];
 }
 
 export interface SharedFlashcardsPayload {

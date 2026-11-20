@@ -61,27 +61,24 @@ const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 
 /**
- * 100% invariant static system prompt prefix — never changes across presets or toggles,
- * maximizing implicit prefix prompt caching (and shared across explicit context caches).
+ * 100% invariant ultra-lean system prompt prefix — maximizes Gemini/OpenAI prefix cache hits
+ * while enforcing real synthesis, minimal output tokens, and balanced visual structure.
  */
 const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
-  'You are StudyDeck AI, an elite academic note synthesizer. Convert raw study material or scraped webpage text into concise, visually balanced revision JSON.',
-  'SELECTIVE EXTRACTION: Source text often comes from webpages. IGNORE navigation bars, author bios, filler intros ("In this guide..."), repetition, anecdotes, off-topic tangents, and redundant examples. Extract ONLY core examinable concepts, mechanisms, definitions, data/dates, comparisons, and formulas.',
-  'BLOCK GRAMMAR inside section points p[]:',
-  '- "### Subheading" to break long sections with clean visual hierarchy & breathing room.',
-  '- "¶ Short 1-2 sentence explanatory paragraph." (never long walls of prose).',
-  '- "**Term**: concise point (<=18 words)." and "↳ sub-point" for nested details (avoid monotonous bullet walls).',
-  '- "📌 Title | Key stat, formula, or standout fact" for inline Fact Boxes.',
-  '- "| Col 1 | Col 2 |" Markdown table rows for contrasts, pros/cons, or comparisons.',
-  '- "⇒ Step 1 → Step 2 → Step 3" for sequential processes or cause-effect chains.',
-  'Never invent facts not grounded in the source.',
+  'StudyDeck AI: distill raw notes/webpages into high-yield revision JSON.',
+  'PROCESS, DO NOT DUMP: Strip site nav, intros, author bios, ads & fluff. Condense wordy prose into sharp exam concepts, mechanisms, data & causes.',
+  'BALANCE & RHYTHM (never bullet-only walls or long paragraphs):',
+  '- Vary formats naturally per section p[]: mix 1 short framing "¶ " sentence (<=22w), grouped "**Term**: fact (<=15w)" bullets + "↳ sub-detail", and "### Subhead" dividers.',
+  '- Use "| A | B |" tables whenever comparing >=2 items, factors, pros/cons or stages.',
+  '- Add "📌 Label | Key stat/formula/fact" and "⇒ Step 1 → Step 2" where high-yield.',
+  'Use source facts only.',
 ].join('\n');
 
 const STATIC_OPENAI_SYSTEM_INSTRUCTION =
   `${STATIC_GEMINI_SYSTEM_INSTRUCTION}\n` +
-  'Return ONLY strict JSON with compact keys: ' +
-  '{"t":"title","u":"1-sentence summary","s":[{"h":"Section Heading","p":["¶ Short framing overview.","### Subheading","**Term**: crisp fact","↳ nested detail","📌 Key Fact | High-yield takeaway","| A | B |","⇒ Step 1 → Step 2"]}],"k":[{"t":"term","d":"def"}],"x":"examiner tip or empty","w":"worked example or empty","e":[{"d":"date","t":"event","x":"detail","g":"significance","k":false}],"c":[{"q":"question","a":"answer","s":"section"}]}. ' +
-  'Omit e[] or c[] if disabled in [OPT].';
+  'Strict JSON only: ' +
+  '{"t":"title","u":"1-sentence summary","s":[{"h":"Section","p":["¶ Short intro.","### Subhead","**Term**: fact","↳ detail","📌 Fact | High-yield stat","| A | B |","⇒ Step 1 → Step 2"]}],"k":[{"t":"term","d":"def"}],"x":"examiner tip","w":"worked example","e":[{"d":"date","t":"event","x":"detail","g":"impact","k":false}],"c":[{"q":"q","a":"a","s":"sec"}]}. ' +
+  'Omit e[] or c[] if OFF.';
 
 function readHeader(
   headers: VercelRequest['headers'],
@@ -152,28 +149,29 @@ function normalizeOpenAiBaseUrl(baseUrl?: string): string {
   return clean;
 }
 
-/**
- * Model-specific parameter tuning: minimizes latency & output token waste per model family
- * while honoring SDK constraints (e.g., no temperature/topP/thinkingBudget on Gemini 4).
- */
-function getGeminiModelTuning(model: string): {
+function computeAdaptiveMaxTokens(inputChars: number): number {
+  return Math.min(2048, Math.max(650, Math.ceil(inputChars * 0.42)));
+}
+
+function getGeminiModelTuning(model: string, inputChars = 4000): {
   thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
   maxOutputTokens: number;
   temperature?: number;
   topP?: number;
   seed?: number;
 } {
+  const maxOutputTokens = computeAdaptiveMaxTokens(inputChars);
   if (/^gemini-3\./i.test(model)) {
     return {
       thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-      maxOutputTokens: 2048,
+      maxOutputTokens,
       seed: 42,
     };
   }
   if (/^gemini-2\.5-flash-lite/i.test(model)) {
     return {
       thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: 2048,
+      maxOutputTokens,
       temperature: 0.15,
       topP: 0.85,
     };
@@ -181,7 +179,7 @@ function getGeminiModelTuning(model: string): {
   if (/^gemini-2\.5-/i.test(model)) {
     return {
       thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: 2048,
+      maxOutputTokens,
       temperature: 0.2,
       topP: 0.9,
     };
@@ -189,21 +187,23 @@ function getGeminiModelTuning(model: string): {
   if (/^gemini-4-/i.test(model)) {
     return {
       thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      maxOutputTokens: 2560,
+      maxOutputTokens: Math.min(2400, maxOutputTokens + 256),
       seed: 42,
     };
   }
-  return { maxOutputTokens: 2048, temperature: 0.2 };
+  return { maxOutputTokens, temperature: 0.2 };
 }
 
 function getOpenAiModelTuning(
   provider: UserAiProvider,
-  model: string
+  model: string,
+  inputChars = 4000
 ): { temperature: number; max_tokens: number; reasoning_effort?: 'low' } {
+  const max_tokens = computeAdaptiveMaxTokens(inputChars);
   if (provider === 'grok' && /grok-3-mini/i.test(model)) {
-    return { temperature: 0.2, max_tokens: 2048, reasoning_effort: 'low' };
+    return { temperature: 0.2, max_tokens, reasoning_effort: 'low' };
   }
-  return { temperature: 0.2, max_tokens: 2048 };
+  return { temperature: 0.2, max_tokens };
 }
 
 async function resolveExplicitGeminiCache(
@@ -390,7 +390,7 @@ function extractJsonPayload(rawText: string): RawCompactSchemaPayload {
  * Wikipedia footnotes, media captions, conversational filler, URLs, and duplicate lines
  * BEFORE sending tokens to the AI.
  */
-function compactInputForAi(rawText: string, maxChars = 11000): string {
+function compactInputForAi(rawText: string, maxChars = 9500): string {
   const noiseLine =
     /^(?:skip to (?:main )?content|cookie (?:policy|preferences|settings)|accept all cookies|sign in|log in|subscribe|advertisement|sponsored|menu|breadcrumbs?|back to top|all rights reserved|©\s*\d{4}|table of contents|edit section|\[edit\]|jump to navigation|share this page|print page|related topics?|did this page help you\??|yes\s*no|test yourself|join now|sign up|download pdf|view all topics)$/i;
   const webFluffPrefix =
@@ -416,7 +416,6 @@ function compactInputForAi(rawText: string, maxChars = 11000): string {
       continue;
     }
 
-    // Stop ingesting trailing website reference/link appendices
     if (kept.length >= 6 && trailingJunkHeading.test(t.replace(/[:*]/g, '').trim())) {
       break;
     }
@@ -439,26 +438,149 @@ function compactInputForAi(rawText: string, maxChars = 11000): string {
   return `${collapsed.slice(0, maxChars)}\n...[truncated]`;
 }
 
+/**
+ * Checks if compacted text ALREADY has clean headings + bullets/tables/visuals and no prose walls.
+ * If already good, keeps the formatting intact with 0 AI tokens used!
+ */
+function detectAlreadyGoodFormatting(text: string): boolean {
+  const lines = text.split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length < 4) return false;
+
+  let headings = 0;
+  let structured = 0;
+  let denseBlobs = 0;
+  let totalChars = 0;
+
+  for (const raw of lines) {
+    const t = raw.trim();
+    totalChars += t.length;
+    if (/^#{1,3}\s+\S/.test(t)) headings++;
+    else if (/^\|.+\|$/.test(t) || /^⇒\s+/.test(t) || /^📌\s+/.test(t) || /^(?:[-*•↳]|\d+[.)])\s+\S/.test(t)) {
+      structured++;
+    } else if (t.length > 360) {
+      denseBlobs++;
+    }
+  }
+
+  const avgLen = totalChars / Math.max(1, lines.length);
+  if (denseBlobs > 0 || avgLen > 165) return false;
+  if (text.length < 900) return headings >= 1 && structured >= 3;
+  return headings >= 2 && structured >= 4;
+}
+
+function preserveWellFormattedText(text: string, includeCards: boolean) {
+  const sections: Array<{ heading: string; points: string[] }> = [];
+  const keyTerms: Array<{ term: string; definition: string }> = [];
+  const cards: Array<{ q: string; a: string; sectionName: string }> = [];
+  const seenTerms = new Set<string>();
+  let title: string | undefined;
+  let summary = '';
+  let examTip = '';
+  let workedExample = '';
+  let current = { heading: 'Study Notes', points: [] as string[] };
+
+  const pushCurrent = () => {
+    if (current.points.length > 0 || (current.heading !== 'Study Notes' && sections.length > 0)) {
+      sections.push(current);
+    }
+  };
+
+  for (const raw of text.split('\n')) {
+    const isSub = /^\s{2,}(?:[-*•▪◦‣↳]|\d+[.)])\s+/.test(raw) || raw.trim().startsWith('↳ ');
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^\|\s*[-:]+(?:\s*\|\s*[-:]+)+\s*\|$/.test(line)) continue;
+
+    const h1Match = line.match(/^#\s+(.+)$/);
+    if (h1Match && !title && sections.length === 0 && current.points.length === 0) {
+      title = h1Match[1].replace(/\*\*/g, '').trim();
+      continue;
+    }
+
+    const hMatch = line.match(/^(#{1,2})\s+(.+)$/);
+    if (hMatch) {
+      pushCurrent();
+      current = { heading: hMatch[2].replace(/\*\*/g, '').trim(), points: [] };
+      continue;
+    }
+
+    if (line.startsWith('### ')) {
+      current.points.push(`### ${line.slice(4).replace(/\*\*/g, '').trim()}`);
+      continue;
+    }
+
+    const sumMatch = line.match(/^(?:\*\*)?(?:summary|overview)(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    if (sumMatch && !summary) {
+      summary = sumMatch[1].trim();
+      continue;
+    }
+
+    const tipMatch = line.match(/^(?:\*\*)?exam(?:iner)?\s*tip(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    if (tipMatch) {
+      examTip = examTip ? `${examTip}\n${tipMatch[1].trim()}` : tipMatch[1].trim();
+      continue;
+    }
+
+    const exMatch = line.match(/^(?:\*\*)?worked\s*example(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    if (exMatch) {
+      workedExample = workedExample ? `${workedExample}\n${exMatch[1].trim()}` : exMatch[1].trim();
+      continue;
+    }
+
+    if (/^\|.+\|$/.test(line) || line.startsWith('📌 ') || line.startsWith('⇒ ')) {
+      current.points.push(line);
+      continue;
+    }
+
+    const cleanedBullet = line.replace(/^(?:[-*•▪◦‣↳]|\d+[.)])\s+/, '').trim();
+    const isBullet = /^(?:[-*•▪◦‣↳]|\d+[.)])\s+/.test(line);
+
+    const kv = cleanedBullet.match(/^\*\*(.+?)\*\*\s*[:–—-]\s*(.+)$/);
+    if (kv && kv[1].length <= 65 && !seenTerms.has(kv[1].toLowerCase())) {
+      const term = kv[1].trim();
+      const def = kv[2].trim();
+      seenTerms.add(term.toLowerCase());
+      keyTerms.push({ term, definition: def });
+      if (includeCards) {
+        cards.push({ q: term, a: def, sectionName: current.heading });
+      }
+    }
+
+    if (isSub) {
+      current.points.push(`↳ ${cleanedBullet}`);
+    } else if (isBullet) {
+      current.points.push(cleanedBullet);
+    } else {
+      current.points.push(cleanedBullet.startsWith('¶ ') ? cleanedBullet : `¶ ${cleanedBullet}`);
+    }
+  }
+  pushCurrent();
+
+  return {
+    title,
+    summary,
+    sections: sections.length ? sections : [{ heading: 'Study Notes', points: [] }],
+    keyTerms,
+    examTip,
+    workedExample,
+    timelineEvents: [],
+    cards: includeCards ? cards.slice(0, 8) : [],
+  };
+}
+
 function getPresetDirective(preset?: string): string {
   switch (preset) {
     case 'save-my-exams':
-      return 'Style=ExamRevision(clear syllabus headings h,concise **Term** bullets,nested "↳ " points,"| A | B |" comparison tables,x=Examiner Tip,w=Worked Example).';
+      return 'Style=ExamRevision(syllabus headings h,<=15w **Term** bullets,"↳ " sub-points,"| A | B |" tables,x=ExaminerTip,w=WorkedExample).';
     case 'cornell':
-      return 'Style=SummaryCues(u=strong big-picture summary;s=cue subheadings ### + indented "↳ " details;k=essential glossary).';
+      return 'Style=SummaryCues(u=strong overview;cue ### subheads + "↳ " indented proof;k=glossary).';
     case 'timeline-causal':
-      return 'Style=TimelineCauseEffect(chronological s,"⇒ Cause → Effect" flow chains,populate dated events e[]).';
+      return 'Style=TimelineCauseEffect(chronological s,"⇒ Cause → Effect",dated events e[]).';
     case 'compact':
-      return 'Style=QuickCheatSheet(minimum words,high-yield cram bullets,essential terms only).';
+      return 'Style=QuickCheatSheet(minimal words,high-yield bullets & key terms only).';
     case 'balanced-visual':
     default:
-      return (
-        'Style=PrettyBalanced(' +
-        'Airy clear hierarchy—NEVER walls of prose and NEVER walls of only bullets! ' +
-        'For each major section h: start with a short 1-2 sentence "¶ " overview paragraph when helpful, ' +
-        'group ideas under "### Subheading" labels, mix concise **Term** bullets + "↳ " sub-points (2-4 per group), ' +
-        'add at least 1-2 "📌 Label | Key stat/formula/fact" Fact Boxes, ' +
-        '"| Col1 | Col2 |" tables for comparisons, and "⇒ A → B → C" arrow diagrams for processes).'
-      );
+      return 'Style=PrettyBalanced(synthesize cleanly: 1 short "¶ " overview + "### " groups + <=15w **Term**/"↳ " bullets + "| A | B |" table + "📌 Fact | Value" + "⇒ Step 1 → Step 2").';
   }
 }
 
@@ -471,11 +593,11 @@ function buildCompactOptionsLine(params: {
 }): string {
   return [
     `[OPT] ${getPresetDirective(params.preset)}`,
-    params.detectFlowDiagrams ? 'Flows=ON("⇒ A → B → C").' : 'Flows=OFF.',
-    params.autoTables ? 'Tables=ON("| H1 | H2 |").' : 'Tables=OFF.',
-    params.includeTimeline ? 'Dates=ON(extract dated events into e[]).' : 'Dates=OFF.',
-    params.includeCards ? 'Cards=ON(add 4-6 crisp Q/A cards in c[]).' : 'Cards=OFF.',
-    'Limits: 2-6 sections, <=18 words/bullet, 3-8 key terms max.',
+    params.detectFlowDiagrams ? 'Flows=ON.' : 'Flows=OFF.',
+    params.autoTables ? 'Tables=ON.' : 'Tables=OFF.',
+    params.includeTimeline ? 'Dates=ON.' : 'Dates=OFF.',
+    params.includeCards ? 'Cards=4-6.' : 'Cards=OFF.',
+    'Max: 2-5 sections, <=16w/bullet, 3-7 terms.',
   ].join(' ');
 }
 
@@ -655,6 +777,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const includeTimeline = body.includeTimeline !== false;
   const detectFlowDiagrams = body.detectFlowDiagrams !== false;
   const autoTables = body.autoTables !== false;
+  const forceRewrite = Boolean(body.forceRewrite);
   const wantsStream =
     Boolean(body.stream) || readHeader(req.headers, 'accept').includes('text/event-stream');
 
@@ -675,6 +798,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
+  }
+
+  // If notes are already cleanly structured, keep existing format with 0 AI tokens
+  if (!forceRewrite && detectAlreadyGoodFormatting(compacted)) {
+    const preserved = preserveWellFormattedText(compacted, includeCards);
+    const usage = {
+      provider: config.provider,
+      model: 'kept-existing',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cachedTokens: 0,
+    };
+    if (wantsStream) {
+      sendSse({ type: 'status', message: 'Format is already good — keeping existing layout (0 tokens)…' });
+      sendSse({ type: 'done', formatted: preserved, usage, keptExistingFormat: true });
+      res.end();
+      return;
+    }
+    res.status(200).json({ formatted: preserved, usage, keptExistingFormat: true });
+    return;
+  }
+
+  if (wantsStream) {
     sendSse({ type: 'status', message: 'Filtered webpage noise. Connecting to AI…' });
   }
 
@@ -692,7 +839,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let lastErr: unknown = null;
       for (let i = 0; i < candidates.length; i++) {
         const model = candidates[i];
-        const tuning = getGeminiModelTuning(model);
+        const tuning = getGeminiModelTuning(model, compacted.length);
         try {
           const cachedContent = await resolveExplicitGeminiCache(
             ai,
@@ -805,7 +952,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const model =
       (config.model || (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL)).trim() ||
       (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL);
-    const tuning = getOpenAiModelTuning(config.provider, model);
+    const tuning = getOpenAiModelTuning(config.provider, model, compacted.length);
     const userMsg = `${optionsLine}\n\n[SOURCE]\n${compacted}`;
 
     const sendChatCompletion = async (opts: {

@@ -22,17 +22,18 @@ import {
   GripVertical,
   Heading2,
   Heading3,
+  Indent,
   Italic,
   Layers,
   List,
-  Plus,
+  Outdent,
   Quote,
   Redo2,
-  Sparkles,
   Table2,
   Trash2,
   Type,
   Undo2,
+  X,
 } from 'lucide-react';
 import { groupSectionPoints, makeNoteId } from '../lib/noteFormat';
 import { NoteSectionBlock, StructuredNoteData } from '../types';
@@ -68,69 +69,69 @@ const SLASH_OPTIONS: Array<{
 }> = [
   {
     type: 'paragraph',
-    label: 'Text Paragraph',
-    hint: 'Fluid prose block (supports **bold**, *italic*)',
+    label: 'Body Text',
+    hint: 'Smooth Word-style paragraph (supports **bold**, *italic*)',
     keywords: 'text paragraph body note p',
   },
   {
     type: 'heading',
     label: 'Section Heading',
-    hint: 'Major specification section (shortcut: ## )',
+    hint: 'Major topic heading (shortcut: ## )',
     keywords: 'heading h2 title section h1',
   },
   {
     type: 'subheading',
     label: 'Subheading',
-    hint: 'Sub-section divider (shortcut: ### )',
+    hint: 'Sub-section title (shortcut: ### )',
     keywords: 'subheading h3 subsection',
   },
   {
     type: 'bullet',
-    label: 'Bullet Point',
-    hint: 'Nested list item — press Tab to indent (shortcut: - )',
+    label: 'Bullet List',
+    hint: 'Indented bullet item (shortcut: - , Tab to indent)',
     keywords: 'bullet list point fact item',
   },
   {
-    type: 'factbox',
-    label: 'Fact / Callout Box',
-    hint: 'Highlighted formula, rule, or key takeaway (shortcut: > )',
-    keywords: 'fact box callout quote highlight note',
-  },
-  {
-    type: 'flow',
-    label: 'Arrow Flow Diagram',
-    hint: 'Step-by-step causal chain A → B → C (shortcut: => )',
-    keywords: 'flow arrow diagram process steps chain',
-  },
-  {
     type: 'table',
-    label: 'Comparison Table',
-    hint: 'Interactive multi-column grid with headers',
+    label: 'Table',
+    hint: 'Multi-column comparison table',
     keywords: 'table grid matrix compare columns',
   },
   {
-    type: 'key_term',
-    label: 'Key Term & Definition',
-    hint: '2-column glossary row (turns into flashcards)',
-    keywords: 'term definition vocab glossary flashcard',
-  },
-  {
-    type: 'summary',
-    label: 'Topic Overview',
-    hint: 'Top syllabus summary callout box',
-    keywords: 'summary overview intro callout',
+    type: 'exam_tip',
+    label: 'Examiner Tip Box',
+    hint: 'Mark-scheme advice or common mistake',
+    keywords: 'examiner tip warning mark scheme',
   },
   {
     type: 'worked_example',
-    label: 'Worked Example',
+    label: 'Worked Example Box',
     hint: 'Step-by-step calculation or model answer',
     keywords: 'worked example model calculation answer',
   },
   {
-    type: 'exam_tip',
-    label: 'Examiner Tip',
-    hint: 'Mark-scheme trap or common mistake',
-    keywords: 'examiner tip warning mark scheme',
+    type: 'factbox',
+    label: 'Fact / Formula Box',
+    hint: 'Highlighted key fact, rule, or equation (shortcut: > )',
+    keywords: 'fact box callout quote highlight note formula',
+  },
+  {
+    type: 'key_term',
+    label: 'Key Term & Definition',
+    hint: 'Term + definition (turns into flashcards)',
+    keywords: 'term definition vocab glossary flashcard',
+  },
+  {
+    type: 'flow',
+    label: 'Flow Diagram Steps',
+    hint: 'Sequential cause → effect chain (shortcut: => )',
+    keywords: 'flow arrow diagram process steps chain',
+  },
+  {
+    type: 'summary',
+    label: 'Topic Overview',
+    hint: 'Top syllabus overview box',
+    keywords: 'summary overview intro callout',
   },
 ];
 
@@ -217,10 +218,7 @@ export function structuredNoteToBlocks(note: StructuredNoteData): NotionBlock[] 
           steps: item.steps.length ? [...item.steps] : ['', ''],
         });
       } else if (item.kind === 'table') {
-        const rows = [
-          [...item.headers],
-          ...item.rows.map((r) => [...r]),
-        ];
+        const rows = [[...item.headers], ...item.rows.map((r) => [...r])];
         blocks.push({
           id: makeNoteId('blk'),
           type: 'table',
@@ -374,10 +372,12 @@ export function blocksToStructuredNote(
 function AutoGrowTextarea({
   value,
   inputRef,
+  minHeight = 30,
   className = '',
   ...props
 }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
   value: string;
+  minHeight?: number;
   inputRef?: (el: HTMLTextAreaElement | null) => void;
 }) {
   const localRef = useRef<HTMLTextAreaElement | null>(null);
@@ -386,8 +386,8 @@ function AutoGrowTextarea({
     const el = localRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.max(28, el.scrollHeight)}px`;
-  }, [value]);
+    el.style.height = `${Math.max(minHeight, el.scrollHeight)}px`;
+  }, [value, minHeight]);
 
   return (
     <textarea
@@ -401,7 +401,7 @@ function AutoGrowTextarea({
       onInput={(e) => {
         const el = e.currentTarget;
         el.style.height = 'auto';
-        el.style.height = `${Math.max(28, el.scrollHeight)}px`;
+        el.style.height = `${Math.max(minHeight, el.scrollHeight)}px`;
         props.onInput?.(e);
       }}
       className={`w-full resize-none overflow-hidden border-0 bg-transparent outline-none ${className}`}
@@ -561,6 +561,25 @@ export function NotionTopicEditor({
     return created.id;
   };
 
+  const insertFromRibbon = (type: NotionBlockType) => {
+    const focusedIdx = focusedBlockId
+      ? blocks.findIndex((b) => b.id === focusedBlockId)
+      : -1;
+    const targetIdx = focusedIdx >= 0 ? focusedIdx : blocks.length - 1;
+    const cur = blocks[targetIdx];
+    // If cursor is on an empty plain paragraph, turn it directly into the requested block
+    if (
+      cur &&
+      cur.type === 'paragraph' &&
+      !cur.text.trim() &&
+      focusedIdx >= 0
+    ) {
+      changeBlockType(cur.id, type, true);
+      return;
+    }
+    insertBlockAfter(targetIdx, type);
+  };
+
   const updateBlock = (id: string, patch: Partial<NotionBlock>) => {
     const next = blocks.map((b) => (b.id === id ? { ...b, ...patch } : b));
     commitBlocks(next);
@@ -632,6 +651,31 @@ export function NotionTopicEditor({
     setOpenMenuBlockId(null);
   };
 
+  const activeBlock = useMemo(
+    () => blocks.find((b) => b.id === focusedBlockId) || blocks[0] || null,
+    [blocks, focusedBlockId]
+  );
+
+  const setActiveBlockStyle = (nextType: NotionBlockType) => {
+    if (!activeBlock) return;
+    changeBlockType(activeBlock.id, nextType);
+  };
+
+  const adjustActiveBulletIndent = (delta: 1 | -1) => {
+    if (!activeBlock) return;
+    if (activeBlock.type === 'paragraph' && delta === 1) {
+      updateBlock(activeBlock.id, { type: 'bullet', indent: 0 });
+      focusBlock(activeBlock.id);
+      return;
+    }
+    if (activeBlock.type === 'bullet') {
+      const cur = activeBlock.indent || 0;
+      const nextIndent = Math.max(0, Math.min(2, cur + delta));
+      updateBlock(activeBlock.id, { indent: nextIndent });
+      focusBlock(activeBlock.id);
+    }
+  };
+
   const applyInlineWrap = (prefix: string, suffix = prefix) => {
     const targetId = focusedBlockId || blocks[0]?.id;
     if (!targetId) return;
@@ -684,11 +728,13 @@ export function NotionTopicEditor({
   }, [activeSlashBlock]);
 
   const handleTextChangeWithShortcuts = (block: NotionBlock, rawVal: string) => {
-    // Live Markdown prefixes at start of line
     if (block.type === 'paragraph' || block.type === 'bullet') {
       if (rawVal === '## ' || rawVal === '# ') {
-        changeBlockType(block.id, 'heading', true);
-        updateBlock(block.id, { type: 'heading', text: '' });
+        const next = blocks.map((b) =>
+          b.id === block.id ? { ...makeDefaultBlock('heading', ''), id: b.id } : b
+        );
+        commitBlocks(next);
+        focusBlock(block.id);
         return;
       }
       if (rawVal === '### ') {
@@ -755,7 +801,7 @@ export function NotionTopicEditor({
       } else if (/^[-*•]\s+/.test(trimmed)) {
         newBlocks.push(makeDefaultBlock('bullet', trimmed.replace(/^[-*•]\s+/, '')));
       } else {
-        newBlocks.push(makeDefaultBlock('paragraph', trimmed));
+        newBlocks.push(makeDefaultBlock('paragraph', trimmed.replace(/^¶\s*/, '')));
       }
     }
 
@@ -791,7 +837,6 @@ export function NotionTopicEditor({
     block: NotionBlock,
     idx: number
   ) => {
-    // Undo / Redo + Inline Formatting Shortcuts
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) handleRedo();
@@ -836,7 +881,6 @@ export function NotionTopicEditor({
       }
     }
 
-    // Tab / Shift+Tab for smooth bullet indentation
     if (e.key === 'Tab' && (block.type === 'bullet' || block.type === 'paragraph')) {
       e.preventDefault();
       if (block.type === 'paragraph' && !e.shiftKey) {
@@ -849,7 +893,6 @@ export function NotionTopicEditor({
       return;
     }
 
-    // Fluid Enter: escape empty bullet/subheading OR split block at cursor
     const splittableTypes: NotionBlockType[] = [
       'heading',
       'subheading',
@@ -860,7 +903,6 @@ export function NotionTopicEditor({
     if (e.key === 'Enter' && !e.shiftKey && splittableTypes.includes(block.type)) {
       e.preventDefault();
 
-      // Pressing Enter on an empty bullet/subheading cleanly exits the list into a paragraph
       if ((block.type === 'bullet' || block.type === 'subheading') && !block.text.trim()) {
         if (block.type === 'bullet' && (block.indent || 0) > 0) {
           updateBlock(block.id, { indent: (block.indent || 0) - 1 });
@@ -903,7 +945,6 @@ export function NotionTopicEditor({
       return;
     }
 
-    // Fluid Backspace at cursor 0: outdent, merge with previous text block, or delete if empty
     if (e.key === 'Backspace') {
       const el = e.currentTarget;
       const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
@@ -943,7 +984,6 @@ export function NotionTopicEditor({
       }
     }
 
-    // ArrowUp / ArrowDown navigation between blocks
     if (e.key === 'ArrowUp' && !e.shiftKey && idx > 0) {
       const el = e.currentTarget;
       if (el.selectionStart === 0 && el.selectionEnd === 0) {
@@ -983,719 +1023,836 @@ export function NotionTopicEditor({
   }, [blocks]);
 
   return (
-    <div className="sd-card px-4 py-5 sm:px-9 sm:py-8">
-      {/* Notion-style Borderless Page Header */}
-      <div className="space-y-2 border-b border-[var(--line)] pb-5">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              <span>Spec Code:</span>
-              <input
-                type="text"
-                value={specCode || ''}
-                onChange={(e) => onChangeTopicMeta({ specCode: e.target.value })}
-                placeholder="e.g. 4.1.2"
-                className="font-mono-num w-24 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-[var(--ink)] outline-none transition-colors hover:border-[var(--line)] focus:border-[var(--e3)] focus:bg-[var(--bg)]"
-              />
-            </div>
-            {parentTopicOptions && parentTopicOptions.length > 0 && (
-              <label className="flex items-center gap-1.5">
-                <span>Parent:</span>
-                <select
-                  value={parentTopicId || ''}
-                  onChange={(e) => onChangeTopicMeta({ parentTopicId: e.target.value })}
-                  className="max-w-[200px] cursor-pointer rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-medium text-[var(--ink)] outline-none transition-colors hover:border-[var(--line)] focus:border-[var(--e3)] focus:bg-[var(--bg)]"
-                >
-                  <option value="">Top-level topic</option>
-                  {parentTopicOptions.map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </div>
-          <span className="font-mono-num text-[11px] text-[var(--mute)]">
-            {blocks.length} blocks · {wordCount} words
-          </span>
-        </div>
-
-        <input
-          type="text"
-          value={topicName}
-          onChange={(e) => onChangeTopicMeta({ name: e.target.value })}
-          placeholder="Untitled Topic"
-          className="font-display w-full border-0 bg-transparent p-0 text-2xl font-extrabold tracking-tight text-[var(--ink)] outline-none sm:text-3xl"
-        />
-      </div>
-
-      {/* Compact Sticky Formatting & Shortcut Bar */}
-      <div className="sticky top-2 z-20 mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)]/95 px-2.5 py-1.5 backdrop-blur">
-        <div className="flex flex-wrap items-center gap-1">
-          <button
-            type="button"
-            disabled={!historyMeta.canUndo}
-            onClick={handleUndo}
-            title="Undo (Ctrl/Cmd+Z)"
-            className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
-          >
-            <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            disabled={!historyMeta.canRedo}
-            onClick={handleRedo}
-            title="Redo (Ctrl/Cmd+Shift+Z)"
-            className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
-          >
-            <Redo2 className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-          <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
-          <button
-            type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              applyInlineWrap('**');
-            }}
-            title="Bold selection (Ctrl/Cmd+B)"
-            className="sd-btn h-7 w-7 p-0"
-          >
-            <Bold className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              applyInlineWrap('*');
-            }}
-            title="Italic selection (Ctrl/Cmd+I)"
-            className="sd-btn h-7 w-7 p-0"
-          >
-            <Italic className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              applyInlineWrap('`');
-            }}
-            title="Inline code"
-            className="sd-btn h-7 w-7 p-0"
-          >
-            <Code className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              insertArrowAtCursor();
-            }}
-            title="Insert causal arrow →"
-            className="sd-btn h-7 px-2 text-xs"
-          >
-            <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </div>
-
-        <div className="hidden items-center gap-2 text-[11px] text-[var(--mute)] md:flex">
-          <span>
-            <kbd className="rounded border border-[var(--line)] px-1 font-mono-num">/</kbd> menu
-          </span>
-          <span>
-            <kbd className="rounded border border-[var(--line)] px-1 font-mono-num">##</kbd> heading
-          </span>
-          <span>
-            <kbd className="rounded border border-[var(--line)] px-1 font-mono-num">Tab</kbd> indent
-          </span>
-          <span>Drag <strong className="text-[var(--ink)]">⋮⋮</strong> to reorder</span>
-        </div>
-      </div>
-
-      {/* Notion Block Canvas */}
-      <div className="mt-4 space-y-1.5">
-        {blocks.map((block, idx) => {
-          const isFocused = focusedBlockId === block.id || openMenuBlockId === block.id;
-          const showSlash =
-            slashBlockId === block.id && block.text.startsWith('/') && !block.text.includes('\n');
-          const isDropHere = dropTargetIdx === idx;
-
-          return (
-            <div
-              key={block.id}
-              onDragOver={(e) => {
-                if (!dragBlockId) return;
-                e.preventDefault();
-                setDropTargetIdx(idx);
-              }}
-              onDrop={(e) => handleDropOnBlock(e, idx)}
-              className={`group relative flex items-start gap-1.5 rounded-lg py-0.5 transition-all ${
-                isDropHere ? 'border-t-2 border-t-[var(--e3)] pt-1' : ''
-              } ${dragBlockId === block.id ? 'opacity-50' : ''}`}
+    <div className="space-y-4">
+      {/* Word-Like Top Formatting & 1-Click Study Ribbon */}
+      <div className="sd-card sticky top-2 z-20 space-y-2 px-3.5 py-2.5 backdrop-blur">
+        {/* Row 1: Text Format, Hierarchy & Inline Controls */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              type="button"
+              disabled={!historyMeta.canUndo}
+              onClick={handleUndo}
+              title="Undo (Ctrl/Cmd+Z)"
+              className="sd-btn h-8 w-8 p-0 disabled:opacity-35"
             >
-              {/* Left Notion Hover Gutter */}
-              <div
-                className={`flex w-12 shrink-0 items-center justify-end gap-0.5 pt-1 transition-opacity ${
-                  isFocused ? 'opacity-100' : 'opacity-35 sm:opacity-0 sm:group-hover:opacity-100'
-                }`}
-              >
+              <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={!historyMeta.canRedo}
+              onClick={handleRedo}
+              title="Redo (Ctrl/Cmd+Shift+Z)"
+              className="sd-btn h-8 w-8 p-0 disabled:opacity-35"
+            >
+              <Redo2 className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+
+            <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyInlineWrap('**');
+              }}
+              title="Bold selection (Ctrl/Cmd+B)"
+              className="sd-btn h-8 w-8 p-0"
+            >
+              <Bold className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyInlineWrap('*');
+              }}
+              title="Italic selection (Ctrl/Cmd+I)"
+              className="sd-btn h-8 w-8 p-0"
+            >
+              <Italic className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyInlineWrap('`');
+              }}
+              title="Code / Formula Highlight"
+              className="sd-btn h-8 w-8 p-0"
+            >
+              <Code className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                insertArrowAtCursor();
+              }}
+              title="Insert arrow →"
+              className="sd-btn h-8 px-2.5 text-xs font-semibold"
+            >
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Arrow</span>
+            </button>
+
+            <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+
+            {/* Style Switcher for Active Paragraph/Heading/Bullet */}
+            <div className="sd-seg" role="group" aria-label="Text style">
+              {(
+                [
+                  ['paragraph', 'Text'],
+                  ['heading', 'Heading'],
+                  ['subheading', 'Subhead'],
+                  ['bullet', 'Bullet'],
+                ] as const
+              ).map(([st, label]) => (
                 <button
+                  key={st}
                   type="button"
-                  title="Add block below"
-                  aria-label="Add block below"
-                  onClick={() => insertBlockAfter(idx, 'paragraph', '/')}
-                  className="flex h-6 w-5 cursor-pointer items-center justify-center rounded text-[var(--mute)] hover:bg-[var(--bg)] hover:text-[var(--ink)]"
-                >
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  draggable
-                  onDragStart={() => setDragBlockId(block.id)}
-                  onDragEnd={() => {
-                    setDragBlockId(null);
-                    setDropTargetIdx(null);
+                  aria-pressed={activeBlock?.type === st}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setActiveBlockStyle(st);
                   }}
-                  title="Drag to reorder or click for block menu"
-                  aria-label="Block options"
-                  onClick={() =>
-                    setOpenMenuBlockId((cur) => (cur === block.id ? null : block.id))
-                  }
-                  className="flex h-6 w-5 cursor-grab items-center justify-center rounded text-[var(--mute)] hover:bg-[var(--bg)] hover:text-[var(--ink)] active:cursor-grabbing"
+                  className="sd-seg-btn px-2.5 py-1 text-xs"
                 >
-                  <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />
+                  {label}
                 </button>
-              </div>
+              ))}
+            </div>
 
-              {/* Block Context Popover Menu */}
-              {openMenuBlockId === block.id && (
-                <div className="absolute left-12 top-8 z-30 max-h-96 w-60 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
-                  <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                    Turn into
-                  </div>
-                  {SLASH_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.type}
-                      type="button"
-                      onClick={() => changeBlockType(block.id, opt.type)}
-                      className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs ${
-                        block.type === opt.type
-                          ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))] font-bold text-[var(--ink)]'
-                          : 'text-[var(--ink)] hover:bg-[var(--bg)]'
-                      }`}
-                    >
-                      <span className="text-[var(--mute)]">{blockTypeIcon(opt.type)}</span>
-                      <span>{opt.label}</span>
-                    </button>
-                  ))}
-                  <div className="my-1 border-t border-[var(--line)]" />
-                  <div className="flex items-center gap-1 px-1">
-                    <button
-                      type="button"
-                      disabled={idx === 0}
-                      onClick={() => moveBlock(idx, idx - 1)}
-                      className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
-                    >
-                      <ArrowUp className="h-3 w-3" aria-hidden="true" />
-                      <span>Up</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={idx === blocks.length - 1}
-                      onClick={() => moveBlock(idx, idx + 1)}
-                      className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
-                    >
-                      <ArrowDown className="h-3 w-3" aria-hidden="true" />
-                      <span>Down</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => duplicateBlockAt(idx)}
-                      title="Duplicate block"
-                      className="sd-btn px-2 py-1 text-[11px]"
-                    >
-                      <Copy className="h-3 w-3" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenMenuBlockId(null);
-                        deleteBlockAt(idx);
-                      }}
-                      className="sd-btn px-2 py-1 text-[11px] text-[var(--bad)]"
-                      aria-label="Delete block"
-                    >
-                      <Trash2 className="h-3 w-3" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              )}
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                adjustActiveBulletIndent(-1);
+              }}
+              title="Outdent (Shift+Tab)"
+              className="sd-btn h-8 w-8 p-0"
+            >
+              <Outdent className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                adjustActiveBulletIndent(1);
+              }}
+              title="Indent (Tab)"
+              className="sd-btn h-8 w-8 p-0"
+            >
+              <Indent className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </div>
 
-              {/* Block Body */}
-              <div className="relative min-w-0 flex-1">
-                {block.type === 'summary' && (
-                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
-                    <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
-                      Topic Overview
-                    </div>
-                    <AutoGrowTextarea
-                      inputRef={(el) => registerInputRef(block.id, el)}
-                      value={block.text}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                      onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder="1–2 sentence core overview of this syllabus topic…"
-                      className="text-sm leading-relaxed text-[var(--ink)] placeholder:text-[var(--mute)]/60"
-                    />
-                  </div>
-                )}
+          <button
+            type="button"
+            onClick={onMakeFlashcards}
+            className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+          >
+            <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Make Flashcards{validTermsCount > 0 ? ` (${validTermsCount})` : ''}</span>
+          </button>
+        </div>
 
-                {block.type === 'heading' && (
-                  <AutoGrowTextarea
-                    inputRef={(el) => registerInputRef(block.id, el)}
-                    value={block.text}
-                    onFocus={() => setFocusedBlockId(block.id)}
-                    onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                    onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                    onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                    placeholder="Section heading… (type '/' for block types)"
-                    className="font-display mt-3 py-1 text-lg font-bold text-[var(--ink)] placeholder:text-[var(--mute)]/60 sm:text-xl"
-                  />
-                )}
+        {/* Row 2: One-Click Word Study Box Inserts */}
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--line)] pt-2">
+          <span className="mr-1 text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+            Insert:
+          </span>
+          {(
+            [
+              ['table', 'Table', Table2],
+              ['exam_tip', 'Examiner Tip', AlertCircle],
+              ['worked_example', 'Worked Example', CheckCircle2],
+              ['factbox', 'Fact Box', Quote],
+              ['key_term', 'Key Term', Layers],
+              ['flow', 'Flow Steps', GitBranch],
+              ['heading', 'Section', Heading2],
+            ] as const
+          ).map(([type, label, Icon]) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => insertFromRibbon(type)}
+              className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+            >
+              <Icon className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+              <span>+ {label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
-                {block.type === 'subheading' && (
-                  <AutoGrowTextarea
-                    inputRef={(el) => registerInputRef(block.id, el)}
-                    value={block.text}
-                    onFocus={() => setFocusedBlockId(block.id)}
-                    onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                    onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                    onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                    placeholder="Subheading…"
-                    className="font-display mt-1.5 border-b border-[var(--line)] pb-1 text-sm font-bold text-[var(--e3)] placeholder:text-[var(--mute)]/60"
-                  />
-                )}
-
-                {block.type === 'bullet' && (
-                  <div
-                    className="flex items-start gap-2.5 py-0.5 transition-all"
-                    style={{ paddingLeft: `${(block.indent || 0) * 22}px` }}
+      {/* Seamless Flowing Word-Style Document Sheet */}
+      <div className="sd-card px-5 py-7 sm:px-12 sm:py-10">
+        {/* Document Header */}
+        <div className="mb-6 space-y-2.5 border-b border-[var(--line)] pb-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-1.5">
+                <span>Spec:</span>
+                <input
+                  type="text"
+                  value={specCode || ''}
+                  onChange={(e) => onChangeTopicMeta({ specCode: e.target.value })}
+                  placeholder="e.g. 4.1.2"
+                  className="font-mono-num w-24 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-[var(--ink)] outline-none transition-colors hover:border-[var(--line)] focus:border-[var(--e3)] focus:bg-[var(--bg)]"
+                />
+              </label>
+              {parentTopicOptions && parentTopicOptions.length > 0 && (
+                <label className="flex items-center gap-1.5">
+                  <span>Parent:</span>
+                  <select
+                    value={parentTopicId || ''}
+                    onChange={(e) => onChangeTopicMeta({ parentTopicId: e.target.value })}
+                    className="max-w-[220px] cursor-pointer rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-medium text-[var(--ink)] outline-none transition-colors hover:border-[var(--line)] focus:border-[var(--e3)] focus:bg-[var(--bg)]"
                   >
-                    <span
-                      className={`mt-2.5 shrink-0 rounded-full ${
-                        (block.indent || 0) > 0
-                          ? 'h-1.5 w-1.5 border border-[var(--e3)] bg-transparent'
-                          : 'h-1.5 w-1.5 bg-[var(--ink)]'
-                      }`}
-                      aria-hidden="true"
-                    />
+                    <option value="">Top-level topic</option>
+                    {parentTopicOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            <span className="font-mono-num text-[11px] text-[var(--mute)]">
+              {wordCount} words
+            </span>
+          </div>
+
+          <input
+            type="text"
+            value={topicName}
+            onChange={(e) => onChangeTopicMeta({ name: e.target.value })}
+            placeholder="Untitled Document Topic"
+            className="font-display w-full border-0 bg-transparent p-0 text-3xl font-extrabold tracking-tight text-[var(--ink)] outline-none sm:text-4xl"
+          />
+        </div>
+
+        {/* Borderless Fluid Document Body */}
+        <div className="space-y-2">
+          {blocks.map((block, idx) => {
+            const isFocused = focusedBlockId === block.id || openMenuBlockId === block.id;
+            const showSlash =
+              slashBlockId === block.id && block.text.startsWith('/') && !block.text.includes('\n');
+            const isDropHere = dropTargetIdx === idx;
+
+            return (
+              <div
+                key={block.id}
+                onDragOver={(e) => {
+                  if (!dragBlockId) return;
+                  e.preventDefault();
+                  setDropTargetIdx(idx);
+                }}
+                onDrop={(e) => handleDropOnBlock(e, idx)}
+                className={`group relative flex items-start gap-2 transition-all ${
+                  isDropHere ? 'border-t-2 border-t-[var(--e3)] pt-1.5' : ''
+                } ${dragBlockId === block.id ? 'opacity-45' : ''}`}
+              >
+                {/* Unobtrusive Left Margin Drag/Menu Handle */}
+                <div
+                  className={`flex w-6 shrink-0 items-center justify-center pt-1.5 transition-opacity ${
+                    isFocused
+                      ? 'opacity-80'
+                      : 'opacity-25 sm:opacity-0 sm:group-hover:opacity-75'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    draggable
+                    onDragStart={() => setDragBlockId(block.id)}
+                    onDragEnd={() => {
+                      setDragBlockId(null);
+                      setDropTargetIdx(null);
+                    }}
+                    title="Drag to move or click for options"
+                    aria-label="Block options"
+                    onClick={() =>
+                      setOpenMenuBlockId((cur) => (cur === block.id ? null : block.id))
+                    }
+                    className="flex h-6 w-5 cursor-grab items-center justify-center rounded text-[var(--mute)] hover:bg-[var(--bg)] hover:text-[var(--ink)] active:cursor-grabbing"
+                  >
+                    <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+
+                {/* Compact Block Context Menu */}
+                {openMenuBlockId === block.id && (
+                  <div className="absolute left-7 top-8 z-30 max-h-80 w-60 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                      Turn into
+                    </div>
+                    {SLASH_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.type}
+                        type="button"
+                        onClick={() => changeBlockType(block.id, opt.type)}
+                        className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs ${
+                          block.type === opt.type
+                            ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))] font-bold text-[var(--ink)]'
+                            : 'text-[var(--ink)] hover:bg-[var(--bg)]'
+                        }`}
+                      >
+                        <span className="text-[var(--mute)]">{blockTypeIcon(opt.type)}</span>
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                    <div className="my-1 border-t border-[var(--line)]" />
+                    <div className="flex items-center gap-1 px-1">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => moveBlock(idx, idx - 1)}
+                        className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
+                      >
+                        <ArrowUp className="h-3 w-3" aria-hidden="true" />
+                        <span>Up</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === blocks.length - 1}
+                        onClick={() => moveBlock(idx, idx + 1)}
+                        className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
+                      >
+                        <ArrowDown className="h-3 w-3" aria-hidden="true" />
+                        <span>Down</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => duplicateBlockAt(idx)}
+                        title="Duplicate"
+                        className="sd-btn px-2 py-1 text-[11px]"
+                      >
+                        <Copy className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuBlockId(null);
+                          deleteBlockAt(idx);
+                        }}
+                        className="sd-btn px-2 py-1 text-[11px] text-[var(--bad)]"
+                        aria-label="Delete block"
+                      >
+                        <Trash2 className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Block Content */}
+                <div className="relative min-w-0 flex-1">
+                  {block.type === 'summary' && (
+                    <div className="my-2 rounded-r-xl border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-4 py-3">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
+                          Topic Overview
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => deleteBlockAt(idx)}
+                          aria-label="Remove Topic Overview"
+                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                        >
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                      <AutoGrowTextarea
+                        inputRef={(el) => registerInputRef(block.id, el)}
+                        value={block.text}
+                        minHeight={34}
+                        onFocus={() => setFocusedBlockId(block.id)}
+                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
+                        placeholder="Short 1–2 sentence topic summary…"
+                        className="text-base leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                      />
+                    </div>
+                  )}
+
+                  {block.type === 'heading' && (
                     <AutoGrowTextarea
                       inputRef={(el) => registerInputRef(block.id, el)}
                       value={block.text}
+                      minHeight={38}
                       onFocus={() => setFocusedBlockId(block.id)}
                       onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
                       onPaste={(e) => handlePasteMultiLine(e, block, idx)}
                       onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder="Write a point (Tab to indent, Enter to split, '/' for commands)…"
-                      className="text-[15px] leading-relaxed text-[var(--ink)] placeholder:text-[var(--mute)]/60"
+                      placeholder="Section Heading…"
+                      className="font-display mt-5 border-b border-[var(--line)]/65 pb-1.5 text-[22px] font-extrabold leading-snug text-[var(--ink)] placeholder:text-[var(--mute)]/50 sm:text-[25px]"
                     />
-                  </div>
-                )}
+                  )}
 
-                {block.type === 'paragraph' && (
-                  <AutoGrowTextarea
-                    inputRef={(el) => registerInputRef(block.id, el)}
-                    value={block.text}
-                    onFocus={() => setFocusedBlockId(block.id)}
-                    onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                    onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                    onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                    placeholder="Start writing anywhere, paste notes, or type '/' for commands…"
-                    className="py-1 text-[15px] leading-relaxed text-[var(--ink)] placeholder:text-[var(--mute)]/60"
-                  />
-                )}
-
-                {block.type === 'factbox' && (
-                  <div className="rounded-xl border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] p-3">
-                    <input
-                      type="text"
-                      value={block.extra || ''}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
-                      placeholder="Fact Box Title (e.g. Key Formula / Core Rule)"
-                      className="mb-1 w-full border-0 bg-transparent text-[11px] font-bold uppercase tracking-wider text-[var(--e3)] outline-none placeholder:text-[var(--e3)]/60"
-                    />
+                  {block.type === 'subheading' && (
                     <AutoGrowTextarea
                       inputRef={(el) => registerInputRef(block.id, el)}
                       value={block.text}
+                      minHeight={32}
                       onFocus={() => setFocusedBlockId(block.id)}
                       onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                      onPaste={(e) => handlePasteMultiLine(e, block, idx)}
                       onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder="Fact box details…"
-                      className="text-sm leading-relaxed text-[var(--ink)] placeholder:text-[var(--mute)]/60"
+                      placeholder="Subheading…"
+                      className="font-display mt-3 pb-0.5 text-[17px] font-bold leading-snug text-[var(--e3)] placeholder:text-[var(--mute)]/50 sm:text-[18px]"
                     />
-                  </div>
-                )}
+                  )}
 
-                {block.type === 'flow' && (
-                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <input
-                        type="text"
-                        value={block.extra || ''}
-                        onFocus={() => setFocusedBlockId(block.id)}
-                        onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
-                        placeholder="Flow Diagram Label (optional, e.g. Sequence)"
-                        className="flex-1 border-0 bg-transparent text-[11px] font-bold uppercase tracking-wider text-[var(--e3)] outline-none placeholder:text-[var(--mute)]/60"
+                  {block.type === 'bullet' && (
+                    <div
+                      className="flex items-start gap-3 py-0.5 transition-all"
+                      style={{ paddingLeft: `${(block.indent || 0) * 26 + 4}px` }}
+                    >
+                      <span
+                        className={`mt-[11px] shrink-0 rounded-full ${
+                          (block.indent || 0) > 0
+                            ? 'h-1.5 w-1.5 border border-[var(--e3)] bg-transparent'
+                            : 'h-2 w-2 bg-[var(--ink)]'
+                        }`}
+                        aria-hidden="true"
                       />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updateBlock(block.id, { steps: [...(block.steps || []), ''] })
-                        }
-                        className="sd-btn px-2 py-0.5 text-[11px]"
-                      >
-                        + Step
-                      </button>
+                      <AutoGrowTextarea
+                        inputRef={(el) => registerInputRef(block.id, el)}
+                        value={block.text}
+                        minHeight={30}
+                        onFocus={() => setFocusedBlockId(block.id)}
+                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                        onPaste={(e) => handlePasteMultiLine(e, block, idx)}
+                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
+                        placeholder="List item…"
+                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/50"
+                      />
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {(block.steps || ['', '']).map((stepVal, sIdx, arr) => (
-                        <div key={sIdx} className="flex items-center gap-1.5">
-                          <div className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--card)] px-2 py-1">
-                            <input
-                              type="text"
-                              value={stepVal}
-                              onFocus={() => setFocusedBlockId(block.id)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                  e.preventDefault();
-                                  const nextSteps = [...arr];
-                                  nextSteps.splice(sIdx + 1, 0, '');
+                  )}
+
+                  {block.type === 'paragraph' && (
+                    <AutoGrowTextarea
+                      inputRef={(el) => registerInputRef(block.id, el)}
+                      value={block.text}
+                      minHeight={30}
+                      onFocus={() => setFocusedBlockId(block.id)}
+                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                      onPaste={(e) => handlePasteMultiLine(e, block, idx)}
+                      onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
+                      placeholder={
+                        idx === 0
+                          ? 'Start typing your notes cleanly like a Word document… (or use Insert buttons above)'
+                          : 'Continue typing…'
+                      }
+                      className="py-0.5 text-[16px] leading-[1.72] text-[var(--ink)] placeholder:text-[var(--mute)]/50"
+                    />
+                  )}
+
+                  {block.type === 'factbox' && (
+                    <div className="my-2 rounded-r-xl border border-[color-mix(in_srgb,var(--e3)_30%,var(--line))] border-l-4 border-l-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))] px-4 py-3">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <input
+                          type="text"
+                          value={block.extra || ''}
+                          onFocus={() => setFocusedBlockId(block.id)}
+                          onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                          placeholder="Fact Box Title (e.g. Key Formula)"
+                          className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--e3)] outline-none placeholder:text-[var(--e3)]/60"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => deleteBlockAt(idx)}
+                          aria-label="Remove Fact Box"
+                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                        >
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                      <AutoGrowTextarea
+                        inputRef={(el) => registerInputRef(block.id, el)}
+                        value={block.text}
+                        minHeight={32}
+                        onFocus={() => setFocusedBlockId(block.id)}
+                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
+                        placeholder="Core rule, formula, or key evidence…"
+                        className="text-[15.5px] leading-[1.65] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                      />
+                    </div>
+                  )}
+
+                  {block.type === 'flow' && (
+                    <div className="my-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+                      <div className="mb-2.5 flex items-center justify-between gap-2">
+                        <input
+                          type="text"
+                          value={block.extra || ''}
+                          onFocus={() => setFocusedBlockId(block.id)}
+                          onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                          placeholder="Process / Causal Flow Label (optional)"
+                          className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--e3)] outline-none placeholder:text-[var(--mute)]/60"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateBlock(block.id, { steps: [...(block.steps || []), ''] })
+                            }
+                            className="sd-btn px-2.5 py-1 text-xs"
+                          >
+                            + Step
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteBlockAt(idx)}
+                            aria-label="Remove Flow"
+                            className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(block.steps || ['', '']).map((stepVal, sIdx, arr) => (
+                          <div key={sIdx} className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5">
+                              <span className="font-mono-num text-xs font-bold text-[var(--e3)]">
+                                {sIdx + 1}.
+                              </span>
+                              <input
+                                type="text"
+                                value={stepVal}
+                                onFocus={() => setFocusedBlockId(block.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    const nextSteps = [...arr];
+                                    nextSteps.splice(sIdx + 1, 0, '');
+                                    updateBlock(block.id, { steps: nextSteps });
+                                  }
+                                }}
+                                onChange={(e) => {
+                                  const nextSteps = arr.map((v, i) =>
+                                    i === sIdx ? e.target.value : v
+                                  );
                                   updateBlock(block.id, { steps: nextSteps });
-                                }
-                              }}
-                              onChange={(e) => {
-                                const nextSteps = arr.map((v, i) =>
-                                  i === sIdx ? e.target.value : v
-                                );
-                                updateBlock(block.id, { steps: nextSteps });
-                              }}
-                              placeholder={`Step ${sIdx + 1}`}
-                              className="min-w-[110px] border-0 bg-transparent text-xs font-medium text-[var(--ink)] outline-none"
-                            />
-                            {arr.length > 2 && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateBlock(block.id, {
-                                    steps: arr.filter((_, i) => i !== sIdx),
-                                  })
-                                }
-                                aria-label="Remove step"
-                                className="cursor-pointer text-[11px] text-[var(--mute)] hover:text-[var(--bad)]"
-                              >
-                                ×
-                              </button>
+                                }}
+                                placeholder={`Step ${sIdx + 1}`}
+                                className="min-w-[125px] border-0 bg-transparent text-sm font-medium text-[var(--ink)] outline-none"
+                              />
+                              {arr.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateBlock(block.id, {
+                                      steps: arr.filter((_, i) => i !== sIdx),
+                                    })
+                                  }
+                                  aria-label="Remove step"
+                                  className="cursor-pointer text-xs text-[var(--mute)] hover:text-[var(--bad)]"
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </div>
+                            {sIdx < arr.length - 1 && (
+                              <ArrowRight
+                                className="h-4 w-4 shrink-0 text-[var(--e3)]"
+                                aria-hidden="true"
+                              />
                             )}
                           </div>
-                          {sIdx < arr.length - 1 && (
-                            <ArrowRight
-                              className="h-3.5 w-3.5 shrink-0 text-[var(--e3)]"
-                              aria-hidden="true"
-                            />
-                          )}
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {block.type === 'table' && (() => {
-                  const rows = block.rows?.length
-                    ? block.rows
-                    : [
-                        ['Column 1', 'Column 2'],
-                        ['', ''],
-                      ];
-                  const colCount = Math.max(1, rows[0]?.length || 2);
-                  return (
-                    <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--e3)]">
-                          Table ({rows.length} rows × {colCount} cols)
-                        </span>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateBlock(block.id, {
-                                rows: [...rows, Array.from({ length: colCount }, () => '')],
-                              })
-                            }
-                            className="sd-btn px-2 py-0.5 text-[11px]"
-                          >
-                            + Row
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateBlock(block.id, {
-                                rows: rows.map((r, ri) => [
-                                  ...r,
-                                  ri === 0 ? `Col ${colCount + 1}` : '',
-                                ]),
-                              })
-                            }
-                            className="sd-btn px-2 py-0.5 text-[11px]"
-                          >
-                            + Col
-                          </button>
-                          {colCount > 1 && (
+                  {block.type === 'table' && (() => {
+                    const rows = block.rows?.length
+                      ? block.rows
+                      : [
+                          ['Column 1', 'Column 2'],
+                          ['', ''],
+                        ];
+                    const colCount = Math.max(1, rows[0]?.length || 2);
+                    return (
+                      <div className="my-2.5 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)]">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-3.5 py-2">
+                          <span className="text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
+                            Table ({rows.length} × {colCount})
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <button
                               type="button"
                               onClick={() =>
                                 updateBlock(block.id, {
-                                  rows: rows.map((r) => r.slice(0, -1)),
+                                  rows: [...rows, Array.from({ length: colCount }, () => '')],
                                 })
                               }
-                              className="sd-btn px-2 py-0.5 text-[11px]"
+                              className="sd-btn px-2.5 py-0.5 text-xs"
                             >
-                              - Col
+                              + Row
                             </button>
-                          )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateBlock(block.id, {
+                                  rows: rows.map((r, ri) => [
+                                    ...r,
+                                    ri === 0 ? `Col ${colCount + 1}` : '',
+                                  ]),
+                                })
+                              }
+                              className="sd-btn px-2.5 py-0.5 text-xs"
+                            >
+                              + Col
+                            </button>
+                            {colCount > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateBlock(block.id, {
+                                    rows: rows.map((r) => r.slice(0, -1)),
+                                  })
+                                }
+                                className="sd-btn px-2.5 py-0.5 text-xs"
+                              >
+                                - Col
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => deleteBlockAt(idx)}
+                              aria-label="Remove Table"
+                              className="ml-1 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                            >
+                              <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="overflow-x-auto bg-[var(--card)]">
+                          <table className="w-full border-collapse text-sm">
+                            <tbody>
+                              {rows.map((r, ri) => (
+                                <tr
+                                  key={ri}
+                                  className={
+                                    ri === 0
+                                      ? 'border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--ink)_4%,var(--card))] font-bold'
+                                      : 'border-b border-[var(--line)] last:border-b-0'
+                                  }
+                                >
+                                  {Array.from({ length: colCount }, (_, ci) => (
+                                    <td
+                                      key={ci}
+                                      className="border-r border-[var(--line)] align-top last:border-r-0"
+                                    >
+                                      <AutoGrowTextarea
+                                        value={r[ci] || ''}
+                                        minHeight={36}
+                                        onFocus={() => setFocusedBlockId(block.id)}
+                                        onChange={(e) => {
+                                          const nextRows = rows.map((rowItem, rowIdx) =>
+                                            rowIdx === ri
+                                              ? Array.from({ length: colCount }, (__, cIdx) =>
+                                                  cIdx === ci ? e.target.value : rowItem[cIdx] || ''
+                                                )
+                                              : [...rowItem]
+                                          );
+                                          updateBlock(block.id, { rows: nextRows });
+                                        }}
+                                        placeholder={ri === 0 ? `Header ${ci + 1}` : 'Type…'}
+                                        className={`min-w-[120px] px-3 py-2 text-[14.5px] leading-snug focus:bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] ${
+                                          ri === 0 ? 'font-bold text-[var(--ink)]' : 'text-[var(--ink)]'
+                                        }`}
+                                      />
+                                    </td>
+                                  ))}
+                                  {rows.length > 2 && ri > 0 && (
+                                    <td className="w-8 text-center align-middle">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updateBlock(block.id, {
+                                            rows: rows.filter((_, rIndex) => rIndex !== ri),
+                                          })
+                                        }
+                                        title="Delete row"
+                                        className="cursor-pointer px-1.5 py-1 text-sm text-[var(--mute)] hover:text-[var(--bad)]"
+                                      >
+                                        ×
+                                      </button>
+                                    </td>
+                                  )}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
-                      <div className="overflow-x-auto rounded-lg border border-[var(--line)] bg-[var(--card)]">
-                        <table className="w-full border-collapse text-xs">
-                          <tbody>
-                            {rows.map((r, ri) => (
-                              <tr
-                                key={ri}
-                                className={
-                                  ri === 0
-                                    ? 'border-b border-[var(--line)] bg-[var(--bg)] font-bold'
-                                    : 'border-b border-[var(--line)] last:border-b-0'
-                                }
-                              >
-                                {Array.from({ length: colCount }, (_, ci) => (
-                                  <td
-                                    key={ci}
-                                    className="border-r border-[var(--line)] p-0 last:border-r-0"
-                                  >
-                                    <input
-                                      type="text"
-                                      value={r[ci] || ''}
-                                      onFocus={() => setFocusedBlockId(block.id)}
-                                      onChange={(e) => {
-                                        const nextRows = rows.map((rowItem, rowIdx) =>
-                                          rowIdx === ri
-                                            ? Array.from({ length: colCount }, (__, cIdx) =>
-                                                cIdx === ci ? e.target.value : rowItem[cIdx] || ''
-                                              )
-                                            : [...rowItem]
-                                        );
-                                        updateBlock(block.id, { rows: nextRows });
-                                      }}
-                                      placeholder={ri === 0 ? `Header ${ci + 1}` : '…'}
-                                      className={`w-full min-w-[100px] border-0 bg-transparent px-2.5 py-1.5 text-xs outline-none focus:bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] ${
-                                        ri === 0 ? 'font-bold text-[var(--ink)]' : 'text-[var(--ink)]'
-                                      }`}
-                                    />
-                                  </td>
-                                ))}
-                                {rows.length > 2 && ri > 0 && (
-                                  <td className="w-7 text-center">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        updateBlock(block.id, {
-                                          rows: rows.filter((_, rIndex) => rIndex !== ri),
-                                        })
-                                      }
-                                      title="Delete row"
-                                      className="cursor-pointer px-1 text-xs text-[var(--mute)] hover:text-[var(--bad)]"
-                                    >
-                                      ×
-                                    </button>
-                                  </td>
-                                )}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                    );
+                  })()}
+
+                  {block.type === 'key_term' && (
+                    <div className="my-1.5 flex items-start gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5">
+                      <div className="grid flex-1 gap-2 sm:grid-cols-12">
+                        <input
+                          ref={(el) => registerInputRef(block.id, el)}
+                          type="text"
+                          value={block.text}
+                          onFocus={() => setFocusedBlockId(block.id)}
+                          onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            updateBlock(block.id, { text: val });
+                            setSlashBlockId(val.startsWith('/') ? block.id : null);
+                          }}
+                          placeholder="Key Term"
+                          className="rounded-lg border border-transparent bg-[var(--card)] px-3 py-2 text-sm font-bold text-[var(--ink)] outline-none focus:border-[var(--e3)] sm:col-span-4"
+                        />
+                        <AutoGrowTextarea
+                          value={block.extra || ''}
+                          minHeight={36}
+                          onFocus={() => setFocusedBlockId(block.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              insertBlockAfter(idx, 'key_term');
+                            }
+                          }}
+                          onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                          placeholder="Clear exam definition…"
+                          className="rounded-lg border border-transparent bg-[var(--card)] px-3 py-2 text-sm leading-snug text-[var(--ink)] focus:border-[var(--e3)] sm:col-span-8"
+                        />
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => deleteBlockAt(idx)}
+                        aria-label="Remove Key Term"
+                        className="mt-2 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                      >
+                        <X className="h-4 w-4" aria-hidden="true" />
+                      </button>
                     </div>
-                  );
-                })()}
+                  )}
 
-                {block.type === 'key_term' && (
-                  <div className="grid gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5 sm:grid-cols-12">
-                    <input
-                      ref={(el) => registerInputRef(block.id, el)}
-                      type="text"
-                      value={block.text}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        updateBlock(block.id, { text: val });
-                        setSlashBlockId(val.startsWith('/') ? block.id : null);
-                      }}
-                      placeholder="Key Term"
-                      className="rounded-lg border border-transparent bg-[var(--card)] px-2.5 py-1.5 text-xs font-bold text-[var(--ink)] outline-none focus:border-[var(--e3)] sm:col-span-4"
-                    />
-                    <input
-                      type="text"
-                      value={block.extra || ''}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          insertBlockAfter(idx, 'key_term');
-                        }
-                      }}
-                      onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
-                      placeholder="Clear exam definition…"
-                      className="rounded-lg border border-transparent bg-[var(--card)] px-2.5 py-1.5 text-xs text-[var(--ink)] outline-none focus:border-[var(--e3)] sm:col-span-8"
-                    />
-                  </div>
-                )}
-
-                {block.type === 'worked_example' && (
-                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
-                    <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--ok)]">
-                      Worked Example
-                    </div>
-                    <AutoGrowTextarea
-                      inputRef={(el) => registerInputRef(block.id, el)}
-                      value={block.text}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                      onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder="Step-by-step calculation, quote analysis, or model answer…"
-                      className="text-sm leading-relaxed text-[var(--ink)] placeholder:text-[var(--mute)]/60"
-                    />
-                  </div>
-                )}
-
-                {block.type === 'exam_tip' && (
-                  <div className="rounded-xl border border-[var(--e2)] bg-[var(--bg)] p-3.5">
-                    <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--e2)]">
-                      Examiner Tip
-                    </div>
-                    <AutoGrowTextarea
-                      inputRef={(el) => registerInputRef(block.id, el)}
-                      value={block.text}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                      onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder="Common mark-scheme mistake or phrase to remember…"
-                      className="text-sm leading-relaxed text-[var(--ink)] placeholder:text-[var(--mute)]/60"
-                    />
-                  </div>
-                )}
-
-                {/* Inline Slash Command Menu */}
-                {showSlash && (
-                  <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-76 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
-                    <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                      Insert Block
-                    </div>
-                    {filteredSlashOptions.length === 0 ? (
-                      <div className="px-2.5 py-2 text-xs text-[var(--mute)]">
-                        No matching block
-                      </div>
-                    ) : (
-                      filteredSlashOptions.map((opt, optIdx) => (
+                  {block.type === 'worked_example' && (
+                    <div className="my-2 rounded-r-xl border border-[var(--line)] border-l-4 border-l-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_5%,var(--bg))] px-4 py-3.5">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-[var(--ok)]">
+                          Worked Example
+                        </span>
                         <button
-                          key={opt.type}
                           type="button"
-                          onClick={() => changeBlockType(block.id, opt.type, true)}
-                          className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                            optIdx === slashHighlightIdx
-                              ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))]'
-                              : 'hover:bg-[var(--bg)]'
-                          }`}
+                          onClick={() => deleteBlockAt(idx)}
+                          aria-label="Remove Worked Example"
+                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                         >
-                          <span className="mt-0.5 text-[var(--e3)]">
-                            {blockTypeIcon(opt.type)}
-                          </span>
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold text-[var(--ink)]">{opt.label}</div>
-                            <div className="truncate text-[11px] text-[var(--mute)]">
-                              {opt.hint}
-                            </div>
-                          </div>
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
                         </button>
-                      ))
-                    )}
-                  </div>
-                )}
+                      </div>
+                      <AutoGrowTextarea
+                        inputRef={(el) => registerInputRef(block.id, el)}
+                        value={block.text}
+                        minHeight={36}
+                        onFocus={() => setFocusedBlockId(block.id)}
+                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
+                        placeholder="Step-by-step calculation, quote analysis, or model answer…"
+                        className="text-[15.5px] leading-[1.68] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                      />
+                    </div>
+                  )}
+
+                  {block.type === 'exam_tip' && (
+                    <div className="my-2 rounded-r-xl border border-[color-mix(in_srgb,var(--e2)_45%,var(--line))] border-l-4 border-l-[var(--e2)] bg-[color-mix(in_srgb,var(--e2)_6%,var(--bg))] px-4 py-3.5">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-[var(--e2)]">
+                          Examiner Tip
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => deleteBlockAt(idx)}
+                          aria-label="Remove Examiner Tip"
+                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                        >
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                      <AutoGrowTextarea
+                        inputRef={(el) => registerInputRef(block.id, el)}
+                        value={block.text}
+                        minHeight={36}
+                        onFocus={() => setFocusedBlockId(block.id)}
+                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
+                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
+                        placeholder="Common mark-scheme mistake or phrase examiners reward…"
+                        className="text-[15.5px] leading-[1.68] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
+                      />
+                    </div>
+                  )}
+
+                  {/* Inline Slash Command Menu */}
+                  {showSlash && (
+                    <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-76 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
+                      <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Insert Block
+                      </div>
+                      {filteredSlashOptions.length === 0 ? (
+                        <div className="px-2.5 py-2 text-xs text-[var(--mute)]">
+                          No matching block
+                        </div>
+                      ) : (
+                        filteredSlashOptions.map((opt, optIdx) => (
+                          <button
+                            key={opt.type}
+                            type="button"
+                            onClick={() => changeBlockType(block.id, opt.type, true)}
+                            className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                              optIdx === slashHighlightIdx
+                                ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))]'
+                                : 'hover:bg-[var(--bg)]'
+                            }`}
+                          >
+                            <span className="mt-0.5 text-[var(--e3)]">
+                              {blockTypeIcon(opt.type)}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-[var(--ink)]">{opt.label}</div>
+                              <div className="truncate text-[11px] text-[var(--mute)]">
+                                {opt.hint}
+                              </div>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
 
-        {/* Notion-style Click-Below-To-Continue Area */}
-        <div
-          onClick={() => {
-            const last = blocks[blocks.length - 1];
-            if (
-              last &&
-              (last.type === 'paragraph' || last.type === 'bullet') &&
-              !last.text.trim()
-            ) {
-              focusBlock(last.id);
-            } else {
-              insertBlockAfter(blocks.length - 1, 'paragraph', '');
-            }
-          }}
-          className="flex min-h-[68px] cursor-text items-center justify-center rounded-xl border border-dashed border-transparent px-4 text-xs text-[var(--mute)]/60 transition-colors hover:border-[var(--line)] hover:text-[var(--mute)]"
-        >
-          Click anywhere below to continue writing…
+          {/* Spacious Word Click-Below-To-Write Area */}
+          <div
+            onClick={() => {
+              const last = blocks[blocks.length - 1];
+              if (
+                last &&
+                (last.type === 'paragraph' || last.type === 'bullet') &&
+                !last.text.trim()
+              ) {
+                focusBlock(last.id);
+              } else {
+                insertBlockAfter(blocks.length - 1, 'paragraph', '');
+              }
+            }}
+            className="mt-4 flex min-h-[96px] cursor-text items-center justify-center rounded-xl border border-dashed border-transparent px-4 text-sm text-[var(--mute)]/55 transition-colors hover:border-[var(--line)] hover:text-[var(--mute)]"
+          >
+            Click anywhere below to continue writing…
+          </div>
         </div>
-      </div>
-
-      {/* Bottom Quick-Insert Bar & Manual Make Flashcards CTA */}
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 inline-flex items-center gap-1 text-xs font-semibold text-[var(--mute)]">
-            <Sparkles className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-            <span>Add:</span>
-          </span>
-          {(
-            [
-              ['heading', 'Heading'],
-              ['subheading', 'Subheading'],
-              ['bullet', 'Bullet'],
-              ['paragraph', 'Text'],
-              ['factbox', 'Fact Box'],
-              ['flow', 'Flow Diagram'],
-              ['table', 'Table'],
-              ['key_term', 'Key Term'],
-              ['worked_example', 'Example'],
-              ['exam_tip', 'Examiner Tip'],
-            ] as const
-          ).map(([type, label]) => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => insertBlockAfter(blocks.length - 1, type)}
-              className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
-            >
-              + {label}
-            </button>
-          ))}
-        </div>
-
-        <button
-          type="button"
-          onClick={onMakeFlashcards}
-          className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
-        >
-          <Layers className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Make Flashcards{validTermsCount > 0 ? ` (${validTermsCount} terms)` : ''}</span>
-        </button>
       </div>
     </div>
   );

@@ -51,6 +51,7 @@ import {
   signInWithGoogleDocs,
 } from '../lib/googleDocsImport';
 import {
+  assessExistingFormattingQuality,
   AutoFormatOptions,
   createEmptyStructuredNote,
   groupSectionPoints,
@@ -253,6 +254,7 @@ export function UniversalImportModal({
   const [fetchingUrl, setFetchingUrl] = useState(false);
   const [aiFormatting, setAiFormatting] = useState(false);
   const [aiFormattedApplied, setAiFormattedApplied] = useState(false);
+  const [keptGoodFormatNotice, setKeptGoodFormatNotice] = useState(false);
   const [aiProgressText, setAiProgressText] = useState<string | null>(null);
   const [aiElapsedMs, setAiElapsedMs] = useState(0);
   const aiAbortRef = useRef<AbortController | null>(null);
@@ -271,6 +273,11 @@ export function UniversalImportModal({
     if (!t.startsWith('{') && !t.startsWith('[')) return null;
     return parseBackupJsonToWorkspace(t);
   }, [rawText]);
+
+  const existingFormatQuality = useMemo(
+    () => assessExistingFormattingQuality(rawText),
+    [rawText]
+  );
 
   const parsedPreview = useMemo(() => {
     if (!rawText.trim() && !preExtractedCards?.length && !originalHtml) return null;
@@ -365,6 +372,7 @@ export function UniversalImportModal({
     );
     setDraftTimeline(parsedPreview.timelineEvents.map((ev) => ({ ...ev })));
     setAiFormattedApplied(false);
+    setKeptGoodFormatNotice(false);
 
     const selectedSubj = workspace.subjects.find((s) => s.id === targetSubjectId);
     const looksLikeHistory =
@@ -947,7 +955,7 @@ export function UniversalImportModal({
     }
   };
 
-  const handleAiAutoformat = async () => {
+  const handleAiAutoformat = async (forceRewrite = false) => {
     if (!byokConfig) {
       setErrorMsg(
         'AI Autoformat requires your own API key. Add one in Account & Data (the website key is strictly for Live Quiz marking).'
@@ -956,6 +964,14 @@ export function UniversalImportModal({
     }
     if (!rawText.trim()) return;
 
+    // If notes are already cleanly formatted, preserve them cleanly with 0 tokens unless forced
+    if (!forceRewrite && existingFormatQuality.isGood) {
+      setKeptGoodFormatNotice(true);
+      setPreviewNotesMode(originalHtml && preferOriginalFormat ? 'original' : 'visual');
+      setStatusNote(`${existingFormatQuality.reason} — kept existing layout (0 AI tokens used).`);
+      return;
+    }
+
     aiAbortRef.current?.abort();
     const controller = new AbortController();
     aiAbortRef.current = controller;
@@ -963,6 +979,7 @@ export function UniversalImportModal({
     const startedAt = Date.now();
 
     setAiFormatting(true);
+    setKeptGoodFormatNotice(false);
     setAiProgressText('Compacting notes & connecting…');
     setErrorMsg(null);
     setStatusNote(null);
@@ -989,6 +1006,7 @@ export function UniversalImportModal({
           includeTimeline: wantsTimeline,
           detectFlowDiagrams: formatOptions.detectFlowDiagrams !== false,
           autoTables: formatOptions.autoTables !== false,
+          forceRewrite,
           stream: true,
           byok: byokConfig,
         }),
@@ -1021,6 +1039,7 @@ export function UniversalImportModal({
 
       let formattedResult: FormattedData | undefined;
       let usageResult: UsageData | undefined;
+      let keptExisting = false;
 
       const contentType = res.headers.get('content-type') || '';
       if (res.ok && contentType.includes('text/event-stream') && res.body) {
@@ -1049,6 +1068,7 @@ export function UniversalImportModal({
               chars?: number;
               formatted?: FormattedData;
               usage?: UsageData;
+              keptExistingFormat?: boolean;
               error?: string;
             } = {};
             try {
@@ -1068,6 +1088,7 @@ export function UniversalImportModal({
             } else if (ev.type === 'done') {
               formattedResult = ev.formatted;
               usageResult = ev.usage;
+              keptExisting = Boolean(ev.keptExistingFormat);
             }
           }
         }
@@ -1075,6 +1096,7 @@ export function UniversalImportModal({
         const data = await parseJsonResponseSafe<{
           formatted?: FormattedData;
           usage?: UsageData;
+          keptExistingFormat?: boolean;
           error?: string;
         }>(res, 'AI Autoformat');
 
@@ -1083,6 +1105,7 @@ export function UniversalImportModal({
         }
         formattedResult = data.formatted;
         usageResult = data.usage;
+        keptExisting = Boolean(data.keptExistingFormat);
       }
 
       if (!formattedResult) {
@@ -1136,14 +1159,17 @@ export function UniversalImportModal({
         );
       }
 
-      setAiFormattedApplied(true);
+      setAiFormattedApplied(!keptExisting);
+      setKeptGoodFormatNotice(keptExisting);
       setPreferOriginalFormat(false);
       setPreviewNotesMode('visual');
       const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
       const u = usageResult;
       const cacheNote = u?.cachedTokens ? ` · ${u.cachedTokens} cached` : '';
       setStatusNote(
-        u
+        keptExisting
+          ? 'Format is already good — kept existing layout (0 AI tokens used).'
+          : u
           ? `AI Autoformatted in ${elapsedSec}s (${u.model}${u.totalTokens ? ` · ${u.totalTokens} tokens` : ''}${cacheNote}).`
           : `AI Autoformatted in ${elapsedSec}s using your personal API key.`
       );
@@ -2109,7 +2135,7 @@ export function UniversalImportModal({
                           <button
                             type="button"
                             disabled={aiFormatting}
-                            onClick={() => void handleAiAutoformat()}
+                            onClick={() => void handleAiAutoformat(false)}
                             className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
                           >
                             {aiFormatting ? (
@@ -2120,11 +2146,22 @@ export function UniversalImportModal({
                             <span className="font-mono-num">
                               {aiFormatting
                                 ? `Formatting… ${(aiElapsedMs / 1000).toFixed(1)}s`
+                                : existingFormatQuality.isGood && !aiFormattedApplied
+                                ? 'Format Already Good (Keep)'
                                 : aiFormattedApplied
                                 ? 'Re-run AI Autoformat'
                                 : 'AI Autoformat (Your Key)'}
                             </span>
                           </button>
+                          {(keptGoodFormatNotice || (existingFormatQuality.isGood && !aiFormattedApplied)) && !aiFormatting && (
+                            <button
+                              type="button"
+                              onClick={() => void handleAiAutoformat(true)}
+                              className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                            >
+                              Rewrite Anyway
+                            </button>
+                          )}
                           {aiFormatting && (
                             <button
                               type="button"

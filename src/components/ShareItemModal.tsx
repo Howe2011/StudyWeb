@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import { Check, Copy, Globe, Link2, Lock, Share2, X } from 'lucide-react';
 import { publishSharedItem } from '../lib/communityService';
@@ -9,7 +9,14 @@ import {
   SharedNotesPayload,
   SharedStudyItem,
   SharedSubjectPayload,
+  StudyTopic,
 } from '../types';
+
+export interface SubTopicShareOption {
+  topic: StudyTopic;
+  depth: number;
+  itemCount: number;
+}
 
 export interface ShareTargetConfig {
   type: SharedItemType;
@@ -18,6 +25,8 @@ export interface ShareTargetConfig {
   examBoard: string;
   defaultSummary: string;
   itemCount: number;
+  rootTopicOldId?: string;
+  subTopicShareOptions?: SubTopicShareOption[];
   notesPayload?: SharedNotesPayload;
   flashcardsPayload?: SharedFlashcardsPayload;
   subjectPayload?: SharedSubjectPayload;
@@ -33,6 +42,8 @@ interface ShareItemModalProps {
   onPublished: (item: SharedStudyItem) => void;
 }
 
+const MAX_SHARE_PAYLOAD_BYTES = 390_000;
+
 export function ShareItemModal({
   open,
   onClose,
@@ -45,6 +56,7 @@ export function ShareItemModal({
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [visibility, setVisibility] = useState<SharedItemVisibility>('public');
+  const [selectedSubTopicIds, setSelectedSubTopicIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [publishedItem, setPublishedItem] = useState<SharedStudyItem | null>(null);
@@ -55,11 +67,63 @@ export function ShareItemModal({
       setTitle(target.defaultTitle);
       setSummary(target.defaultSummary);
       setVisibility('public');
+      setSelectedSubTopicIds(
+        new Set((target.subTopicShareOptions || []).map((opt) => opt.topic.id))
+      );
       setPublishedItem(null);
       setErrorMsg(null);
       setCopiedLink(false);
     }
   }, [open, target]);
+
+  const subTopicOptions = target?.subTopicShareOptions || [];
+
+  const selectedSubTopics = useMemo(
+    () => subTopicOptions.filter((opt) => selectedSubTopicIds.has(opt.topic.id)),
+    [subTopicOptions, selectedSubTopicIds]
+  );
+
+  const resolvedItemCount = useMemo(() => {
+    if (!target) return 0;
+    return (
+      target.itemCount + selectedSubTopics.reduce((sum, opt) => sum + opt.itemCount, 0)
+    );
+  }, [target, selectedSubTopics]);
+
+  const resolvedNotesPayload = useMemo<SharedNotesPayload | undefined>(() => {
+    if (!target || target.type !== 'notes' || !target.notesPayload) return target?.notesPayload;
+    return {
+      ...target.notesPayload,
+      ...(target.rootTopicOldId ? { topicOldId: target.rootTopicOldId } : {}),
+      subTopics:
+        selectedSubTopics.length > 0
+          ? selectedSubTopics.map((opt) => ({
+              oldId: opt.topic.id,
+              parentOldId: opt.topic.parentTopicId,
+              topicName: opt.topic.name,
+              specCode: opt.topic.specCode,
+              tags: opt.topic.tags,
+              notes: opt.topic.notes,
+              timelineEvents: opt.topic.timelineEvents,
+            }))
+          : undefined,
+    };
+  }, [target, selectedSubTopics]);
+
+  const estimatedPayloadBytes = useMemo(() => {
+    if (!target) return 0;
+    try {
+      return JSON.stringify({
+        notesPayload: resolvedNotesPayload,
+        flashcardsPayload: target.flashcardsPayload,
+        subjectPayload: target.subjectPayload,
+      }).length;
+    } catch {
+      return 0;
+    }
+  }, [target, resolvedNotesPayload]);
+
+  const isOverSizeLimit = estimatedPayloadBytes > MAX_SHARE_PAYLOAD_BYTES;
 
   if (!open || !target) return null;
 
@@ -78,9 +142,18 @@ export function ShareItemModal({
     }
   };
 
+  const toggleSubTopic = (id: string) => {
+    setSelectedSubTopicIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const handlePublish = async (e: FormEvent) => {
     e.preventDefault();
-    if (!firebaseUser) return;
+    if (!firebaseUser || isOverSizeLimit) return;
     setErrorMsg(null);
     setBusy(true);
     try {
@@ -93,8 +166,8 @@ export function ShareItemModal({
         examBoard: target.examBoard,
         summary: summary.trim() || target.defaultSummary,
         visibility,
-        itemCount: target.itemCount,
-        notesPayload: target.notesPayload,
+        itemCount: resolvedItemCount,
+        notesPayload: resolvedNotesPayload,
         flashcardsPayload: target.flashcardsPayload,
         subjectPayload: target.subjectPayload,
       });
@@ -135,7 +208,12 @@ export function ShareItemModal({
                   }`}
             </h2>
             <p className="mt-0.5 text-xs text-[var(--mute)]">
-              {target.subjectName} · {target.itemCount} items
+              {target.subjectName} · {resolvedItemCount} items
+              {selectedSubTopics.length > 0
+                ? ` (+${selectedSubTopics.length} sub-topic${
+                    selectedSubTopics.length === 1 ? '' : 's'
+                  })`
+                : ''}
             </p>
           </div>
           <button
@@ -148,7 +226,7 @@ export function ShareItemModal({
           </button>
         </div>
 
-        <div className="p-5">
+        <div className="max-h-[82dvh] overflow-y-auto p-5">
           {!firebaseUser ? (
             <div className="space-y-4 text-sm">
               <p className="leading-relaxed text-[var(--mute)]">
@@ -214,6 +292,14 @@ export function ShareItemModal({
                 </div>
               )}
 
+              {isOverSizeLimit && (
+                <div className="rounded-lg border border-[var(--bad)] bg-[var(--bg)] px-3 py-2 text-xs font-semibold text-[var(--bad)]">
+                  Selected notes &amp; embedded formatting exceed the 400 KB share limit (~
+                  {Math.round(estimatedPayloadBytes / 1024)} KB). Uncheck some sub-topics or remove
+                  large embedded images.
+                </div>
+              )}
+
               <label className="block text-xs font-semibold text-[var(--mute)]">
                 Title *
                 <input
@@ -237,6 +323,78 @@ export function ShareItemModal({
                   className="sd-input mt-1 text-sm"
                 />
               </label>
+
+              {target.type === 'notes' && subTopicOptions.length > 0 && (
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2">
+                    <div className="text-xs font-bold text-[var(--ink)]">
+                      Sub-topics Included ({selectedSubTopics.length}/{subTopicOptions.length})
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedSubTopicIds(
+                            new Set(subTopicOptions.map((opt) => opt.topic.id))
+                          )
+                        }
+                        className={`sd-btn px-2 py-0.5 text-[11px] whitespace-nowrap ${
+                          selectedSubTopics.length === subTopicOptions.length
+                            ? 'border-[var(--e3)] text-[var(--e3)] font-bold'
+                            : ''
+                        }`}
+                      >
+                        All Sub-topics ({subTopicOptions.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSubTopicIds(new Set())}
+                        className={`sd-btn px-2 py-0.5 text-[11px] whitespace-nowrap ${
+                          selectedSubTopics.length === 0
+                            ? 'border-[var(--e3)] text-[var(--e3)] font-bold'
+                            : ''
+                        }`}
+                      >
+                        Parent Only
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">
+                    {subTopicOptions.map((opt) => {
+                      const checked = selectedSubTopicIds.has(opt.topic.id);
+                      const indentPx = Math.max(0, opt.depth - 1) * 14;
+                      return (
+                        <label
+                          key={opt.topic.id}
+                          style={{ paddingLeft: `${indentPx + 6}px` }}
+                          className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors ${
+                            checked
+                              ? 'bg-[color-mix(in_srgb,var(--e3)_9%,var(--card))] text-[var(--ink)]'
+                              : 'text-[var(--mute)] hover:bg-[var(--card)]'
+                          }`}
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleSubTopic(opt.topic.id)}
+                              className="h-3.5 w-3.5 shrink-0 accent-[var(--e3)]"
+                            />
+                            <span className="truncate font-medium">
+                              {opt.topic.specCode ? `${opt.topic.specCode} · ` : ''}
+                              {opt.topic.name}
+                            </span>
+                          </span>
+                          <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
+                            {opt.itemCount}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <div className="mb-1.5 text-xs font-semibold text-[var(--mute)]">Visibility</div>
@@ -280,8 +438,8 @@ export function ShareItemModal({
                 </button>
                 <button
                   type="submit"
-                  disabled={busy}
-                  className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+                  disabled={busy || isOverSizeLimit}
+                  className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap disabled:opacity-50"
                 >
                   {visibility === 'public' ? (
                     <Share2 className="h-3.5 w-3.5" aria-hidden="true" />

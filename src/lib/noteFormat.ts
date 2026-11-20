@@ -148,6 +148,118 @@ function isBoilerplateNoiseLine(line: string): boolean {
   return false;
 }
 
+export interface FormattingQualityReport {
+  isGood: boolean;
+  reason: string;
+  headingsCount: number;
+  structuredPointsCount: number;
+  hasTablesOrFlows: boolean;
+}
+
+/**
+ * Checks whether pasted/imported notes ALREADY have clean, readable revision structure
+ * (clear headings, balanced bullets/sub-bullets, tables/flows/fact boxes, and no massive prose walls
+ * or raw webpage chrome). If true, autoformatting should keep the existing structure intact!
+ */
+export function assessExistingFormattingQuality(rawInput: string): FormattingQualityReport {
+  const normalized = String(rawInput || '').replace(/\u00a0/g, ' ').replace(/\r/g, '').trim();
+  if (!normalized) {
+    return {
+      isGood: false,
+      reason: 'Empty text',
+      headingsCount: 0,
+      structuredPointsCount: 0,
+      hasTablesOrFlows: false,
+    };
+  }
+
+  const lines = normalized
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0);
+
+  if (lines.length < 4) {
+    return {
+      isGood: false,
+      reason: 'Too few lines to evaluate',
+      headingsCount: 0,
+      structuredPointsCount: 0,
+      hasTablesOrFlows: false,
+    };
+  }
+
+  let headingsCount = 0;
+  let subheadingsCount = 0;
+  let bulletsCount = 0;
+  let tablesOrFlows = 0;
+  let noiseCount = 0;
+  let denseBlobCount = 0;
+  let nonEmptyChars = 0;
+
+  for (const rawLine of lines) {
+    const t = rawLine.trim();
+    nonEmptyChars += t.length;
+
+    if (isBoilerplateNoiseLine(t)) {
+      noiseCount++;
+      continue;
+    }
+
+    if (/^#{1,2}\s+\S/.test(t)) {
+      headingsCount++;
+      continue;
+    }
+    if (/^###\s+\S/.test(t)) {
+      subheadingsCount++;
+      continue;
+    }
+    if (/^\|.+\|$/.test(t) || /^⇒\s+/.test(t) || /^📌\s+/.test(t)) {
+      tablesOrFlows++;
+      continue;
+    }
+    if (/^(?:[-*•▪◦‣↳]|\d+[.)])\s+\S/.test(t)) {
+      bulletsCount++;
+      continue;
+    }
+    if (t.length > 360) {
+      denseBlobCount++;
+    }
+  }
+
+  const totalHeadings = headingsCount + subheadingsCount;
+  const structuredPointsCount = bulletsCount + tablesOrFlows;
+  const avgLineLen = nonEmptyChars / Math.max(1, lines.length);
+  const hasGoodDensity = denseBlobCount === 0 && avgLineLen <= 165;
+  const cleanRatio = noiseCount / Math.max(1, lines.length) <= 0.12;
+
+  const isShortClean =
+    normalized.length < 900 &&
+    totalHeadings >= 1 &&
+    structuredPointsCount >= 3 &&
+    hasGoodDensity &&
+    cleanRatio;
+
+  const isMultiSectionClean =
+    totalHeadings >= 2 &&
+    structuredPointsCount >= 4 &&
+    hasGoodDensity &&
+    cleanRatio;
+
+  const isGood = isShortClean || isMultiSectionClean;
+
+  return {
+    isGood,
+    reason: isGood
+      ? `Already cleanly formatted (${totalHeadings} headings, ${bulletsCount} bullets${tablesOrFlows ? `, ${tablesOrFlows} tables/visuals` : ''})`
+      : denseBlobCount > 0
+      ? 'Contains dense prose walls that benefit from structuring'
+      : 'Needs headings and structured layout',
+    headingsCount: totalHeadings,
+    structuredPointsCount,
+    hasTablesOrFlows: tablesOrFlows > 0,
+  };
+}
+
 /**
  * Normalizes Setext headings, strips web/PDF boilerplate, detects multi-space tables,
  * preserves bullet hierarchy, and splits dense walls of text safely.
@@ -205,13 +317,13 @@ function preprocessPlainStudyText(
       }
     }
 
-    // Split dense prose paragraphs (> 240 chars or 3+ sentences) when splitDenseParagraphs is enabled
+    // Split dense prose paragraphs (> 260 chars with 2+ sentences) when splitDenseParagraphs is enabled
     if (
       opts.splitDenseParagraphs !== false &&
-      trimmed.length > 230 &&
+      trimmed.length > 260 &&
       !trimmed.startsWith('|') &&
       !trimmed.startsWith('#') &&
-      !/^(?:[-*•▪◦‣]|\d+[.)])\s+/.test(trimmed)
+      !/^(?:[-*•▪◦‣↳⇒📌¶]|\d+[.)])\s+/.test(trimmed)
     ) {
       const sentences = splitRespectingAbbreviations(trimmed);
       if (sentences.length >= 2) {
@@ -321,8 +433,12 @@ export function parseTextIntoStructuredNote(
   const detectFlows = options.detectFlowDiagrams !== false || preset === 'timeline-causal';
   const buildAutoTables = options.autoTables !== false;
   const strictHeadings = Boolean(options.strictHeadings);
+  const existingQuality = assessExistingFormattingQuality(rawInput);
 
-  const text = preprocessPlainStudyText(rawInput, options);
+  const text = preprocessPlainStudyText(rawInput, {
+    ...options,
+    splitDenseParagraphs: existingQuality.isGood ? false : options.splitDenseParagraphs,
+  });
   const sections: NoteSectionBlock[] = [];
   const keyTerms: KeyTermPair[] = [];
   const extractedCards: Array<{ q: string; a: string; sectionName: string }> = [];

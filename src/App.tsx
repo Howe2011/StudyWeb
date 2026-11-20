@@ -50,6 +50,7 @@ import {
 import {
   addLoggedStudyMinutes,
   buildDeckSnapshot,
+  buildTopicTreeList,
   clearWorkspaceLocal,
   convertLegacyEntriesToWorkspace,
   createEmptyWorkspace,
@@ -65,6 +66,7 @@ import {
   DecryptedProfile,
   LiveTimerState,
   PlannerSubTab,
+  StudyTopic,
   UserAccountDoc,
   UserActivityDoc,
   UserDeviceDoc,
@@ -573,9 +575,36 @@ export default function App() {
       const subj = workspace.subjects.find((s) => s.id === subjectId);
       const topic = workspace.topics.find((t) => t.id === topicId);
       if (!subj || !topic) return;
-      const count =
-        topic.notes.sections.reduce((acc, s) => acc + s.points.length, 0) +
-        topic.notes.keyTerms.length;
+
+      const countTopicItems = (t: StudyTopic) =>
+        Math.max(
+          1,
+          t.notes.sections.reduce((acc, s) => acc + s.points.length, 0) +
+            t.notes.keyTerms.length
+        );
+
+      const subjTree = buildTopicTreeList(
+        workspace.topics.filter((t) => t.subjectId === subjectId)
+      );
+      const rootIdx = subjTree.findIndex((n) => n.topic.id === topicId);
+      const subTopicShareOptions: Array<{
+        topic: StudyTopic;
+        depth: number;
+        itemCount: number;
+      }> = [];
+      if (rootIdx !== -1) {
+        const rootDepth = subjTree[rootIdx].depth;
+        for (let i = rootIdx + 1; i < subjTree.length; i++) {
+          if (subjTree[i].depth <= rootDepth) break;
+          subTopicShareOptions.push({
+            topic: subjTree[i].topic,
+            depth: subjTree[i].depth - rootDepth,
+            itemCount: countTopicItems(subjTree[i].topic),
+          });
+        }
+      }
+
+      const count = countTopicItems(topic);
 
       setShareTarget({
         type: 'notes',
@@ -585,9 +614,13 @@ export default function App() {
         defaultSummary:
           topic.notes.summary ||
           `Structured revision notes for ${subj.name}: ${topic.name}.`,
-        itemCount: Math.max(1, count),
+        itemCount: count,
+        rootTopicOldId: topic.id,
+        subTopicShareOptions,
         notesPayload: {
           topicName: topic.name,
+          topicOldId: topic.id,
+          specCode: topic.specCode,
           notes: topic.notes,
           timelineEvents: topic.timelineEvents,
         },

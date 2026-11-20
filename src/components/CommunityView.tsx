@@ -311,6 +311,7 @@ export function CommunityView({
   const [codeSearching, setCodeSearching] = useState(false);
   const [previewItem, setPreviewItem] = useState<SharedStudyItem | null>(null);
   const [previewTopicIdx, setPreviewTopicIdx] = useState<number>(0);
+  const [previewSubTopicIdx, setPreviewSubTopicIdx] = useState<number>(-1);
   const [previewCardSearch, setPreviewCardSearch] = useState('');
   const [statusBanner, setStatusBanner] = useState<{ ok: boolean; msg: string } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -324,6 +325,7 @@ export function CommunityView({
 
   useEffect(() => {
     setPreviewTopicIdx(0);
+    setPreviewSubTopicIdx(-1);
     setPreviewCardSearch('');
   }, [previewItem?.id]);
 
@@ -707,8 +709,17 @@ export function CommunityView({
                     <h2 className="font-display mt-2 text-base font-bold text-[var(--ink)]">
                       {item.title}
                     </h2>
-                    <div className="mt-0.5 text-xs font-semibold text-[var(--mute)]">
-                      {item.subjectName} · {item.examBoard}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-semibold text-[var(--mute)]">
+                      <span>
+                        {item.subjectName} · {item.examBoard}
+                      </span>
+                      {item.type === 'notes' &&
+                        (item.notesPayload?.subTopics?.length || 0) > 0 && (
+                          <span className="font-bold text-[var(--e3)]">
+                            +{item.notesPayload!.subTopics!.length} sub-topic
+                            {item.notesPayload!.subTopics!.length === 1 ? '' : 's'}
+                          </span>
+                        )}
                     </div>
                     {item.summary && (
                       <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-[var(--mute)]">
@@ -794,6 +805,13 @@ export function CommunityView({
                 </h2>
                 <div className="text-xs text-[var(--mute)]">
                   {previewItem.subjectName} · {previewItem.examBoard} · Shared by {previewItem.ownerName}
+                  {previewItem.type === 'notes' &&
+                    (previewItem.notesPayload?.subTopics?.length || 0) > 0 && (
+                      <span className="ml-1.5 font-bold text-[var(--e3)]">
+                        · +{previewItem.notesPayload!.subTopics!.length} sub-topic
+                        {previewItem.notesPayload!.subTopics!.length === 1 ? '' : 's'}
+                      </span>
+                    )}
                 </div>
               </div>
               <button
@@ -807,12 +825,59 @@ export function CommunityView({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              {previewItem.type === 'notes' && previewItem.notesPayload && (
-                <StructuredNoteReader
-                  notes={previewItem.notesPayload.notes}
-                  timelineEvents={previewItem.notesPayload.timelineEvents}
-                />
-              )}
+              {previewItem.type === 'notes' && previewItem.notesPayload && (() => {
+                const subTopics = previewItem.notesPayload.subTopics || [];
+                const activeSub =
+                  previewSubTopicIdx >= 0 && previewSubTopicIdx < subTopics.length
+                    ? subTopics[previewSubTopicIdx]
+                    : null;
+                return (
+                  <div className="space-y-4">
+                    {subTopics.length > 0 && (
+                      <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                        <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                          Included Topics ({subTopics.length + 1}) · Preview before copying
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewSubTopicIdx(-1)}
+                            className={`sd-btn px-3 py-1.5 text-xs ${
+                              previewSubTopicIdx === -1
+                                ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] font-bold text-[var(--ink)]'
+                                : 'text-[var(--mute)]'
+                            }`}
+                          >
+                            Main: {previewItem.notesPayload.topicName}
+                          </button>
+                          {subTopics.map((st, idx) => (
+                            <button
+                              key={st.oldId || idx}
+                              type="button"
+                              onClick={() => setPreviewSubTopicIdx(idx)}
+                              className={`sd-btn px-3 py-1.5 text-xs ${
+                                previewSubTopicIdx === idx
+                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] font-bold text-[var(--ink)]'
+                                  : 'text-[var(--mute)]'
+                              }`}
+                            >
+                              ↳ {st.topicName}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <StructuredNoteReader
+                      notes={activeSub ? activeSub.notes : previewItem.notesPayload.notes}
+                      timelineEvents={
+                        activeSub
+                          ? activeSub.timelineEvents
+                          : previewItem.notesPayload.timelineEvents
+                      }
+                    />
+                  </div>
+                );
+              })()}
 
               {previewItem.type === 'flashcards' && previewItem.flashcardsPayload && (
                 <div className="space-y-3">

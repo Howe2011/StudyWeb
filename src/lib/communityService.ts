@@ -285,10 +285,12 @@ export function copySharedItemIntoWorkspace(
       ? `${topicName} (Shared)`
       : topicName;
 
+    const nowIso = new Date().toISOString();
     const newTopic: StudyTopic = {
       id: makeId('top'),
       subjectId: subj.id,
       name: uniqueName,
+      specCode: item.notesPayload.specCode,
       notes: {
         ...createEmptyStructuredNote(),
         ...item.notesPayload.notes,
@@ -300,18 +302,69 @@ export function copySharedItemIntoWorkspace(
           ...kt,
           id: makeNoteId('term'),
         })),
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso,
       },
       timelineEvents: item.notesPayload.timelineEvents?.map((ev) => ({
         ...ev,
         id: makeId('tl'),
       })),
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
     };
     next.topics.push(newTopic);
+
+    const bundledSubs = Array.isArray(item.notesPayload.subTopics)
+      ? item.notesPayload.subTopics
+      : [];
+    if (bundledSubs.length > 0) {
+      const idMap = new Map<string, string>();
+      if (item.notesPayload.topicOldId) {
+        idMap.set(item.notesPayload.topicOldId, newTopic.id);
+      }
+      for (const st of bundledSubs) {
+        if (st.oldId) idMap.set(st.oldId, makeId('top'));
+      }
+      for (const st of bundledSubs) {
+        const subId = (st.oldId && idMap.get(st.oldId)) || makeId('top');
+        const resolvedParentId =
+          (st.parentOldId && idMap.get(st.parentOldId)) || newTopic.id;
+        next.topics.push({
+          id: subId,
+          subjectId: subj.id,
+          parentTopicId: resolvedParentId,
+          name: st.topicName || 'Sub-topic',
+          specCode: st.specCode,
+          tags: st.tags ? [...st.tags] : undefined,
+          notes: {
+            ...createEmptyStructuredNote(),
+            ...st.notes,
+            sections: (st.notes.sections || []).map((sec) => ({
+              ...sec,
+              id: makeNoteId('sec'),
+            })),
+            keyTerms: (st.notes.keyTerms || []).map((kt) => ({
+              ...kt,
+              id: makeNoteId('term'),
+            })),
+            updatedAt: nowIso,
+          },
+          timelineEvents: st.timelineEvents?.map((ev) => ({
+            ...ev,
+            id: makeId('tl'),
+          })),
+          createdAt: nowIso,
+        });
+      }
+    }
+
+    const subCount = bundledSubs.length;
     return {
       workspace: next,
-      summary: `Copied notes "${uniqueName}" into ${subj.name}`,
+      summary:
+        subCount > 0
+          ? `Copied "${uniqueName}" + ${subCount} sub-topic${
+              subCount === 1 ? '' : 's'
+            } into ${subj.name}`
+          : `Copied notes "${uniqueName}" into ${subj.name}`,
       subjectId: subj.id,
       topicId: newTopic.id,
     };
