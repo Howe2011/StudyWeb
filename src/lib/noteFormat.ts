@@ -48,7 +48,10 @@ export function estimateNoteReadingMinutes(note: StructuredNoteData): number {
     note.summary,
     note.examTip,
     note.workedExample,
-    ...note.sections.flatMap((s) => [s.heading, ...s.points]),
+    ...note.sections.flatMap((s) => [
+      s.heading,
+      ...s.points.filter((p) => !/^@table-color:/i.test(p.trim())),
+    ]),
     ...note.keyTerms.flatMap((k) => [k.term, k.definition]),
     note.originalHtml
       ? note.originalHtml.replace(/<[^>]+>/g, ' ')
@@ -57,6 +60,7 @@ export function estimateNoteReadingMinutes(note: StructuredNoteData): number {
       : '',
   ]
     .join(' ')
+    .replace(/<[^>]+>/g, ' ')
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
@@ -206,6 +210,9 @@ export function assessExistingFormattingQuality(rawInput: string): FormattingQua
       continue;
     }
 
+    if (/^@table-color:/i.test(t)) {
+      continue;
+    }
     if (/^#{1,2}\s+\S/.test(t)) {
       headingsCount++;
       continue;
@@ -886,34 +893,6 @@ export function parseTextIntoStructuredNote(
     convertBalancedProsConsToTables(cleanedSections);
   }
 
-  // Pretty & Balanced: ensure long bullet walls get subtle ### sub-group breaks if needed
-  if (preset === 'balanced-visual') {
-    for (const sec of cleanedSections) {
-      const hasSubheadings = sec.points.some((p) => p.startsWith('### '));
-      const hasFactBox = sec.points.some((p) => p.startsWith('📌 '));
-      if (!hasFactBox && sec.points.length >= 4) {
-        const statIdx = sec.points.findIndex(
-          (p) =>
-            !p.startsWith('### ') &&
-            !p.startsWith('|') &&
-            !p.startsWith('⇒ ') &&
-            !p.startsWith('↳ ') &&
-            /\b\d+(?:\.\d+)?%|\b\d{4}\b|=/.test(p)
-        );
-        if (statIdx >= 0) {
-          const raw = sec.points[statIdx].replace(/^¶\s*/, '').trim();
-          sec.points[statIdx] = `📌 Key Fact | ${raw}`;
-        }
-      }
-      if (!hasSubheadings && sec.points.length >= 8) {
-        const mid = Math.floor(sec.points.length / 2);
-        if (!sec.points[mid].startsWith('↳ ') && !sec.points[mid].startsWith('|')) {
-          sec.points.splice(mid, 0, '### Key Details');
-        }
-      }
-    }
-  }
-
   if (cleanedSections.length === 0) {
     cleanedSections.push({
       id: makeNoteId('sec'),
@@ -1188,12 +1167,19 @@ export function structuredNoteToHtml(title: string, note: StructuredNoteData): s
   for (const sec of note.sections) {
     if (!sec.heading.trim() && sec.points.length === 0) continue;
     parts.push(`<h2>${esc(sec.heading)}</h2>`);
-    if (sec.points.length > 0) {
+    const visiblePoints = sec.points.filter((p) => !/^@table-color:/i.test(p.trim()));
+    if (visiblePoints.length > 0) {
       parts.push(
-        `<ul>${sec.points
+        `<ul>${visiblePoints
           .map((p) =>
             p.startsWith('📌 ')
-              ? `<li><strong>Fact:</strong> ${fmt(p.slice(2).replace('|', ' — ').trim())}</li>`
+              ? `<li><strong>Fact:</strong> ${fmt(
+                  p
+                    .slice(2)
+                    .replace(/^\s*\[color:[^\]]+\]\s*/i, '')
+                    .replace('|', ' — ')
+                    .trim()
+                )}</li>`
               : `<li>${fmt(p.replace(/^↳\s*/, '').replace(/^¶\s*/, ''))}</li>`
           )
           .join('')}</ul>`
@@ -1220,9 +1206,9 @@ export type SectionRenderBlock =
   | { kind: 'subheading'; text: string }
   | { kind: 'paragraph'; text: string }
   | { kind: 'bullet'; text: string; indent?: number }
-  | { kind: 'factbox'; title?: string; text: string }
+  | { kind: 'factbox'; title?: string; text: string; color?: string }
   | { kind: 'flow'; label?: string; steps: string[] }
-  | { kind: 'table'; headers: string[]; rows: string[][] };
+  | { kind: 'table'; headers: string[]; rows: string[][]; color?: string };
 
 function splitPipeRow(line: string): string[] {
   return line
@@ -1263,11 +1249,12 @@ function parseFlowLine(raw: string): { label?: string; steps: string[] } | null 
 
 /**
  * Groups raw section point strings into semantic blocks (tables, process flows, H3 subheadings, prose paragraphs, bullets)
- * for clean Save My Exams-style rendering.
+ * for clean visual rendering.
  */
 export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
   const blocks: SectionRenderBlock[] = [];
   let i = 0;
+  let pendingTableColor: string | undefined;
 
   while (i < points.length) {
     const raw = (points[i] || '').trim();
@@ -1276,7 +1263,16 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
       continue;
     }
 
+    const tableColorMatch = raw.match(/^@table-color:\s*([#A-Za-z0-9_-]+)$/i);
+    if (tableColorMatch) {
+      pendingTableColor = tableColorMatch[1].trim();
+      i++;
+      continue;
+    }
+
     if (/^\|.+\|$/.test(raw)) {
+      const tableColor = pendingTableColor;
+      pendingTableColor = undefined;
       const tableRows: string[][] = [];
       while (i < points.length && /^\|.+\|$/.test((points[i] || '').trim())) {
         const line = points[i].trim();
@@ -1291,24 +1287,43 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
           Array.from({ length: maxCols }, (_, idx) => r[idx] || '');
         const headers = padRow(tableRows[0]);
         const rows = tableRows.slice(1).map(padRow);
-        blocks.push({ kind: 'table', headers, rows });
+        blocks.push({
+          kind: 'table',
+          headers,
+          rows,
+          ...(tableColor && tableColor !== 'default' ? { color: tableColor } : {}),
+        });
       }
       continue;
     }
 
+    pendingTableColor = undefined;
+
     if (raw.startsWith('📌 ') || /^>\s*fact\s*:/i.test(raw)) {
-      const cleaned = raw.startsWith('📌 ')
+      let cleaned = raw.startsWith('📌 ')
         ? raw.slice(2).trim()
         : raw.replace(/^>\s*fact\s*:\s*/i, '').trim();
+      let boxColor: string | undefined;
+      const colorPrefix = cleaned.match(/^\[color:\s*([#A-Za-z0-9_-]+)\]\s*(.*)$/i);
+      if (colorPrefix) {
+        boxColor = colorPrefix[1].trim();
+        cleaned = colorPrefix[2].trim();
+      }
       const pipeIdx = cleaned.indexOf('|');
       if (pipeIdx > 0 && pipeIdx < 42) {
         blocks.push({
           kind: 'factbox',
           title: cleaned.slice(0, pipeIdx).replace(/\*\*/g, '').trim() || 'Key Fact',
           text: cleaned.slice(pipeIdx + 1).trim(),
+          ...(boxColor && boxColor !== 'default' ? { color: boxColor } : {}),
         });
       } else {
-        blocks.push({ kind: 'factbox', title: 'Key Fact', text: cleaned });
+        blocks.push({
+          kind: 'factbox',
+          title: 'Key Fact',
+          text: cleaned,
+          ...(boxColor && boxColor !== 'default' ? { color: boxColor } : {}),
+        });
       }
       i++;
       continue;

@@ -55,6 +55,7 @@ const ALLOWED_TAGS = new Set([
 ]);
 
 const ALLOWED_CSS_PROPS = new Set([
+  'align-items',
   'aspect-ratio',
   'background',
   'background-color',
@@ -72,12 +73,15 @@ const ALLOWED_CSS_PROPS = new Set([
   'color',
   'direction',
   'display',
+  'flex',
+  'flex-wrap',
   'font',
   'font-family',
   'font-size',
   'font-style',
   'font-variant',
   'font-weight',
+  'gap',
   'height',
   'left',
   'letter-spacing',
@@ -211,6 +215,17 @@ export function sanitizeDocumentHtml(rawHtml: string, baseUrl?: string): string 
     doc
       .querySelectorAll('script, noscript, iframe, object, embed, applet, link, meta, title, form, button, input, select, textarea, svg')
       .forEach((el) => el.remove());
+
+    // Convert <font color="..."> from contentEditable execCommand into safe <span style="color:...">
+    doc.querySelectorAll('font').forEach((fontEl) => {
+      const span = doc.createElement('span');
+      const col = fontEl.getAttribute('color');
+      const existingStyle = fontEl.getAttribute('style') || '';
+      const combinedStyle = col ? `color: ${col}; ${existingStyle}` : existingStyle;
+      if (combinedStyle.trim()) span.setAttribute('style', combinedStyle.trim());
+      while (fontEl.firstChild) span.appendChild(fontEl.firstChild);
+      fontEl.replaceWith(span);
+    });
 
     const resolveUrl = (raw: string): string => {
       const trimmed = raw.trim();

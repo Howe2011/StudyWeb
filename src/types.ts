@@ -86,7 +86,32 @@ export interface LiveTimerState {
   subject: string;
 }
 
-export type ColorPalette = '' | 'paper' | 'sage' | 'contrast';
+export type ColorPalette =
+  | ''
+  | 'paper'
+  | 'sage'
+  | 'contrast'
+  | 'ocean'
+  | 'lavender'
+  | 'rose'
+  | 'sand'
+  | 'nord'
+  | 'emerald'
+  | 'custom';
+
+export interface CustomThemeTokens {
+  bg: string;
+  card: string;
+  ink: string;
+  accent: string;
+  line: string;
+}
+
+export interface SavedCustomTheme {
+  id: string;
+  name: string;
+  tokens: CustomThemeTokens;
+}
 
 export interface AppearanceSettings {
   th: '' | 'light' | 'dark';
@@ -95,6 +120,8 @@ export interface AppearanceSettings {
   lh: number;
   mw: string;
   ff: string;
+  customTheme?: CustomThemeTokens;
+  savedThemes?: SavedCustomTheme[];
 }
 
 export interface PlannerUiSettings {

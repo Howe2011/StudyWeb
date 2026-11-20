@@ -1,6 +1,7 @@
 import {
   ClipboardEvent,
   DragEvent,
+  FocusEvent,
   KeyboardEvent,
   TextareaHTMLAttributes,
   useEffect,
@@ -18,23 +19,35 @@ import {
   CheckCircle2,
   Code,
   Copy,
+  Eraser,
   GitBranch,
   GripVertical,
   Heading2,
   Heading3,
+  Highlighter,
   Indent,
   Italic,
   Layers,
   List,
   Outdent,
+  Palette,
   Quote,
   Redo2,
   Table2,
   Trash2,
   Type,
+  Underline,
   Undo2,
   X,
 } from 'lucide-react';
+import {
+  domNodeToInlineMarkup,
+  getTableSurfaceStyles,
+  inlineMarkupToHtml,
+  NOTE_HIGHLIGHT_COLORS,
+  NOTE_SURFACE_COLORS,
+  NOTE_TEXT_COLORS,
+} from '../lib/inlineRichText';
 import { NOTE_COLOR_OPTIONS, NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints, makeNoteId } from '../lib/noteFormat';
 import { NoteAccentColor, NotePartRole, NoteSectionBlock, StructuredNoteData } from '../types';
@@ -62,6 +75,7 @@ export interface NotionBlock {
   rows?: string[][];
   accentColor?: NoteAccentColor;
   partRole?: NotePartRole;
+  tableColor?: string;
 }
 
 const SLASH_OPTIONS: Array<{
@@ -73,7 +87,7 @@ const SLASH_OPTIONS: Array<{
   {
     type: 'paragraph',
     label: 'Body Text',
-    hint: 'Smooth Word-style paragraph (supports **bold**, *italic*)',
+    hint: 'Smooth Word-style paragraph (bold, italic, colours, highlights)',
     keywords: 'text paragraph body note p',
   },
   {
@@ -97,7 +111,7 @@ const SLASH_OPTIONS: Array<{
   {
     type: 'table',
     label: 'Table',
-    hint: 'Multi-column comparison table',
+    hint: 'Multi-column table with custom colour',
     keywords: 'table grid matrix compare columns',
   },
   {
@@ -127,7 +141,7 @@ const SLASH_OPTIONS: Array<{
   {
     type: 'flow',
     label: 'Flow Diagram Steps',
-    hint: 'Sequential cause → effect chain (shortcut: => )',
+    hint: 'Horizontal cause → effect step cards (shortcut: => )',
     keywords: 'flow arrow diagram process steps chain',
   },
   {
@@ -213,6 +227,7 @@ export function structuredNoteToBlocks(note: StructuredNoteData): NotionBlock[] 
           type: 'factbox',
           text: item.text,
           extra: item.title || 'Key Point',
+          ...(item.color ? { tableColor: item.color } : {}),
         });
       } else if (item.kind === 'flow') {
         blocks.push({
@@ -229,6 +244,7 @@ export function structuredNoteToBlocks(note: StructuredNoteData): NotionBlock[] 
           type: 'table',
           text: '',
           rows: rows.length >= 2 ? rows : [['Column 1', 'Column 2'], ['', '']],
+          ...(item.color ? { tableColor: item.color } : {}),
         });
       }
     }
@@ -323,7 +339,8 @@ export function blocksToStructuredNote(
       const body = b.text.trim();
       const title = (b.extra || '').trim();
       if (body || title) {
-        ensureSection().points.push(`📌 ${title || 'Key Point'} | ${body || title}`);
+        const colorTag = b.tableColor && b.tableColor !== 'default' ? `[color:${b.tableColor}] ` : '';
+        ensureSection().points.push(`📌 ${colorTag}${title || 'Key Point'} | ${body || title}`);
       }
     } else if (b.type === 'flow') {
       const cleanSteps = (b.steps || []).map((s) => s.trim()).filter(Boolean);
@@ -342,6 +359,9 @@ export function blocksToStructuredNote(
         const normRow = (r: string[]) =>
           `| ${Array.from({ length: colCount }, (_, i) => (r[i] || '').replace(/\|/g, '/').trim() || '—').join(' | ')} |`;
         const sec = ensureSection();
+        if (b.tableColor && b.tableColor !== 'default') {
+          sec.points.push(`@table-color:${b.tableColor}`);
+        }
         sec.points.push(normRow(rawRows[0]));
         sec.points.push(`| ${Array.from({ length: colCount }, () => '---').join(' | ')} |`);
         for (let r = 1; r < rawRows.length; r++) {
@@ -416,6 +436,132 @@ function AutoGrowTextarea({
   );
 }
 
+function isCaretAtStart(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer)) return false;
+  const pre = document.createRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.startContainer, range.startOffset);
+  return pre.toString().length === 0;
+}
+
+function isCaretAtEnd(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.endContainer)) return false;
+  const post = document.createRange();
+  post.selectNodeContents(el);
+  post.setStart(range.endContainer, range.endOffset);
+  return post.toString().length === 0;
+}
+
+function splitEditableAtCaret(el: HTMLElement): { before: string; after: string } {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !el.contains(sel.getRangeAt(0).startContainer)) {
+    return { before: domNodeToInlineMarkup(el), after: '' };
+  }
+  const caretRange = sel.getRangeAt(0);
+
+  const beforeRange = document.createRange();
+  beforeRange.selectNodeContents(el);
+  beforeRange.setEnd(caretRange.startContainer, caretRange.startOffset);
+  const beforeDiv = document.createElement('div');
+  beforeDiv.appendChild(beforeRange.cloneContents());
+
+  const afterRange = document.createRange();
+  afterRange.selectNodeContents(el);
+  afterRange.setStart(caretRange.endContainer, caretRange.endOffset);
+  const afterDiv = document.createElement('div');
+  afterDiv.appendChild(afterRange.cloneContents());
+
+  return {
+    before: domNodeToInlineMarkup(beforeDiv),
+    after: domNodeToInlineMarkup(afterDiv),
+  };
+}
+
+function placeCaretInEditable(el: HTMLElement, atStart = false) {
+  el.focus();
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(atStart);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+interface RichTextEditableProps {
+  syncKey: string;
+  value: string;
+  placeholder?: string;
+  className?: string;
+  singleLine?: boolean;
+  elRef?: (el: HTMLDivElement | null) => void;
+  onChangeValue: (nextMarkup: string) => void;
+  onFocusEl?: (el: HTMLDivElement) => void;
+  onKeyDownEl?: (e: KeyboardEvent<HTMLDivElement>, el: HTMLDivElement) => void;
+  onPasteEl?: (e: ClipboardEvent<HTMLDivElement>, el: HTMLDivElement) => void;
+}
+
+function RichTextEditable({
+  syncKey,
+  value,
+  placeholder,
+  className = '',
+  elRef,
+  onChangeValue,
+  onFocusEl,
+  onKeyDownEl,
+  onPasteEl,
+}: RichTextEditableProps) {
+  const localRef = useRef<HTMLDivElement | null>(null);
+  const lastSyncedKeyRef = useRef<string>('');
+  const lastEmittedValueRef = useRef<string>(value);
+
+  useEffect(() => {
+    const el = localRef.current;
+    if (!el) return;
+    const keyChanged = lastSyncedKeyRef.current !== syncKey;
+    const externalMutation = value !== lastEmittedValueRef.current && document.activeElement !== el;
+    if (keyChanged || externalMutation) {
+      el.innerHTML = inlineMarkupToHtml(value);
+      lastSyncedKeyRef.current = syncKey;
+      lastEmittedValueRef.current = value;
+    }
+  }, [syncKey, value]);
+
+  return (
+    <div
+      ref={(el) => {
+        localRef.current = el;
+        elRef?.(el);
+      }}
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      onFocus={(e: FocusEvent<HTMLDivElement>) => {
+        onFocusEl?.(e.currentTarget);
+      }}
+      onInput={(e) => {
+        const markup = domNodeToInlineMarkup(e.currentTarget);
+        lastEmittedValueRef.current = markup;
+        onChangeValue(markup);
+      }}
+      onKeyDown={(e) => {
+        if (localRef.current) onKeyDownEl?.(e, localRef.current);
+      }}
+      onPaste={(e) => {
+        if (localRef.current) onPasteEl?.(e, localRef.current);
+      }}
+      className={`sd-rte w-full cursor-text break-words outline-none ${className}`}
+    />
+  );
+}
+
 interface NotionTopicEditorProps {
   topicId: string;
   topicName: string;
@@ -463,25 +609,47 @@ export function NotionTopicEditor({
   onMakeFlashcards,
 }: NotionTopicEditorProps) {
   const [blocks, setBlocks] = useState<NotionBlock[]>(() => structuredNoteToBlocks(notes));
+  const [syncVersion, setSyncVersion] = useState(0);
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const [openMenuBlockId, setOpenMenuBlockId] = useState<string | null>(null);
   const [slashBlockId, setSlashBlockId] = useState<string | null>(null);
   const [slashHighlightIdx, setSlashHighlightIdx] = useState(0);
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+  const [textColorOpen, setTextColorOpen] = useState(false);
+  const [highlightOpen, setHighlightOpen] = useState(false);
 
   const historyRef = useRef<NotionBlock[][]>([blocks]);
   const historyIdxRef = useRef<number>(0);
   const [historyMeta, setHistoryMeta] = useState({ canUndo: false, canRedo: false });
 
-  const inputRefs = useRef<Map<string, HTMLInputElement | HTMLTextAreaElement>>(new Map());
+  const editableRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const activeEditableElRef = useRef<HTMLDivElement | null>(null);
+  const activeEditableCommitRef = useRef<((el: HTMLDivElement) => void) | null>(null);
+  const textColorRef = useRef<HTMLDivElement | null>(null);
+  const highlightMenuRef = useRef<HTMLDivElement | null>(null);
   const latestNotesRef = useRef(notes);
   latestNotesRef.current = notes;
 
-  // Resync blocks cleanly only when switching to a different topic
+  useEffect(() => {
+    if (!textColorOpen && !highlightOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (textColorRef.current && !textColorRef.current.contains(e.target as Node)) {
+        setTextColorOpen(false);
+      }
+      if (highlightMenuRef.current && !highlightMenuRef.current.contains(e.target as Node)) {
+        setHighlightOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [textColorOpen, highlightOpen]);
+
+  // Resync blocks cleanly when switching to a different topic
   useEffect(() => {
     const initial = structuredNoteToBlocks(latestNotesRef.current);
     setBlocks(initial);
+    setSyncVersion((v) => v + 1);
     historyRef.current = [initial];
     historyIdxRef.current = 0;
     setHistoryMeta({ canUndo: false, canRedo: false });
@@ -492,24 +660,26 @@ export function NotionTopicEditor({
     setDropTargetIdx(null);
   }, [topicId]);
 
-  const registerInputRef = (id: string, el: HTMLInputElement | HTMLTextAreaElement | null) => {
-    if (el) inputRefs.current.set(id, el);
-    else inputRefs.current.delete(id);
+  const registerEditableRef = (id: string, el: HTMLElement | null) => {
+    if (el) editableRefs.current.set(id, el);
+    else editableRefs.current.delete(id);
   };
 
-  const focusBlock = (id: string, caretOffset?: number) => {
+  const focusBlock = (id: string, atStart = false) => {
     setFocusedBlockId(id);
     requestAnimationFrame(() => {
-      const el = inputRefs.current.get(id);
-      if (el) {
+      const el = editableRefs.current.get(id);
+      if (!el) return;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
         el.focus();
-        const len = el.value.length;
-        const pos = caretOffset !== undefined ? Math.max(0, Math.min(len, caretOffset)) : len;
+        const pos = atStart ? 0 : el.value.length;
         try {
           el.setSelectionRange(pos, pos);
         } catch {
           // ignore
         }
+      } else {
+        placeCaretInEditable(el, atStart);
       }
     });
   };
@@ -521,9 +691,10 @@ export function NotionTopicEditor({
     });
   };
 
-  const commitBlocks = (next: NotionBlock[], recordHistory = true) => {
+  const commitBlocks = (next: NotionBlock[], recordHistory = true, forceResync = false) => {
     const safe = next.length > 0 ? next : [makeDefaultBlock('paragraph', '')];
     setBlocks(safe);
+    if (forceResync) setSyncVersion((v) => v + 1);
     onChangeNotes(blocksToStructuredNote(safe, notes));
 
     if (recordHistory) {
@@ -541,6 +712,7 @@ export function NotionTopicEditor({
     historyIdxRef.current -= 1;
     const snap = historyRef.current[historyIdxRef.current];
     setBlocks(snap);
+    setSyncVersion((v) => v + 1);
     onChangeNotes(blocksToStructuredNote(snap, notes));
     syncHistoryMeta();
   };
@@ -550,6 +722,7 @@ export function NotionTopicEditor({
     historyIdxRef.current += 1;
     const snap = historyRef.current[historyIdxRef.current];
     setBlocks(snap);
+    setSyncVersion((v) => v + 1);
     onChangeNotes(blocksToStructuredNote(snap, notes));
     syncHistoryMeta();
   };
@@ -563,8 +736,8 @@ export function NotionTopicEditor({
     const created = makeDefaultBlock(type, initialText);
     if (type === 'bullet') created.indent = indent;
     const next = [...blocks.slice(0, afterIdx + 1), created, ...blocks.slice(afterIdx + 1)];
-    commitBlocks(next);
-    focusBlock(created.id, initialText ? 0 : undefined);
+    commitBlocks(next, true, true);
+    focusBlock(created.id, Boolean(initialText));
     return created.id;
   };
 
@@ -574,7 +747,6 @@ export function NotionTopicEditor({
       : -1;
     const targetIdx = focusedIdx >= 0 ? focusedIdx : blocks.length - 1;
     const cur = blocks[targetIdx];
-    // If cursor is on an empty plain paragraph, turn it directly into the requested block
     if (
       cur &&
       cur.type === 'paragraph' &&
@@ -587,9 +759,9 @@ export function NotionTopicEditor({
     insertBlockAfter(targetIdx, type);
   };
 
-  const updateBlock = (id: string, patch: Partial<NotionBlock>) => {
+  const updateBlock = (id: string, patch: Partial<NotionBlock>, forceResync = false) => {
     const next = blocks.map((b) => (b.id === id ? { ...b, ...patch } : b));
-    commitBlocks(next);
+    commitBlocks(next, true, forceResync);
   };
 
   const duplicateBlockAt = (idx: number) => {
@@ -602,7 +774,7 @@ export function NotionTopicEditor({
       rows: src.rows ? src.rows.map((r) => [...r]) : undefined,
     };
     const next = [...blocks.slice(0, idx + 1), clone, ...blocks.slice(idx + 1)];
-    commitBlocks(next);
+    commitBlocks(next, true, true);
     setOpenMenuBlockId(null);
     focusBlock(clone.id);
   };
@@ -630,7 +802,7 @@ export function NotionTopicEditor({
         rows: nextType === 'table' ? (b.rows?.length ? b.rows : base.rows) : undefined,
       };
     });
-    commitBlocks(next);
+    commitBlocks(next, true, true);
     setSlashBlockId(null);
     setOpenMenuBlockId(null);
     if (nextType !== 'table' && nextType !== 'flow') {
@@ -640,12 +812,12 @@ export function NotionTopicEditor({
 
   const deleteBlockAt = (idx: number) => {
     if (blocks.length <= 1) {
-      commitBlocks([makeDefaultBlock('paragraph', '')]);
+      commitBlocks([makeDefaultBlock('paragraph', '')], true, true);
       return;
     }
     const prevBlock = blocks[Math.max(0, idx - 1)];
     const next = blocks.filter((_, i) => i !== idx);
-    commitBlocks(next);
+    commitBlocks(next, true, true);
     if (prevBlock) focusBlock(prevBlock.id);
   };
 
@@ -654,7 +826,7 @@ export function NotionTopicEditor({
     const next = [...blocks];
     const [moved] = next.splice(fromIdx, 1);
     next.splice(toIdx, 0, moved);
-    commitBlocks(next);
+    commitBlocks(next, true, true);
     setOpenMenuBlockId(null);
   };
 
@@ -671,7 +843,7 @@ export function NotionTopicEditor({
   const adjustActiveBulletIndent = (delta: 1 | -1) => {
     if (!activeBlock) return;
     if (activeBlock.type === 'paragraph' && delta === 1) {
-      updateBlock(activeBlock.id, { type: 'bullet', indent: 0 });
+      updateBlock(activeBlock.id, { type: 'bullet', indent: 0 }, true);
       focusBlock(activeBlock.id);
       return;
     }
@@ -683,40 +855,89 @@ export function NotionTopicEditor({
     }
   };
 
-  const applyInlineWrap = (prefix: string, suffix = prefix) => {
-    const targetId = focusedBlockId || blocks[0]?.id;
-    if (!targetId) return;
-    const el = inputRefs.current.get(targetId);
-    const blk = blocks.find((b) => b.id === targetId);
-    if (!el || !blk) return;
-
-    const start = el.selectionStart ?? blk.text.length;
-    const end = el.selectionEnd ?? blk.text.length;
-    const selected = blk.text.slice(start, end);
-    const wrapped = selected ? `${prefix}${selected}${suffix}` : `${prefix}text${suffix}`;
-    const nextText = blk.text.slice(0, start) + wrapped + blk.text.slice(end);
-    updateBlock(targetId, { text: nextText });
-    requestAnimationFrame(() => {
-      const updated = inputRefs.current.get(targetId);
-      if (updated) {
-        updated.focus();
-        const selStart = start + prefix.length;
-        const selEnd = selected ? selStart + selected.length : selStart + 4;
-        updated.setSelectionRange(selStart, selEnd);
+  const execInlineCommand = (cmd: string, value?: string) => {
+    const el = activeEditableElRef.current;
+    if (!el) return;
+    el.focus();
+    try {
+      if (cmd === 'hiliteColor' || cmd === 'foreColor') {
+        document.execCommand('styleWithCSS', false, 'true');
       }
-    });
+      document.execCommand(cmd, false, value);
+    } catch {
+      if (cmd === 'hiliteColor') {
+        try {
+          document.execCommand('backColor', false, value);
+        } catch {
+          // ignore
+        }
+      }
+    }
+    activeEditableCommitRef.current?.(el);
+  };
+
+  const applyInlineColor = (hexValue: string) => {
+    const el = activeEditableElRef.current;
+    setTextColorOpen(false);
+    if (!el) return;
+    el.focus();
+    if (!hexValue) {
+      execInlineCommand('removeFormat');
+      return;
+    }
+    execInlineCommand('foreColor', hexValue);
+  };
+
+  const applyInlineHighlight = (bgValue: string) => {
+    const el = activeEditableElRef.current;
+    setHighlightOpen(false);
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!bgValue) {
+      execInlineCommand('hiliteColor', 'transparent');
+      return;
+    }
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      const range = sel.getRangeAt(0);
+      const mark = document.createElement('mark');
+      mark.style.backgroundColor = bgValue;
+      try {
+        range.surroundContents(mark);
+      } catch {
+        execInlineCommand('hiliteColor', bgValue);
+      }
+      activeEditableCommitRef.current?.(el);
+    } else {
+      execInlineCommand('hiliteColor', bgValue);
+    }
+  };
+
+  const applyInlineCode = () => {
+    const el = activeEditableElRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const selectedText = range.toString();
+    const codeEl = document.createElement('code');
+    codeEl.textContent = selectedText || 'formula';
+    range.deleteContents();
+    range.insertNode(codeEl);
+    activeEditableCommitRef.current?.(el);
   };
 
   const insertArrowAtCursor = () => {
-    const targetId = focusedBlockId || blocks[0]?.id;
-    if (!targetId) return;
-    const el = inputRefs.current.get(targetId);
-    const blk = blocks.find((b) => b.id === targetId);
-    if (!el || !blk) return;
-    const pos = el.selectionStart ?? blk.text.length;
-    const nextText = blk.text.slice(0, pos) + ' → ' + blk.text.slice(pos);
-    updateBlock(targetId, { text: nextText });
-    focusBlock(targetId, pos + 3);
+    const el = activeEditableElRef.current;
+    if (!el) return;
+    el.focus();
+    try {
+      document.execCommand('insertText', false, ' → ');
+    } catch {
+      // ignore
+    }
+    activeEditableCommitRef.current?.(el);
   };
 
   const activeSlashBlock = useMemo(
@@ -740,7 +961,7 @@ export function NotionTopicEditor({
         const next = blocks.map((b) =>
           b.id === block.id ? { ...makeDefaultBlock('heading', ''), id: b.id } : b
         );
-        commitBlocks(next);
+        commitBlocks(next, true, true);
         focusBlock(block.id);
         return;
       }
@@ -748,7 +969,7 @@ export function NotionTopicEditor({
         const next = blocks.map((b) =>
           b.id === block.id ? { ...makeDefaultBlock('subheading', ''), id: b.id } : b
         );
-        commitBlocks(next);
+        commitBlocks(next, true, true);
         focusBlock(block.id);
         return;
       }
@@ -756,7 +977,7 @@ export function NotionTopicEditor({
         const next = blocks.map((b) =>
           b.id === block.id ? { ...makeDefaultBlock('bullet', ''), id: b.id, indent: 0 } : b
         );
-        commitBlocks(next);
+        commitBlocks(next, true, true);
         focusBlock(block.id);
         return;
       }
@@ -764,7 +985,7 @@ export function NotionTopicEditor({
         const next = blocks.map((b) =>
           b.id === block.id ? { ...makeDefaultBlock('factbox', ''), id: b.id } : b
         );
-        commitBlocks(next);
+        commitBlocks(next, true, true);
         focusBlock(block.id);
         return;
       }
@@ -772,7 +993,7 @@ export function NotionTopicEditor({
         const next = blocks.map((b) =>
           b.id === block.id ? { ...makeDefaultBlock('flow', ''), id: b.id } : b
         );
-        commitBlocks(next);
+        commitBlocks(next, true, true);
         return;
       }
     }
@@ -783,7 +1004,8 @@ export function NotionTopicEditor({
   };
 
   const handlePasteMultiLine = (
-    e: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+    e: ClipboardEvent<HTMLDivElement>,
+    el: HTMLDivElement,
     block: NotionBlock,
     idx: number
   ) => {
@@ -814,19 +1036,18 @@ export function NotionTopicEditor({
 
     if (newBlocks.length === 0) return;
 
-    const currentPrefix = block.text.slice(0, e.currentTarget.selectionStart ?? block.text.length);
-    const currentSuffix = block.text.slice(e.currentTarget.selectionEnd ?? block.text.length);
-    if (currentPrefix.trim()) {
+    const { before, after } = splitEditableAtCaret(el);
+    if (before.trim()) {
       newBlocks[0] = {
         ...newBlocks[0],
-        text: `${currentPrefix}${newBlocks[0].text}`,
+        text: `${before}${newBlocks[0].text}`,
       };
     }
-    if (currentSuffix.trim()) {
+    if (after.trim()) {
       const last = newBlocks[newBlocks.length - 1];
       newBlocks[newBlocks.length - 1] = {
         ...last,
-        text: `${last.text}${currentSuffix}`,
+        text: `${last.text}${after}`,
       };
     }
 
@@ -835,12 +1056,13 @@ export function NotionTopicEditor({
       ...newBlocks,
       ...blocks.slice(idx + 1),
     ];
-    commitBlocks(replaced);
+    commitBlocks(replaced, true, true);
     focusBlock(newBlocks[newBlocks.length - 1].id);
   };
 
-  const handleBlockKeyDown = (
-    e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  const handleEditableKeyDown = (
+    e: KeyboardEvent<HTMLDivElement>,
+    el: HTMLDivElement,
     block: NotionBlock,
     idx: number
   ) => {
@@ -852,12 +1074,17 @@ export function NotionTopicEditor({
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
       e.preventDefault();
-      applyInlineWrap('**');
+      execInlineCommand('bold');
       return;
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') {
       e.preventDefault();
-      applyInlineWrap('*');
+      execInlineCommand('italic');
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'u') {
+      e.preventDefault();
+      execInlineCommand('underline');
       return;
     }
 
@@ -905,7 +1132,6 @@ export function NotionTopicEditor({
       'subheading',
       'bullet',
       'paragraph',
-      'key_term',
     ];
     if (e.key === 'Enter' && !e.shiftKey && splittableTypes.includes(block.type)) {
       e.preventDefault();
@@ -919,17 +1145,7 @@ export function NotionTopicEditor({
         return;
       }
 
-      if (block.type === 'key_term') {
-        insertBlockAfter(idx, 'key_term');
-        return;
-      }
-
-      const el = e.currentTarget;
-      const selStart = el.selectionStart ?? block.text.length;
-      const selEnd = el.selectionEnd ?? selStart;
-      const before = block.text.slice(0, selStart);
-      const after = block.text.slice(selEnd);
-
+      const { before, after } = splitEditableAtCaret(el);
       const nextType: NotionBlockType =
         block.type === 'heading' || block.type === 'subheading'
           ? 'paragraph'
@@ -947,62 +1163,50 @@ export function NotionTopicEditor({
         created,
         ...updatedBlocks.slice(idx + 1),
       ];
-      commitBlocks(nextList);
-      focusBlock(created.id, 0);
+      commitBlocks(nextList, true, true);
+      focusBlock(created.id, true);
       return;
     }
 
-    if (e.key === 'Backspace') {
-      const el = e.currentTarget;
-      const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
-
-      if (atStart) {
-        if (block.type === 'bullet' && (block.indent || 0) > 0) {
-          e.preventDefault();
-          updateBlock(block.id, { indent: (block.indent || 0) - 1 });
-          return;
-        }
-        if (block.text === '' && (!block.extra || block.extra === '') && blocks.length > 1) {
-          e.preventDefault();
-          deleteBlockAt(idx);
-          return;
-        }
-        const prev = idx > 0 ? blocks[idx - 1] : null;
-        if (
-          prev &&
-          (prev.type === 'paragraph' ||
-            prev.type === 'bullet' ||
-            prev.type === 'heading' ||
-            prev.type === 'subheading') &&
-          (block.type === 'paragraph' ||
-            block.type === 'bullet' ||
-            block.type === 'heading' ||
-            block.type === 'subheading')
-        ) {
-          e.preventDefault();
-          const joinPos = prev.text.length;
-          const mergedBlocks = blocks
-            .map((b) => (b.id === prev.id ? { ...b, text: prev.text + block.text } : b))
-            .filter((b) => b.id !== block.id);
-          commitBlocks(mergedBlocks);
-          focusBlock(prev.id, joinPos);
-          return;
-        }
+    if (e.key === 'Backspace' && isCaretAtStart(el)) {
+      if (block.type === 'bullet' && (block.indent || 0) > 0) {
+        e.preventDefault();
+        updateBlock(block.id, { indent: (block.indent || 0) - 1 });
+        return;
+      }
+      if (block.text === '' && (!block.extra || block.extra === '') && blocks.length > 1) {
+        e.preventDefault();
+        deleteBlockAt(idx);
+        return;
+      }
+      const prev = idx > 0 ? blocks[idx - 1] : null;
+      if (
+        prev &&
+        (prev.type === 'paragraph' ||
+          prev.type === 'bullet' ||
+          prev.type === 'heading' ||
+          prev.type === 'subheading') &&
+        (block.type === 'paragraph' ||
+          block.type === 'bullet' ||
+          block.type === 'heading' ||
+          block.type === 'subheading')
+      ) {
+        e.preventDefault();
+        const mergedBlocks = blocks
+          .map((b) => (b.id === prev.id ? { ...b, text: prev.text + block.text } : b))
+          .filter((b) => b.id !== block.id);
+        commitBlocks(mergedBlocks, true, true);
+        focusBlock(prev.id, false);
+        return;
       }
     }
 
-    if (e.key === 'ArrowUp' && !e.shiftKey && idx > 0) {
-      const el = e.currentTarget;
-      if (el.selectionStart === 0 && el.selectionEnd === 0) {
-        e.preventDefault();
-        focusBlock(blocks[idx - 1].id);
-      }
-    } else if (e.key === 'ArrowDown' && !e.shiftKey && idx < blocks.length - 1) {
-      const el = e.currentTarget;
-      if (el.selectionStart === el.value.length) {
-        e.preventDefault();
-        focusBlock(blocks[idx + 1].id);
-      }
+    if (e.key === 'ArrowUp' && !e.shiftKey && idx > 0 && isCaretAtStart(el)) {
+      e.preventDefault();
+      focusBlock(blocks[idx - 1].id, false);
+    } else if (e.key === 'ArrowDown' && !e.shiftKey && idx < blocks.length - 1 && isCaretAtEnd(el)) {
+      e.preventDefault();
+      focusBlock(blocks[idx + 1].id, true);
     }
   };
 
@@ -1025,20 +1229,22 @@ export function NotionTopicEditor({
     const allText = blocks
       .flatMap((b) => [b.text, b.extra || '', ...(b.steps || []), ...(b.rows?.flat() || [])])
       .join(' ')
+      .replace(/<[^>]+>/g, ' ')
       .trim();
     return allText ? allText.split(/\s+/).filter(Boolean).length : 0;
   }, [blocks]);
 
   return (
     <div className="space-y-4">
-      {/* Word-Like Top Formatting & 1-Click Study Ribbon */}
+      {/* Word-Like Sticky Top Formatting & One-Click Study Ribbon */}
       <div className="sd-card sticky top-2 z-20 space-y-2 px-3.5 py-2.5 backdrop-blur">
-        {/* Row 1: Text Format, Hierarchy & Inline Controls */}
+        {/* Row 1: Undo/Redo, Rich Formatting, Text/Highlight Colour, Hierarchy */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1">
             <button
               type="button"
               disabled={!historyMeta.canUndo}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={handleUndo}
               title="Undo (Ctrl/Cmd+Z)"
               className="sd-btn h-8 w-8 p-0 disabled:opacity-35"
@@ -1048,6 +1254,7 @@ export function NotionTopicEditor({
             <button
               type="button"
               disabled={!historyMeta.canRedo}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={handleRedo}
               title="Redo (Ctrl/Cmd+Shift+Z)"
               className="sd-btn h-8 w-8 p-0 disabled:opacity-35"
@@ -1061,9 +1268,9 @@ export function NotionTopicEditor({
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
-                applyInlineWrap('**');
+                execInlineCommand('bold');
               }}
-              title="Bold selection (Ctrl/Cmd+B)"
+              title="Bold (Ctrl/Cmd+B)"
               className="sd-btn h-8 w-8 p-0"
             >
               <Bold className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1072,9 +1279,9 @@ export function NotionTopicEditor({
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
-                applyInlineWrap('*');
+                execInlineCommand('italic');
               }}
-              title="Italic selection (Ctrl/Cmd+I)"
+              title="Italic (Ctrl/Cmd+I)"
               className="sd-btn h-8 w-8 p-0"
             >
               <Italic className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1083,9 +1290,119 @@ export function NotionTopicEditor({
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
-                applyInlineWrap('`');
+                execInlineCommand('underline');
               }}
-              title="Code / Formula Highlight"
+              title="Underline (Ctrl/Cmd+U)"
+              className="sd-btn h-8 w-8 p-0"
+            >
+              <Underline className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+
+            {/* Text Colour Picker */}
+            <div className="relative" ref={textColorRef}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setTextColorOpen((v) => !v);
+                  setHighlightOpen(false);
+                }}
+                title="Text Colour"
+                className="sd-btn h-8 px-2 text-xs font-bold"
+              >
+                <span className="border-b-2 border-[var(--note-accent,var(--e3))] leading-none">
+                  A
+                </span>
+                <Palette className="h-3 w-3 text-[var(--mute)]" aria-hidden="true" />
+              </button>
+              {textColorOpen && (
+                <div className="sd-card absolute left-0 top-9 z-40 w-52 p-2.5">
+                  <div className="mb-1.5 text-[11px] font-bold text-[var(--mute)]">
+                    Text Colour
+                  </div>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {NOTE_TEXT_COLORS.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        title={c.label}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applyInlineColor(c.value);
+                        }}
+                        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-[var(--line)] text-xs font-bold transition-transform hover:scale-110"
+                        style={{
+                          backgroundColor: c.value ? c.preview : 'var(--card)',
+                          color: c.value ? '#FFFFFF' : 'var(--ink)',
+                        }}
+                      >
+                        {!c.value ? 'A' : ''}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="mt-2 flex cursor-pointer items-center justify-between border-t border-[var(--line)] pt-2 text-[11px] font-semibold text-[var(--mute)]">
+                    <span>Custom Hex</span>
+                    <input
+                      type="color"
+                      defaultValue="#2563EB"
+                      onChange={(e) => applyInlineColor(e.target.value)}
+                      className="h-6 w-8 cursor-pointer rounded border border-[var(--line)] bg-transparent p-0"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* Highlight Colour Picker */}
+            <div className="relative" ref={highlightMenuRef}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setHighlightOpen((v) => !v);
+                  setTextColorOpen(false);
+                }}
+                title="Highlight Text"
+                className="sd-btn h-8 w-8 p-0"
+              >
+                <Highlighter className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+              </button>
+              {highlightOpen && (
+                <div className="sd-card absolute left-0 top-9 z-40 w-48 p-2.5">
+                  <div className="mb-1.5 text-[11px] font-bold text-[var(--mute)]">
+                    Highlight Colour
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {NOTE_HIGHLIGHT_COLORS.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        title={c.label}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applyInlineHighlight(c.value);
+                        }}
+                        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-[var(--line)] text-[11px] font-bold transition-transform hover:scale-110"
+                        style={{
+                          backgroundColor: c.value ? c.preview : 'var(--card)',
+                          color: '#17202E',
+                        }}
+                      >
+                        {!c.value ? <Eraser className="h-3.5 w-3.5 text-[var(--mute)]" /> : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyInlineCode();
+              }}
+              title="Formula / Code Highlight"
               className="sd-btn h-8 w-8 p-0"
             >
               <Code className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1194,7 +1511,7 @@ export function NotionTopicEditor({
       </div>
 
       {/* Seamless Flowing Word-Style Document Sheet */}
-      <div className="sd-card px-5 py-7 sm:px-12 sm:py-10">
+      <div className="sd-card px-5 py-7 sm:px-10 sm:py-9">
         {/* Document Header */}
         <div className="mb-6 space-y-2.5 border-b border-[var(--line)] pb-5">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
@@ -1268,6 +1585,13 @@ export function NotionTopicEditor({
               const showSlash =
                 slashBlockId === block.id && block.text.startsWith('/') && !block.text.includes('\n');
               const isDropHere = dropTargetIdx === idx;
+              const blockSyncKey = `${topicId}_${block.id}_${syncVersion}`;
+
+              const bindRichEditable = (el: HTMLDivElement, commitFn: (dom: HTMLDivElement) => void) => {
+                setFocusedBlockId(block.id);
+                activeEditableElRef.current = el;
+                activeEditableCommitRef.current = commitFn;
+              };
 
               return (
                 <div
@@ -1283,623 +1607,748 @@ export function NotionTopicEditor({
                     isDropHere ? 'border-t-2 border-t-[var(--note-accent,var(--e3))] pt-1.5' : ''
                   } ${dragBlockId === block.id ? 'opacity-45' : ''}`}
                 >
-                {/* Unobtrusive Left Margin Drag/Menu Handle */}
-                <div
-                  className={`flex w-6 shrink-0 items-center justify-center pt-1.5 transition-opacity ${
-                    isFocused
-                      ? 'opacity-80'
-                      : 'opacity-25 sm:opacity-0 sm:group-hover:opacity-75'
-                  }`}
-                >
-                  <button
-                    type="button"
-                    draggable
-                    onDragStart={() => setDragBlockId(block.id)}
-                    onDragEnd={() => {
-                      setDragBlockId(null);
-                      setDropTargetIdx(null);
-                    }}
-                    title="Drag to move or click for options"
-                    aria-label="Block options"
-                    onClick={() =>
-                      setOpenMenuBlockId((cur) => (cur === block.id ? null : block.id))
-                    }
-                    className="flex h-6 w-5 cursor-grab items-center justify-center rounded text-[var(--mute)] hover:bg-[var(--bg)] hover:text-[var(--ink)] active:cursor-grabbing"
+                  {/* Unobtrusive Left Margin Drag/Menu Handle */}
+                  <div
+                    className={`flex w-6 shrink-0 items-center justify-center pt-1.5 transition-opacity ${
+                      isFocused
+                        ? 'opacity-80'
+                        : 'opacity-25 sm:opacity-0 sm:group-hover:opacity-75'
+                    }`}
                   >
-                    <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                </div>
-
-                {/* Compact Block Context Menu */}
-                {openMenuBlockId === block.id && (
-                  <div className="absolute left-7 top-8 z-30 max-h-80 w-60 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
-                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                      Turn into
-                    </div>
-                    {SLASH_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.type}
-                        type="button"
-                        onClick={() => changeBlockType(block.id, opt.type)}
-                        className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs ${
-                          block.type === opt.type
-                            ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))] font-bold text-[var(--ink)]'
-                            : 'text-[var(--ink)] hover:bg-[var(--bg)]'
-                        }`}
-                      >
-                        <span className="text-[var(--mute)]">{blockTypeIcon(opt.type)}</span>
-                        <span>{opt.label}</span>
-                      </button>
-                    ))}
-                    {block.type === 'heading' && (
-                      <>
-                        <div className="my-1 border-t border-[var(--line)]" />
-                        <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                          Section Colour
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5 pt-0.5">
-                          {NOTE_COLOR_OPTIONS.map((opt) => {
-                            const selected = normalizeNoteColor(block.accentColor) === opt.id;
-                            return (
-                              <button
-                                key={opt.id}
-                                type="button"
-                                title={opt.label}
-                                aria-label={`Set section colour to ${opt.label}`}
-                                onClick={() => {
-                                  updateBlock(block.id, {
-                                    accentColor: opt.id === 'default' ? undefined : opt.id,
-                                  });
-                                  setOpenMenuBlockId(null);
-                                }}
-                                className={`h-5 w-5 cursor-pointer rounded-full border transition-transform hover:scale-110 ${
-                                  selected
-                                    ? 'border-[var(--ink)] ring-2 ring-[var(--ink)]/25'
-                                    : 'border-black/15'
-                                }`}
-                                style={{ backgroundColor: opt.swatch }}
-                              />
-                            );
-                          })}
-                        </div>
-                      </>
-                    )}
-                    <div className="my-1 border-t border-[var(--line)]" />
-                    <div className="flex items-center gap-1 px-1">
-                      <button
-                        type="button"
-                        disabled={idx === 0}
-                        onClick={() => moveBlock(idx, idx - 1)}
-                        className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
-                      >
-                        <ArrowUp className="h-3 w-3" aria-hidden="true" />
-                        <span>Up</span>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={idx === blocks.length - 1}
-                        onClick={() => moveBlock(idx, idx + 1)}
-                        className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
-                      >
-                        <ArrowDown className="h-3 w-3" aria-hidden="true" />
-                        <span>Down</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => duplicateBlockAt(idx)}
-                        title="Duplicate"
-                        className="sd-btn px-2 py-1 text-[11px]"
-                      >
-                        <Copy className="h-3 w-3" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenMenuBlockId(null);
-                          deleteBlockAt(idx);
-                        }}
-                        className="sd-btn px-2 py-1 text-[11px] text-[var(--bad)]"
-                        aria-label="Delete block"
-                      >
-                        <Trash2 className="h-3 w-3" aria-hidden="true" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Block Content */}
-                <div className="relative min-w-0 flex-1">
-                  {block.type === 'summary' && (
-                    <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_28%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_7%,var(--card))] px-5 py-4">
-                      <div className="mb-1.5 flex items-center justify-between">
-                        <span className="text-sm font-bold text-[var(--note-accent,var(--e3))]">
-                          Topic Overview
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => deleteBlockAt(idx)}
-                          aria-label="Remove Topic Overview"
-                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
-                        >
-                          <X className="h-4 w-4" aria-hidden="true" />
-                        </button>
-                      </div>
-                      <AutoGrowTextarea
-                        inputRef={(el) => registerInputRef(block.id, el)}
-                        value={block.text}
-                        minHeight={36}
-                        onFocus={() => setFocusedBlockId(block.id)}
-                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                        placeholder="Short 1–2 sentence topic summary…"
-                        className="text-[16.5px] leading-[1.72] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
-                      />
-                    </div>
-                  )}
-
-                  {block.type === 'heading' && (
-                    <div className="mt-6 border-b-2 border-[color-mix(in_srgb,var(--note-accent,var(--e3))_34%,var(--line))] pb-2">
-                      {block.partRole && NOTE_PART_ROLE_MAP[block.partRole] && (
-                        <div className="mb-0.5 text-[11px] font-bold text-[var(--note-accent,var(--e3))]">
-                          {NOTE_PART_ROLE_MAP[block.partRole].label}
-                        </div>
-                      )}
-                      <AutoGrowTextarea
-                        inputRef={(el) => registerInputRef(block.id, el)}
-                        value={block.text}
-                        minHeight={42}
-                        onFocus={() => setFocusedBlockId(block.id)}
-                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                        onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                        placeholder="Section Heading…"
-                        className="font-display text-[24px] font-extrabold leading-tight tracking-tight text-[var(--ink)] placeholder:text-[var(--mute)]/50 sm:text-[28px]"
-                      />
-                    </div>
-                  )}
-
-                  {block.type === 'subheading' && (
-                    <AutoGrowTextarea
-                      inputRef={(el) => registerInputRef(block.id, el)}
-                      value={block.text}
-                      minHeight={34}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                      onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                      onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder="Subheading…"
-                      className="font-display mt-4 pb-0.5 text-[19px] font-bold leading-snug text-[var(--note-accent,var(--e3))] placeholder:text-[var(--mute)]/50 sm:text-[20px]"
-                    />
-                  )}
-
-                  {block.type === 'bullet' && (
-                    <div
-                      className="flex items-start gap-3 py-0.5 transition-all"
-                      style={{ paddingLeft: `${(block.indent || 0) * 26 + 4}px` }}
-                    >
-                      <span
-                        className={`mt-[11px] shrink-0 rounded-full ${
-                          (block.indent || 0) > 0
-                            ? 'h-2 w-2 border-[1.5px] border-[var(--note-accent,var(--e3))] bg-transparent'
-                            : 'h-2 w-2 bg-[var(--note-accent,var(--e3))]'
-                        }`}
-                        aria-hidden="true"
-                      />
-                      <AutoGrowTextarea
-                        inputRef={(el) => registerInputRef(block.id, el)}
-                        value={block.text}
-                        minHeight={30}
-                        onFocus={() => setFocusedBlockId(block.id)}
-                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                        onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                        placeholder="List item…"
-                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/50"
-                      />
-                    </div>
-                  )}
-
-                  {block.type === 'paragraph' && (
-                    <AutoGrowTextarea
-                      inputRef={(el) => registerInputRef(block.id, el)}
-                      value={block.text}
-                      minHeight={30}
-                      onFocus={() => setFocusedBlockId(block.id)}
-                      onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                      onPaste={(e) => handlePasteMultiLine(e, block, idx)}
-                      onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                      placeholder={
-                        idx === 0
-                          ? 'Start typing your notes cleanly like a Word document… (or use Insert buttons above)'
-                          : 'Continue typing…'
+                    <button
+                      type="button"
+                      draggable
+                      onDragStart={() => setDragBlockId(block.id)}
+                      onDragEnd={() => {
+                        setDragBlockId(null);
+                        setDropTargetIdx(null);
+                      }}
+                      title="Drag to move or click for options"
+                      aria-label="Block options"
+                      onClick={() =>
+                        setOpenMenuBlockId((cur) => (cur === block.id ? null : block.id))
                       }
-                      className="py-0.5 text-[16px] leading-[1.72] text-[var(--ink)] placeholder:text-[var(--mute)]/50"
-                    />
-                  )}
+                      className="flex h-6 w-5 cursor-grab items-center justify-center rounded text-[var(--mute)] hover:bg-[var(--bg)] hover:text-[var(--ink)] active:cursor-grabbing"
+                    >
+                      <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
 
-                  {block.type === 'factbox' && (
-                    <div className="my-2.5 rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_7%,var(--bg))] px-5 py-4">
-                      <div className="mb-1.5 flex items-center justify-between gap-2">
-                        <input
-                          type="text"
-                          value={block.extra || ''}
-                          onFocus={() => setFocusedBlockId(block.id)}
-                          onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
-                          placeholder="Fact Box Title (e.g. Key Formula)"
-                          className="flex-1 border-0 bg-transparent text-sm font-bold text-[var(--note-accent,var(--e3))] outline-none placeholder:text-[var(--note-accent,var(--e3))]/60"
-                        />
+                  {/* Compact Block Context Menu */}
+                  {openMenuBlockId === block.id && (
+                    <div className="absolute left-7 top-8 z-30 max-h-80 w-60 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
+                      <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Turn into
+                      </div>
+                      {SLASH_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.type}
+                          type="button"
+                          onClick={() => changeBlockType(block.id, opt.type)}
+                          className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs ${
+                            block.type === opt.type
+                              ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))] font-bold text-[var(--ink)]'
+                              : 'text-[var(--ink)] hover:bg-[var(--bg)]'
+                          }`}
+                        >
+                          <span className="text-[var(--mute)]">{blockTypeIcon(opt.type)}</span>
+                          <span>{opt.label}</span>
+                        </button>
+                      ))}
+                      {block.type === 'heading' && (
+                        <>
+                          <div className="my-1 border-t border-[var(--line)]" />
+                          <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                            Section Colour
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5 pt-0.5">
+                            {NOTE_COLOR_OPTIONS.map((opt) => {
+                              const selected = normalizeNoteColor(block.accentColor) === opt.id;
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  title={opt.label}
+                                  aria-label={`Set section colour to ${opt.label}`}
+                                  onClick={() => {
+                                    updateBlock(block.id, {
+                                      accentColor: opt.id === 'default' ? undefined : opt.id,
+                                    });
+                                    setOpenMenuBlockId(null);
+                                  }}
+                                  className={`h-5 w-5 cursor-pointer rounded-full border transition-transform hover:scale-110 ${
+                                    selected
+                                      ? 'border-[var(--ink)] ring-2 ring-[var(--ink)]/25'
+                                      : 'border-black/15'
+                                  }`}
+                                  style={{ backgroundColor: opt.swatch }}
+                                />
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                      <div className="my-1 border-t border-[var(--line)]" />
+                      <div className="flex items-center gap-1 px-1">
                         <button
                           type="button"
-                          onClick={() => deleteBlockAt(idx)}
-                          aria-label="Remove Fact Box"
-                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                          disabled={idx === 0}
+                          onClick={() => moveBlock(idx, idx - 1)}
+                          className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
                         >
-                          <X className="h-4 w-4" aria-hidden="true" />
+                          <ArrowUp className="h-3 w-3" aria-hidden="true" />
+                          <span>Up</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === blocks.length - 1}
+                          onClick={() => moveBlock(idx, idx + 1)}
+                          className="sd-btn flex-1 py-1 text-[11px] disabled:opacity-40"
+                        >
+                          <ArrowDown className="h-3 w-3" aria-hidden="true" />
+                          <span>Down</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => duplicateBlockAt(idx)}
+                          title="Duplicate"
+                          className="sd-btn px-2 py-1 text-[11px]"
+                        >
+                          <Copy className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenuBlockId(null);
+                            deleteBlockAt(idx);
+                          }}
+                          className="sd-btn px-2 py-1 text-[11px] text-[var(--bad)]"
+                          aria-label="Delete block"
+                        >
+                          <Trash2 className="h-3 w-3" aria-hidden="true" />
                         </button>
                       </div>
-                      <AutoGrowTextarea
-                        inputRef={(el) => registerInputRef(block.id, el)}
-                        value={block.text}
-                        minHeight={34}
-                        onFocus={() => setFocusedBlockId(block.id)}
-                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                        placeholder="Core rule, formula, or key evidence…"
-                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
-                      />
                     </div>
                   )}
 
-                  {block.type === 'flow' && (
-                    <div className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_4%,var(--card))] p-4">
-                      <div className="mb-2.5 flex items-center justify-between gap-2">
-                        <input
-                          type="text"
-                          value={block.extra || ''}
-                          onFocus={() => setFocusedBlockId(block.id)}
-                          onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
-                          placeholder="Process / Causal Flow Label (optional)"
-                          className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))] outline-none placeholder:text-[var(--mute)]/60"
-                        />
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateBlock(block.id, { steps: [...(block.steps || []), ''] })
-                            }
-                            className="sd-btn px-2.5 py-1 text-xs"
-                          >
-                            + Step
-                          </button>
+                  {/* Block Content */}
+                  <div className="relative min-w-0 flex-1">
+                    {block.type === 'summary' && (
+                      <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_28%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_7%,var(--card))] px-5 py-4">
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <span className="text-sm font-bold text-[var(--note-accent,var(--e3))]">
+                            Topic Overview
+                          </span>
                           <button
                             type="button"
                             onClick={() => deleteBlockAt(idx)}
-                            aria-label="Remove Flow"
+                            aria-label="Remove Topic Overview"
                             className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                           >
-                            <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            <X className="h-4 w-4" aria-hidden="true" />
                           </button>
                         </div>
+                        <RichTextEditable
+                          syncKey={blockSyncKey}
+                          elRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          onFocusEl={(el) =>
+                            bindRichEditable(el, (dom) =>
+                              updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                            )
+                          }
+                          onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                          onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                          placeholder="Short 1–2 sentence topic summary…"
+                          className="min-h-[36px] text-[16.5px] leading-[1.72] text-[var(--ink)]"
+                        />
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {(block.steps || ['', '']).map((stepVal, sIdx, arr) => (
-                          <div key={sIdx} className="flex items-center gap-1.5">
-                            <div className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5">
-                              <span className="font-mono-num text-xs font-bold text-[var(--note-accent,var(--e3))]">
-                                {sIdx + 1}.
-                              </span>
-                              <input
-                                type="text"
-                                value={stepVal}
-                                onFocus={() => setFocusedBlockId(block.id)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && !e.shiftKey) {
-                                    e.preventDefault();
-                                    const nextSteps = [...arr];
-                                    nextSteps.splice(sIdx + 1, 0, '');
-                                    updateBlock(block.id, { steps: nextSteps });
-                                  }
-                                }}
-                                onChange={(e) => {
-                                  const nextSteps = arr.map((v, i) =>
-                                    i === sIdx ? e.target.value : v
-                                  );
-                                  updateBlock(block.id, { steps: nextSteps });
-                                }}
-                                placeholder={`Step ${sIdx + 1}`}
-                                className="min-w-[125px] border-0 bg-transparent text-sm font-medium text-[var(--ink)] outline-none"
-                              />
-                              {arr.length > 2 && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    updateBlock(block.id, {
-                                      steps: arr.filter((_, i) => i !== sIdx),
-                                    })
-                                  }
-                                  aria-label="Remove step"
-                                  className="cursor-pointer text-xs text-[var(--mute)] hover:text-[var(--bad)]"
-                                >
-                                  ×
-                                </button>
-                              )}
-                            </div>
-                            {sIdx < arr.length - 1 && (
-                              <ArrowRight
-                                className="h-4 w-4 shrink-0 text-[var(--note-accent,var(--e3))]"
-                                aria-hidden="true"
-                              />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                    )}
 
-                  {block.type === 'table' && (() => {
-                    const rows = block.rows?.length
-                      ? block.rows
-                      : [
-                          ['Column 1', 'Column 2'],
-                          ['', ''],
-                        ];
-                    const colCount = Math.max(1, rows[0]?.length || 2);
-                    return (
-                      <div className="my-2.5 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_26%,var(--line))] bg-[var(--bg)]">
-                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-3.5 py-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))]">
-                            Table ({rows.length} × {colCount})
-                          </span>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateBlock(block.id, {
-                                  rows: [...rows, Array.from({ length: colCount }, () => '')],
-                                })
-                              }
-                              className="sd-btn px-2.5 py-0.5 text-xs"
-                            >
-                              + Row
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateBlock(block.id, {
-                                  rows: rows.map((r, ri) => [
-                                    ...r,
-                                    ri === 0 ? `Col ${colCount + 1}` : '',
-                                  ]),
-                                })
-                              }
-                              className="sd-btn px-2.5 py-0.5 text-xs"
-                            >
-                              + Col
-                            </button>
-                            {colCount > 1 && (
+                    {block.type === 'heading' && (
+                      <div className="mt-6 border-b-2 border-[color-mix(in_srgb,var(--note-accent,var(--e3))_34%,var(--line))] pb-2">
+                        {block.partRole && NOTE_PART_ROLE_MAP[block.partRole] && (
+                          <div className="mb-0.5 text-[11px] font-bold text-[var(--note-accent,var(--e3))]">
+                            {NOTE_PART_ROLE_MAP[block.partRole].label}
+                          </div>
+                        )}
+                        <RichTextEditable
+                          syncKey={blockSyncKey}
+                          elRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          onFocusEl={(el) =>
+                            bindRichEditable(el, (dom) =>
+                              updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                            )
+                          }
+                          onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                          onPasteEl={(e, el) => handlePasteMultiLine(e, el, block, idx)}
+                          onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                          placeholder="Section Heading…"
+                          className="font-display min-h-[38px] text-[24px] font-extrabold leading-tight tracking-tight text-[var(--ink)] sm:text-[28px]"
+                        />
+                      </div>
+                    )}
+
+                    {block.type === 'subheading' && (
+                      <RichTextEditable
+                        syncKey={blockSyncKey}
+                        elRef={(el) => registerEditableRef(block.id, el)}
+                        value={block.text}
+                        onFocusEl={(el) =>
+                          bindRichEditable(el, (dom) =>
+                            updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                          )
+                        }
+                        onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                        onPasteEl={(e, el) => handlePasteMultiLine(e, el, block, idx)}
+                        onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                        placeholder="Subheading…"
+                        className="font-display mt-4 min-h-[30px] pb-0.5 text-[19px] font-bold leading-snug text-[var(--note-accent,var(--e3))] sm:text-[20px]"
+                      />
+                    )}
+
+                    {block.type === 'bullet' && (
+                      <div
+                        className="flex items-start gap-3 py-0.5 transition-all"
+                        style={{ paddingLeft: `${(block.indent || 0) * 26 + 4}px` }}
+                      >
+                        <span
+                          className={`mt-[11px] shrink-0 rounded-full ${
+                            (block.indent || 0) > 0
+                              ? 'h-2 w-2 border-[1.5px] border-[var(--note-accent,var(--e3))] bg-transparent'
+                              : 'h-2 w-2 bg-[var(--note-accent,var(--e3))]'
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <RichTextEditable
+                          syncKey={blockSyncKey}
+                          elRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          onFocusEl={(el) =>
+                            bindRichEditable(el, (dom) =>
+                              updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                            )
+                          }
+                          onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                          onPasteEl={(e, el) => handlePasteMultiLine(e, el, block, idx)}
+                          onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                          placeholder="List item…"
+                          className="min-h-[28px] text-[16px] leading-[1.7] text-[var(--ink)]"
+                        />
+                      </div>
+                    )}
+
+                    {block.type === 'paragraph' && (
+                      <RichTextEditable
+                        syncKey={blockSyncKey}
+                        elRef={(el) => registerEditableRef(block.id, el)}
+                        value={block.text}
+                        onFocusEl={(el) =>
+                          bindRichEditable(el, (dom) =>
+                            updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                          )
+                        }
+                        onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                        onPasteEl={(e, el) => handlePasteMultiLine(e, el, block, idx)}
+                        onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                        placeholder={
+                          idx === 0
+                            ? 'Start typing your notes cleanly like a Word document… (or use Insert buttons above)'
+                            : 'Continue typing…'
+                        }
+                        className="min-h-[28px] py-0.5 text-[16px] leading-[1.72] text-[var(--ink)]"
+                      />
+                    )}
+
+                    {block.type === 'factbox' && (() => {
+                      const boxStyle = getTableSurfaceStyles(block.tableColor);
+                      return (
+                        <div
+                          className="my-2.5 rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_7%,var(--bg))] px-5 py-4"
+                          style={boxStyle.boxStyle}
+                        >
+                          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                            <input
+                              type="text"
+                              value={block.extra || ''}
+                              onFocus={() => setFocusedBlockId(block.id)}
+                              onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                              placeholder="Fact Box Title (e.g. Key Formula)"
+                              style={boxStyle.boxTitleStyle}
+                              className="min-w-[140px] flex-1 border-0 bg-transparent text-sm font-bold text-[var(--note-accent,var(--e3))] outline-none placeholder:opacity-60"
+                            />
+                            <div className="flex items-center gap-1.5">
+                              {NOTE_SURFACE_COLORS.slice(0, 6).map((c) => {
+                                const selected = (block.tableColor || 'default') === c.id;
+                                return (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    title={`Box colour: ${c.label}`}
+                                    onClick={() =>
+                                      updateBlock(block.id, {
+                                        tableColor: c.id === 'default' ? undefined : c.id,
+                                      })
+                                    }
+                                    className={`h-4 w-4 cursor-pointer rounded-full border transition-transform hover:scale-110 ${
+                                      selected
+                                        ? 'border-[var(--ink)] ring-2 ring-[var(--ink)]/25'
+                                        : 'border-black/20'
+                                    }`}
+                                    style={{ background: c.swatch }}
+                                  />
+                                );
+                              })}
                               <button
                                 type="button"
-                                onClick={() =>
-                                  updateBlock(block.id, {
-                                    rows: rows.map((r) => r.slice(0, -1)),
-                                  })
-                                }
-                                className="sd-btn px-2.5 py-0.5 text-xs"
+                                onClick={() => deleteBlockAt(idx)}
+                                aria-label="Remove Fact Box"
+                                className="ml-1 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                               >
-                                - Col
+                                <X className="h-4 w-4" aria-hidden="true" />
                               </button>
-                            )}
+                            </div>
+                          </div>
+                          <RichTextEditable
+                            syncKey={blockSyncKey}
+                            elRef={(el) => registerEditableRef(block.id, el)}
+                            value={block.text}
+                            onFocusEl={(el) =>
+                              bindRichEditable(el, (dom) =>
+                                updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                              )
+                            }
+                            onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                            onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                            placeholder="Core rule, formula, or key evidence…"
+                            className="min-h-[32px] text-[16px] leading-[1.7] text-[var(--ink)]"
+                          />
+                        </div>
+                      );
+                    })()}
+
+                    {block.type === 'flow' && (
+                      <div className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_4%,var(--card))] p-4">
+                        <div className="mb-2.5 flex items-center justify-between gap-2">
+                          <input
+                            type="text"
+                            value={block.extra || ''}
+                            onFocus={() => setFocusedBlockId(block.id)}
+                            onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                            placeholder="Process / Causal Flow Label (optional)"
+                            className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))] outline-none placeholder:text-[var(--mute)]/60"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateBlock(block.id, { steps: [...(block.steps || []), ''] })
+                              }
+                              className="sd-btn px-2.5 py-1 text-xs"
+                            >
+                              + Step
+                            </button>
                             <button
                               type="button"
                               onClick={() => deleteBlockAt(idx)}
-                              aria-label="Remove Table"
-                              className="ml-1 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                              aria-label="Remove Flow"
+                              className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
                             >
                               <X className="h-3.5 w-3.5" aria-hidden="true" />
                             </button>
                           </div>
                         </div>
-                        <div className="overflow-x-auto bg-[var(--card)]">
-                          <table className="w-full border-collapse text-[15px]">
-                            <tbody>
-                              {rows.map((r, ri) => (
-                                <tr
-                                  key={ri}
-                                  className={
-                                    ri === 0
-                                      ? 'border-b-2 border-[color-mix(in_srgb,var(--note-accent,var(--e3))_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_12%,var(--card))] font-bold'
-                                      : 'border-b border-[var(--line)] last:border-b-0'
+                        <div className="flex flex-wrap items-stretch gap-2">
+                          {(block.steps || ['', '']).map((stepVal, sIdx, arr) => (
+                            <div key={sIdx} className="flex items-center gap-2">
+                              <div className="flex items-start gap-2 rounded-xl border border-[var(--line)] bg-[var(--card)] px-3.5 py-2.5">
+                                <span className="font-mono-num mt-0.5 text-xs font-bold text-[var(--note-accent,var(--e3))]">
+                                  {sIdx + 1}.
+                                </span>
+                                <AutoGrowTextarea
+                                  value={stepVal}
+                                  minHeight={24}
+                                  onFocus={() => setFocusedBlockId(block.id)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                      e.preventDefault();
+                                      const nextSteps = [...arr];
+                                      nextSteps.splice(sIdx + 1, 0, '');
+                                      updateBlock(block.id, { steps: nextSteps });
+                                    }
+                                  }}
+                                  onChange={(e) => {
+                                    const nextSteps = arr.map((v, i) =>
+                                      i === sIdx ? e.target.value : v
+                                    );
+                                    updateBlock(block.id, { steps: nextSteps });
+                                  }}
+                                  placeholder={`Step ${sIdx + 1}`}
+                                  className="min-w-[140px] max-w-[240px] text-sm font-medium leading-snug text-[var(--ink)]"
+                                />
+                                {arr.length > 2 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateBlock(block.id, {
+                                        steps: arr.filter((_, i) => i !== sIdx),
+                                      })
+                                    }
+                                    aria-label="Remove step"
+                                    className="cursor-pointer text-xs text-[var(--mute)] hover:text-[var(--bad)]"
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
+                              {sIdx < arr.length - 1 && (
+                                <ArrowRight
+                                  className="h-4 w-4 shrink-0 text-[var(--note-accent,var(--e3))]"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {block.type === 'table' && (() => {
+                      const rows = block.rows?.length
+                        ? block.rows
+                        : [
+                            ['Column 1', 'Column 2'],
+                            ['', ''],
+                          ];
+                      const colCount = Math.max(1, rows[0]?.length || 2);
+                      const tblStyles = getTableSurfaceStyles(block.tableColor);
+                      return (
+                        <div
+                          className="my-2.5 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_26%,var(--line))] bg-[var(--bg)]"
+                          style={tblStyles.wrapperStyle}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-3.5 py-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className="text-xs font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))]"
+                                style={tblStyles.accentHex ? { color: tblStyles.accentHex } : undefined}
+                              >
+                                Table ({rows.length} × {colCount})
+                              </span>
+                              <span className="h-3.5 w-px bg-[var(--line)]" aria-hidden="true" />
+                              <div className="flex items-center gap-1" title="Table Colour">
+                                {NOTE_SURFACE_COLORS.map((c) => {
+                                  const selected = (block.tableColor || 'default') === c.id;
+                                  return (
+                                    <button
+                                      key={c.id}
+                                      type="button"
+                                      title={`Table colour: ${c.label}`}
+                                      onClick={() =>
+                                        updateBlock(block.id, {
+                                          tableColor: c.id === 'default' ? undefined : c.id,
+                                        })
+                                      }
+                                      className={`h-4 w-4 cursor-pointer rounded-full border transition-transform hover:scale-110 ${
+                                        selected
+                                          ? 'border-[var(--ink)] ring-2 ring-[var(--ink)]/25'
+                                          : 'border-black/20'
+                                      }`}
+                                      style={{ background: c.swatch }}
+                                    />
+                                  );
+                                })}
+                                <input
+                                  type="color"
+                                  title="Custom table colour"
+                                  value={tblStyles.accentHex || '#2563EB'}
+                                  onChange={(e) =>
+                                    updateBlock(block.id, { tableColor: e.target.value })
                                   }
-                                >
-                                  {Array.from({ length: colCount }, (_, ci) => (
-                                    <td
-                                      key={ci}
-                                      className="border-r border-[var(--line)] align-top last:border-r-0"
-                                    >
-                                      <AutoGrowTextarea
-                                        value={r[ci] || ''}
-                                        minHeight={40}
-                                        onFocus={() => setFocusedBlockId(block.id)}
-                                        onChange={(e) => {
-                                          const nextRows = rows.map((rowItem, rowIdx) =>
-                                            rowIdx === ri
-                                              ? Array.from({ length: colCount }, (__, cIdx) =>
-                                                  cIdx === ci ? e.target.value : rowItem[cIdx] || ''
-                                                )
-                                              : [...rowItem]
-                                          );
-                                          updateBlock(block.id, { rows: nextRows });
-                                        }}
-                                        placeholder={ri === 0 ? `Header ${ci + 1}` : 'Type…'}
-                                        className={`min-w-[130px] px-4 py-2.5 text-[15.5px] leading-relaxed focus:bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] ${
-                                          ri === 0 ? 'font-bold text-[var(--ink)]' : 'text-[var(--ink)]'
-                                        }`}
-                                      />
-                                    </td>
-                                  ))}
-                                  {rows.length > 2 && ri > 0 && (
-                                    <td className="w-8 text-center align-middle">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          updateBlock(block.id, {
-                                            rows: rows.filter((_, rIndex) => rIndex !== ri),
-                                          })
-                                        }
-                                        title="Delete row"
-                                        className="cursor-pointer px-1.5 py-1 text-sm text-[var(--mute)] hover:text-[var(--bad)]"
-                                      >
-                                        ×
-                                      </button>
-                                    </td>
-                                  )}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {block.type === 'key_term' && (
-                    <div className="my-1.5 flex items-start gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5">
-                      <div className="grid flex-1 gap-2 sm:grid-cols-12">
-                        <input
-                          ref={(el) => registerInputRef(block.id, el)}
-                          type="text"
-                          value={block.text}
-                          onFocus={() => setFocusedBlockId(block.id)}
-                          onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            updateBlock(block.id, { text: val });
-                            setSlashBlockId(val.startsWith('/') ? block.id : null);
-                          }}
-                          placeholder="Key Term"
-                          className="rounded-lg border border-transparent bg-[var(--card)] px-3.5 py-2.5 text-[15.5px] font-bold text-[var(--ink)] outline-none focus:border-[var(--e3)] sm:col-span-4"
-                        />
-                        <AutoGrowTextarea
-                          value={block.extra || ''}
-                          minHeight={40}
-                          onFocus={() => setFocusedBlockId(block.id)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              insertBlockAfter(idx, 'key_term');
-                            }
-                          }}
-                          onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
-                          placeholder="Clear exam definition…"
-                          className="rounded-lg border border-transparent bg-[var(--card)] px-3.5 py-2.5 text-[15.5px] leading-relaxed text-[var(--ink)] focus:border-[var(--e3)] sm:col-span-8"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => deleteBlockAt(idx)}
-                        aria-label="Remove Key Term"
-                        className="mt-2 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
-                      >
-                        <X className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                    </div>
-                  )}
-
-                  {block.type === 'worked_example' && (
-                    <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--ok)_32%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_5%,var(--bg))] px-5 py-4">
-                      <div className="mb-1.5 flex items-center justify-between">
-                        <span className="text-sm font-bold text-[var(--ok)]">
-                          Worked Example
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => deleteBlockAt(idx)}
-                          aria-label="Remove Worked Example"
-                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
-                        >
-                          <X className="h-4 w-4" aria-hidden="true" />
-                        </button>
-                      </div>
-                      <AutoGrowTextarea
-                        inputRef={(el) => registerInputRef(block.id, el)}
-                        value={block.text}
-                        minHeight={38}
-                        onFocus={() => setFocusedBlockId(block.id)}
-                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                        placeholder="Step-by-step calculation, quote analysis, or model answer…"
-                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
-                      />
-                    </div>
-                  )}
-
-                  {block.type === 'exam_tip' && (
-                    <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--e2)_40%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_6%,var(--bg))] px-5 py-4">
-                      <div className="mb-1.5 flex items-center justify-between">
-                        <span className="text-sm font-bold text-[var(--e2)]">
-                          Examiner Tip
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => deleteBlockAt(idx)}
-                          aria-label="Remove Examiner Tip"
-                          className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
-                        >
-                          <X className="h-4 w-4" aria-hidden="true" />
-                        </button>
-                      </div>
-                      <AutoGrowTextarea
-                        inputRef={(el) => registerInputRef(block.id, el)}
-                        value={block.text}
-                        minHeight={38}
-                        onFocus={() => setFocusedBlockId(block.id)}
-                        onKeyDown={(e) => handleBlockKeyDown(e, block, idx)}
-                        onChange={(e) => handleTextChangeWithShortcuts(block, e.target.value)}
-                        placeholder="Common mark-scheme mistake or phrase examiners reward…"
-                        className="text-[16px] leading-[1.7] text-[var(--ink)] placeholder:text-[var(--mute)]/55"
-                      />
-                    </div>
-                  )}
-
-                  {/* Inline Slash Command Menu */}
-                  {showSlash && (
-                    <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-76 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
-                      <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                        Insert Block
-                      </div>
-                      {filteredSlashOptions.length === 0 ? (
-                        <div className="px-2.5 py-2 text-xs text-[var(--mute)]">
-                          No matching block
-                        </div>
-                      ) : (
-                        filteredSlashOptions.map((opt, optIdx) => (
-                          <button
-                            key={opt.type}
-                            type="button"
-                            onClick={() => changeBlockType(block.id, opt.type, true)}
-                            className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                              optIdx === slashHighlightIdx
-                                ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))]'
-                                : 'hover:bg-[var(--bg)]'
-                            }`}
-                          >
-                            <span className="mt-0.5 text-[var(--e3)]">
-                              {blockTypeIcon(opt.type)}
-                            </span>
-                            <div className="min-w-0">
-                              <div className="text-xs font-bold text-[var(--ink)]">{opt.label}</div>
-                              <div className="truncate text-[11px] text-[var(--mute)]">
-                                {opt.hint}
+                                  className="ml-0.5 h-5 w-5 cursor-pointer rounded border border-[var(--line)] bg-transparent p-0"
+                                />
                               </div>
                             </div>
+
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateBlock(block.id, {
+                                    rows: [...rows, Array.from({ length: colCount }, () => '')],
+                                  })
+                                }
+                                className="sd-btn px-2.5 py-0.5 text-xs"
+                              >
+                                + Row
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateBlock(block.id, {
+                                    rows: rows.map((r, ri) => [
+                                      ...r,
+                                      ri === 0 ? `Col ${colCount + 1}` : '',
+                                    ]),
+                                  })
+                                }
+                                className="sd-btn px-2.5 py-0.5 text-xs"
+                              >
+                                + Col
+                              </button>
+                              {colCount > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateBlock(block.id, {
+                                      rows: rows.map((r) => r.slice(0, -1)),
+                                    })
+                                  }
+                                  className="sd-btn px-2.5 py-0.5 text-xs"
+                                >
+                                  - Col
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => deleteBlockAt(idx)}
+                                aria-label="Remove Table"
+                                className="ml-1 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                              >
+                                <X className="h-3.5 w-3.5" aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="overflow-x-auto bg-[var(--card)]">
+                            <table className="w-full border-collapse text-[15px]">
+                              <tbody>
+                                {rows.map((r, ri) => (
+                                  <tr
+                                    key={ri}
+                                    className={
+                                      ri === 0
+                                        ? 'border-b-2 border-[color-mix(in_srgb,var(--note-accent,var(--e3))_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_12%,var(--card))] font-bold'
+                                        : ri % 2 === 1
+                                        ? 'border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_4%,var(--card))] last:border-b-0'
+                                        : 'border-b border-[var(--line)] last:border-b-0'
+                                    }
+                                    style={
+                                      ri === 0
+                                        ? tblStyles.theadStyle
+                                        : ri % 2 === 1
+                                        ? tblStyles.zebraStyle
+                                        : undefined
+                                    }
+                                  >
+                                    {Array.from({ length: colCount }, (_, ci) => (
+                                      <td
+                                        key={ci}
+                                        className="border-r border-[var(--line)] align-top last:border-r-0"
+                                      >
+                                        <RichTextEditable
+                                          syncKey={`${blockSyncKey}_r${ri}_c${ci}`}
+                                          value={r[ci] || ''}
+                                          onFocusEl={(el) =>
+                                            bindRichEditable(el, (dom) => {
+                                              const nextVal = domNodeToInlineMarkup(dom);
+                                              const nextRows = rows.map((rowItem, rowIdx) =>
+                                                rowIdx === ri
+                                                  ? Array.from({ length: colCount }, (__, cIdx) =>
+                                                      cIdx === ci ? nextVal : rowItem[cIdx] || ''
+                                                    )
+                                                  : [...rowItem]
+                                              );
+                                              updateBlock(block.id, { rows: nextRows });
+                                            })
+                                          }
+                                          onChangeValue={(nextVal) => {
+                                            const nextRows = rows.map((rowItem, rowIdx) =>
+                                              rowIdx === ri
+                                                ? Array.from({ length: colCount }, (__, cIdx) =>
+                                                    cIdx === ci ? nextVal : rowItem[cIdx] || ''
+                                                  )
+                                                : [...rowItem]
+                                            );
+                                            updateBlock(block.id, { rows: nextRows });
+                                          }}
+                                          placeholder={ri === 0 ? `Header ${ci + 1}` : 'Type…'}
+                                          className={`min-h-[40px] min-w-[130px] px-4 py-2.5 text-[15.5px] leading-relaxed focus:bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))] ${
+                                            ri === 0 ? 'font-bold text-[var(--ink)]' : 'text-[var(--ink)]'
+                                          }`}
+                                        />
+                                      </td>
+                                    ))}
+                                    {rows.length > 2 && ri > 0 && (
+                                      <td className="w-8 text-center align-middle">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            updateBlock(block.id, {
+                                              rows: rows.filter((_, rIndex) => rIndex !== ri),
+                                            })
+                                          }
+                                          title="Delete row"
+                                          className="cursor-pointer px-1.5 py-1 text-sm text-[var(--mute)] hover:text-[var(--bad)]"
+                                        >
+                                          ×
+                                        </button>
+                                      </td>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {block.type === 'key_term' && (
+                      <div className="my-1.5 flex items-start gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5">
+                        <div className="grid flex-1 gap-2 sm:grid-cols-12">
+                          <input
+                            ref={(el) => registerEditableRef(block.id, el)}
+                            type="text"
+                            value={block.text}
+                            onFocus={() => setFocusedBlockId(block.id)}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              updateBlock(block.id, { text: val });
+                              setSlashBlockId(val.startsWith('/') ? block.id : null);
+                            }}
+                            placeholder="Key Term"
+                            className="rounded-lg border border-transparent bg-[var(--card)] px-3.5 py-2.5 text-[15.5px] font-bold text-[var(--ink)] outline-none focus:border-[var(--e3)] sm:col-span-4"
+                          />
+                          <AutoGrowTextarea
+                            value={block.extra || ''}
+                            minHeight={40}
+                            onFocus={() => setFocusedBlockId(block.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                insertBlockAfter(idx, 'key_term');
+                              }
+                            }}
+                            onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                            placeholder="Clear exam definition…"
+                            className="rounded-lg border border-transparent bg-[var(--card)] px-3.5 py-2.5 text-[15.5px] leading-relaxed text-[var(--ink)] focus:border-[var(--e3)] sm:col-span-8"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => deleteBlockAt(idx)}
+                          aria-label="Remove Key Term"
+                          className="mt-2 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                        >
+                          <X className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      </div>
+                    )}
+
+                    {block.type === 'worked_example' && (
+                      <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--ok)_32%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_5%,var(--bg))] px-5 py-4">
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <span className="text-sm font-bold text-[var(--ok)]">
+                            Worked Example
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => deleteBlockAt(idx)}
+                            aria-label="Remove Worked Example"
+                            className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                          >
+                            <X className="h-4 w-4" aria-hidden="true" />
                           </button>
-                        ))
-                      )}
-                    </div>
-                  )}
+                        </div>
+                        <RichTextEditable
+                          syncKey={blockSyncKey}
+                          elRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          onFocusEl={(el) =>
+                            bindRichEditable(el, (dom) =>
+                              updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                            )
+                          }
+                          onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                          onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                          placeholder="Step-by-step calculation, quote analysis, or model answer…"
+                          className="min-h-[38px] text-[16px] leading-[1.7] text-[var(--ink)]"
+                        />
+                      </div>
+                    )}
+
+                    {block.type === 'exam_tip' && (
+                      <div className="my-2.5 rounded-2xl border border-[color-mix(in_srgb,var(--e2)_40%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_6%,var(--bg))] px-5 py-4">
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <span className="text-sm font-bold text-[var(--e2)]">
+                            Examiner Tip
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => deleteBlockAt(idx)}
+                            aria-label="Remove Examiner Tip"
+                            className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                          >
+                            <X className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </div>
+                        <RichTextEditable
+                          syncKey={blockSyncKey}
+                          elRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          onFocusEl={(el) =>
+                            bindRichEditable(el, (dom) =>
+                              updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                            )
+                          }
+                          onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                          onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                          placeholder="Common mark-scheme mistake or phrase examiners reward…"
+                          className="min-h-[38px] text-[16px] leading-[1.7] text-[var(--ink)]"
+                        />
+                      </div>
+                    )}
+
+                    {/* Inline Slash Command Menu */}
+                    {showSlash && (
+                      <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-76 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-1.5 shadow-xl">
+                        <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                          Insert Block
+                        </div>
+                        {filteredSlashOptions.length === 0 ? (
+                          <div className="px-2.5 py-2 text-xs text-[var(--mute)]">
+                            No matching block
+                          </div>
+                        ) : (
+                          filteredSlashOptions.map((opt, optIdx) => (
+                            <button
+                              key={opt.type}
+                              type="button"
+                              onClick={() => changeBlockType(block.id, opt.type, true)}
+                              className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                                optIdx === slashHighlightIdx
+                                  ? 'bg-[color-mix(in_srgb,var(--e3)_14%,var(--bg))]'
+                                  : 'hover:bg-[var(--bg)]'
+                              }`}
+                            >
+                              <span className="mt-0.5 text-[var(--e3)]">
+                                {blockTypeIcon(opt.type)}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-[var(--ink)]">{opt.label}</div>
+                                <div className="truncate text-[11px] text-[var(--mute)]">
+                                  {opt.hint}
+                                </div>
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
+              );
             });
           })()}
 

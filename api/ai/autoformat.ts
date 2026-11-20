@@ -165,19 +165,20 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
  * while enforcing real synthesis, minimal output tokens, and balanced visual structure.
  */
 const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
-  'StudyDeck AI: distill raw notes/webpages into high-yield revision JSON.',
+  'StudyDeck AI: distill raw notes/webpages into high-yield, naturally structured revision JSON.',
   'PROCESS, DO NOT DUMP: Strip site nav, intros, author bios, ads & fluff. Condense wordy prose into sharp exam concepts, mechanisms, data & causes.',
-  'BALANCE & RHYTHM (never bullet-only walls or long paragraphs):',
-  '- Vary formats naturally per section p[]: mix 1 short framing "¶ " sentence (<=22w), grouped "**Term**: fact (<=15w)" bullets + "↳ sub-detail", and "### Subhead" dividers.',
-  '- Use "| A | B |" tables whenever comparing >=2 items, factors, pros/cons or stages.',
-  '- Add "📌 Label | Key stat/formula/fact" and "⇒ Step 1 → Step 2" where high-yield.',
+  'NATURAL HIERARCHY (never split rigidly into 01/02 mini-sections or filler boxes):',
+  '- Keep coherent ideas under natural headings h (keep meaningful numbering like "1. Topic", do NOT invent 01./02. prefixes).',
+  '- Lead with a clean "| Date/Key | Event/Point |" table when covering multiple dates, stats, or terms.',
+  '- Use "⇒ Step 1 → Step 2 → Step 3" for 2–5 parallel causes, agreements, or sequential steps; "### Sub-question" for sub-groups; "**Term**: fact" + "↳ detail" for bullets; "| A | B |" for comparisons.',
+  '- Leave u="" unless an intro summary genuinely adds value.',
   'Use source facts only.',
 ].join('\n');
 
 const STATIC_OPENAI_SYSTEM_INSTRUCTION =
   `${STATIC_GEMINI_SYSTEM_INSTRUCTION}\n` +
   'Strict JSON only: ' +
-  '{"t":"title","u":"1-sentence summary","s":[{"h":"Section","p":["¶ Short intro.","### Subhead","**Term**: fact","↳ detail","📌 Fact | High-yield stat","| A | B |","⇒ Step 1 → Step 2"]}],"k":[{"t":"term","d":"def"}],"x":"examiner tip","w":"worked example","e":[{"d":"date","t":"event","x":"detail","g":"impact","k":false}],"c":[{"q":"q","a":"a","s":"sec"}]}. ' +
+  '{"t":"title","u":"optional overview or empty","s":[{"h":"Section","p":["| Key | Detail |","⇒ Step 1 → Step 2 → Step 3","### Sub-question?","**Term**: fact","↳ detail","¶ Short explanation."]}],"k":[{"t":"term","d":"def"}],"x":"examiner tip","w":"worked example","e":[{"d":"date","t":"event","x":"detail","g":"impact","k":false}],"c":[{"q":"q","a":"a","s":"sec"}]}. ' +
   'Omit e[] or c[] if OFF.';
 
 function readHeader(
@@ -681,12 +682,12 @@ function getPresetDirective(preset?: string): string {
     case 'cornell':
       return 'Style=SummaryCues(u=strong overview;cue ### subheads + "↳ " indented proof;k=glossary).';
     case 'timeline-causal':
-      return 'Style=TimelineCauseEffect(chronological s,"⇒ Cause → Effect",dated events e[]).';
+      return 'Style=TimelineCauseEffect(chronological Key Dates table or sections,"⇒ Cause → Effect",dated events e[]).';
     case 'compact':
-      return 'Style=QuickCheatSheet(minimal words,high-yield bullets & key terms only).';
+      return 'Style=QuickCheatSheet(minimal words,high-yield tables, bullets & key terms only).';
     case 'balanced-visual':
     default:
-      return 'Style=PrettyBalanced(synthesize cleanly: 1 short "¶ " overview + "### " groups + <=15w **Term**/"↳ " bullets + "| A | B |" table + "📌 Fact | Value" + "⇒ Step 1 → Step 2").';
+      return 'Style=CleanNaturalNotes(synthesize cohesively without artificial mini-section splits; lead with Key Dates/Data table if applicable; use clear "### " subheadings, horizontal "⇒ A → B → C" arrow cards, "| A | B |" comparisons, and crisp bullets + "↳ " sub-points; leave u="" unless helpful).';
   }
 }
 
@@ -707,7 +708,7 @@ function buildCompactOptionsLine(params: {
     params.colorCodeParts
       ? 'ColorParts=ON(classify s[].r strictly: core|process|compare|example|risk; core=theory/definitions, process=steps/mechanisms/solutions, compare=tables/types/eval, example=case-studies/dates/examples, risk=limits/disadvantages/risks).'
       : 'ColorParts=OFF.',
-    'Max: 2-5 sections, <=16w/bullet, 3-7 terms.',
+    'Natural sections, <=16w/bullet, concise terms.',
   ].join(' ');
 }
 
@@ -790,7 +791,7 @@ function buildAutoformatSchema(opts: {
   return {
     type: Type.OBJECT,
     properties,
-    required: ['u', 's', 'k'],
+    required: ['s'],
   };
 }
 

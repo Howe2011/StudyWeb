@@ -50,6 +50,7 @@ import {
   listGoogleDocsFiles,
   signInWithGoogleDocs,
 } from '../lib/googleDocsImport';
+import { getTableSurfaceStyles, renderRichInline } from '../lib/inlineRichText';
 import {
   applyVerifiedPartColors,
   NOTE_PART_ROLE_MAP,
@@ -146,18 +147,7 @@ const GIZMO_CLOZE_SAMPLE = `- In photosynthesis, {{chlorophyll}} absorbs light e
 - During {{mitosis}}, one parent cell divides to produce {{two genetically identical}} daughter cells.
 - The {{Treaty of Versailles}} forced Germany to pay {{£6.6 billion}} in reparations in 1919.`;
 
-function renderPreviewBold(text: string) {
-  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, idx) =>
-    part.startsWith('**') && part.endsWith('**') ? (
-      <strong key={idx} className="font-semibold text-[var(--ink)]">
-        {part.slice(2, -2)}
-      </strong>
-    ) : (
-      <span key={idx}>{part}</span>
-    )
-  );
-}
+
 
 const FORMAT_PRESETS: Array<{ id: NoteFormatPreset; label: string; hint: string }> = [
   {
@@ -2406,12 +2396,12 @@ export function UniversalImportModal({
                               Topic Overview
                             </div>
                             <p className="mt-1 text-[15px] leading-relaxed text-[var(--ink)]">
-                              {renderPreviewBold(draftSummary)}
+                              {renderRichInline(draftSummary)}
                             </p>
                           </div>
                         )}
 
-                        {draftSections.map((sec, sIdx) => {
+                        {draftSections.map((sec) => {
                           const blocks = groupSectionPoints(sec.points);
                           const secAccent = normalizeNoteColor(sec.accentColor);
                           const roleInfo = sec.partRole ? NOTE_PART_ROLE_MAP[sec.partRole] : undefined;
@@ -2422,16 +2412,11 @@ export function UniversalImportModal({
                               className="space-y-3"
                             >
                               <div className="flex flex-wrap items-baseline justify-between gap-2 border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] pb-2">
-                                <div className="flex min-w-0 items-baseline gap-2">
-                                  <span className="font-mono-num text-sm font-extrabold text-[var(--note-accent)]">
-                                    {String(sIdx + 1).padStart(2, '0')}.
-                                  </span>
-                                  <h4 className="font-display text-lg font-extrabold tracking-tight text-[var(--ink)]">
-                                    {sec.heading || 'Key Points'}
-                                  </h4>
-                                </div>
+                                <h4 className="min-w-0 flex-1 font-display text-lg font-extrabold tracking-tight text-[var(--ink)]">
+                                  {sec.heading || 'Key Points'}
+                                </h4>
                                 {roleInfo && (
-                                  <span className="text-[11px] font-bold text-[var(--note-accent)]">
+                                  <span className="shrink-0 whitespace-nowrap text-[11px] font-bold text-[var(--note-accent)]">
                                     {roleInfo.label}
                                   </span>
                                 )}
@@ -2447,37 +2432,47 @@ export function UniversalImportModal({
                                             bi > 0 ? 'mt-4 pt-2' : ''
                                           }`}
                                         >
-                                          {renderPreviewBold(blk.text)}
+                                          {renderRichInline(blk.text)}
                                         </div>
                                       );
                                     }
                                     if (blk.kind === 'factbox') {
+                                      const boxSurface = getTableSurfaceStyles(blk.color);
                                       return (
                                         <div
                                           key={bi}
                                           className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_5%,var(--bg))] px-4 py-3"
+                                          style={boxSurface.boxStyle}
                                         >
-                                          <div className="text-xs font-bold text-[var(--note-accent)]">
+                                          <div
+                                            className="text-xs font-bold text-[var(--note-accent)]"
+                                            style={boxSurface.boxTitleStyle}
+                                          >
                                             {blk.title || 'Key Fact'}
                                           </div>
                                           <div className="mt-1 text-[14.5px] leading-relaxed">
-                                            {renderPreviewBold(blk.text)}
+                                            {renderRichInline(blk.text)}
                                           </div>
                                         </div>
                                       );
                                     }
                                     if (blk.kind === 'table') {
+                                      const tblSurface = getTableSurfaceStyles(blk.color);
                                       return (
                                         <div
                                           key={bi}
                                           className="my-3 overflow-x-auto rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[var(--card)]"
+                                          style={tblSurface.wrapperStyle}
                                         >
                                           <table className="w-full border-collapse text-left text-sm">
-                                            <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_10%,var(--card))]">
+                                            <thead
+                                              className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_10%,var(--card))]"
+                                              style={tblSurface.theadStyle}
+                                            >
                                               <tr>
                                                 {blk.headers.map((h, hi) => (
                                                   <th key={hi} className="px-3.5 py-2.5 font-bold text-[var(--ink)]">
-                                                    {renderPreviewBold(h)}
+                                                    {renderRichInline(h)}
                                                   </th>
                                                 ))}
                                               </tr>
@@ -2487,10 +2482,11 @@ export function UniversalImportModal({
                                                 <tr
                                                   key={ri}
                                                   className={
-                                                    ri % 2 === 1
+                                                    !tblSurface.isCustom && ri % 2 === 1
                                                       ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
                                                       : ''
                                                   }
+                                                  style={ri % 2 === 1 ? tblSurface.zebraStyle : undefined}
                                                 >
                                                   {row.map((cell, ci) => (
                                                     <td
@@ -2498,8 +2494,9 @@ export function UniversalImportModal({
                                                       className={`px-3.5 py-2.5 align-top ${
                                                         ci === 0 ? 'font-semibold' : ''
                                                       }`}
+                                                      style={ci === 0 ? tblSurface.firstColStyle : undefined}
                                                     >
-                                                      {renderPreviewBold(cell)}
+                                                      {renderRichInline(cell)}
                                                     </td>
                                                   ))}
                                                 </tr>
@@ -2527,7 +2524,7 @@ export function UniversalImportModal({
                                                   <strong className="font-mono-num text-[var(--note-accent)]">
                                                     {stepIdx + 1}.
                                                   </strong>{' '}
-                                                  {renderPreviewBold(step)}
+                                                  {renderRichInline(step)}
                                                 </span>
                                                 {stepIdx < blk.steps.length - 1 && (
                                                   <span className="text-[var(--note-accent)]">→</span>
@@ -2541,7 +2538,7 @@ export function UniversalImportModal({
                                     if (blk.kind === 'paragraph') {
                                       return (
                                         <p key={bi} className="leading-[1.7] text-[var(--ink)]">
-                                          {renderPreviewBold(blk.text)}
+                                          {renderRichInline(blk.text)}
                                         </p>
                                       );
                                     }
@@ -2562,7 +2559,7 @@ export function UniversalImportModal({
                                           aria-hidden="true"
                                         />
                                         <span className="text-[var(--ink)]">
-                                          {renderPreviewBold(blk.text)}
+                                          {renderRichInline(blk.text)}
                                         </span>
                                       </div>
                                     );

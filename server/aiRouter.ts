@@ -81,22 +81,21 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
  * maximizing implicit prefix prompt caching and enabling explicit Context Caching on reuse.
  */
 const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
-  'You are StudyDeck AI, an elite academic note synthesizer. Convert raw study material or scraped webpage text into concise, visually balanced revision JSON.',
-  'SELECTIVE EXTRACTION: Source text often comes from webpages. IGNORE navigation bars, author bios, filler intros ("In this guide..."), repetition, anecdotes, off-topic tangents, and redundant examples. Extract ONLY core examinable concepts, mechanisms, definitions, data/dates, comparisons, and formulas.',
-  'BLOCK GRAMMAR inside section points p[]:',
-  '- "### Subheading" to break long sections with clean visual hierarchy & breathing room.',
-  '- "¶ Short 1-2 sentence explanatory paragraph." (never long walls of prose).',
-  '- "**Term**: concise point (<=18 words)." and "↳ sub-point" for nested details (avoid monotonous bullet walls).',
-  '- "📌 Title | Key stat, formula, or standout fact" for inline Fact Boxes.',
-  '- "| Col 1 | Col 2 |" Markdown table rows for contrasts, pros/cons, or comparisons.',
-  '- "⇒ Step 1 → Step 2 → Step 3" for sequential processes or cause-effect chains.',
+  'You are StudyDeck AI, an elite academic note synthesizer. Convert raw study material or scraped webpage text into crisp, naturally structured revision JSON.',
+  'SELECTIVE EXTRACTION: Source text often comes from webpages. IGNORE navigation bars, author bios, filler intros, repetition, and tangents. Extract ONLY core examinable concepts, mechanisms, definitions, data/dates, comparisons, and formulas.',
+  'NATURAL HIERARCHY (NEVER rigidly split into artificial 01/02 mini-sections or filler boxes):',
+  '- Keep coherent ideas together under natural headings h (keep meaningful source numbering like "1. Topic", do NOT invent 01./02. prefixes).',
+  '- Start with a clean "| Date/Key | Event/Point |" summary table (under e.g. "Key Dates" or "Key Data") when the material covers multiple dates, stats, or terms.',
+  '- Use "⇒ Step 1 → Step 2 → Step 3" for 2–5 parallel causes, agreements, or sequential steps.',
+  '- Use "### Question or Sub-group" for natural sub-points, "**Term**: concise point" + "↳ sub-detail" for bullets, "| A | B |" tables for contrasts, and "📌 Label | Key stat/formula" ONLY for standout facts.',
+  '- Keep u (overview) empty "" unless an introductory summary genuinely helps.',
   'Never invent facts not grounded in the source.',
 ].join('\n');
 
 const STATIC_OPENAI_SYSTEM_INSTRUCTION =
   `${STATIC_GEMINI_SYSTEM_INSTRUCTION}\n` +
   'Return ONLY strict JSON with compact keys: ' +
-  '{"t":"title","u":"1-sentence summary","s":[{"h":"Section Heading","p":["¶ Short framing overview.","### Subheading","**Term**: crisp fact","↳ nested detail","📌 Key Fact | High-yield takeaway","| A | B |","⇒ Step 1 → Step 2"]}],"k":[{"t":"term","d":"def"}],"x":"examiner tip or empty","w":"worked example or empty","e":[{"d":"date","t":"event","x":"detail","g":"significance","k":false}],"c":[{"q":"question","a":"answer","s":"section"}]}. ' +
+  '{"t":"title","u":"optional short overview or empty","s":[{"h":"Section Heading","p":["| Key | Detail |","⇒ Step 1 → Step 2 → Step 3","### Sub-question?","**Term**: crisp fact","↳ nested detail","¶ Short 1-2 sentence explanation."]}],"k":[{"t":"term","d":"def"}],"x":"examiner tip or empty","w":"worked example or empty","e":[{"d":"date","t":"event","x":"detail","g":"significance","k":false}],"c":[{"q":"question","a":"answer","s":"section"}]}. ' +
   'Omit e[] or c[] if disabled in [OPT].';
 
 export function parseUserAiConfig(raw: unknown, reqHeaders?: Request['headers']): UserAiConfig | null {
@@ -469,18 +468,16 @@ function getPresetDirective(preset?: string): string {
     case 'cornell':
       return 'Style=SummaryCues(u=strong big-picture summary;s=cue subheadings ### + indented "↳ " details;k=essential glossary).';
     case 'timeline-causal':
-      return 'Style=TimelineCauseEffect(chronological s,"⇒ Cause → Effect" flow chains,populate dated events e[]).';
+      return 'Style=TimelineCauseEffect(chronological Key Dates table or sections,"⇒ Cause → Effect" flow chains,populate dated events e[]).';
     case 'compact':
-      return 'Style=QuickCheatSheet(minimum words,high-yield cram bullets,essential terms only).';
+      return 'Style=QuickCheatSheet(minimum words,high-yield cram tables & bullets,essential terms only).';
     case 'balanced-visual':
     default:
       return (
-        'Style=PrettyBalanced(' +
-        'Airy clear hierarchy—NEVER walls of prose and NEVER walls of only bullets! ' +
-        'For each major section h: start with a short 1-2 sentence "¶ " overview paragraph when helpful, ' +
-        'group ideas under "### Subheading" labels, mix concise **Term** bullets + "↳ " sub-points (2-4 per group), ' +
-        'add at least 1-2 "📌 Label | Key stat/formula/fact" Fact Boxes, ' +
-        '"| Col1 | Col2 |" tables for comparisons, and "⇒ A → B → C" arrow diagrams for processes).'
+        'Style=CleanNaturalNotes(' +
+        'Organize smoothly like a top-grade study handout—never split rigidly into tiny artificial sections. ' +
+        'If multiple dates/stats exist, lead with a clean "Key Dates" or "Key Data" Markdown table. ' +
+        'Group each major idea into cohesive sections using clear "### " subheadings, horizontal "⇒ A → B → C" arrow cards for 2-5 part agreements/steps, "| A | B |" comparison tables, and crisp bullets + "↳ " sub-points. Leave u="" unless an intro genuinely adds value).'
       );
   }
 }
@@ -502,7 +499,7 @@ function buildCompactOptionsLine(params: {
     params.colorCodeParts
       ? 'ColorParts=ON(group distinct parts cleanly & classify each section s[].r strictly as core|process|compare|example|risk: core=theory/definitions, process=steps/mechanisms/solutions, compare=tables/types/evaluation, example=case-studies/dates/examples, risk=limitations/disadvantages/risks/pitfalls).'
       : 'ColorParts=OFF.',
-    'Limits: 2-6 sections, <=18 words/bullet, 3-8 key terms max.',
+    'Keep natural section count, <=18 words/bullet, concise key terms.',
   ].join(' ');
 }
 
@@ -585,7 +582,138 @@ function buildAutoformatSchema(opts: {
   return {
     type: Type.OBJECT,
     properties,
-    required: ['u', 's', 'k'],
+    required: ['s'],
+  };
+}
+
+function detectAlreadyGoodFormatting(text: string): boolean {
+  const lines = text.split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length < 4) return false;
+
+  let headings = 0;
+  let structured = 0;
+  let denseBlobs = 0;
+  let totalChars = 0;
+
+  for (const raw of lines) {
+    const t = raw.trim();
+    totalChars += t.length;
+    if (/^#{1,3}\s+\S/.test(t)) headings++;
+    else if (/^\|.+\|$/.test(t) || /^⇒\s+/.test(t) || /^📌\s+/.test(t) || /^(?:[-*•↳]|\d+[.)])\s+\S/.test(t)) {
+      structured++;
+    } else if (t.length > 360) {
+      denseBlobs++;
+    }
+  }
+
+  const avgLen = totalChars / Math.max(1, lines.length);
+  if (denseBlobs > 0 || avgLen > 165) return false;
+  if (text.length < 900) return headings >= 1 && structured >= 3;
+  return headings >= 2 && structured >= 4;
+}
+
+function preserveWellFormattedText(
+  text: string,
+  includeCards: boolean,
+  colorCodeParts = false
+): CompactFormattedOutput {
+  const sections: CompactFormattedOutput['sections'] = [];
+  const keyTerms: CompactFormattedOutput['keyTerms'] = [];
+  const cards: CompactFormattedOutput['cards'] = [];
+  const seenTerms = new Set<string>();
+  let title: string | undefined;
+  let summary = '';
+  let examTip = '';
+  let workedExample = '';
+  let current: CompactFormattedOutput['sections'][number] = { heading: 'Study Notes', points: [] };
+
+  const pushCurrent = () => {
+    if (current.points.length > 0 || (current.heading !== 'Study Notes' && sections.length > 0)) {
+      sections.push(current);
+    }
+  };
+
+  for (const raw of text.split('\n')) {
+    const isSub = /^\s{2,}(?:[-*•▪◦‣↳]|\d+[.)])\s+/.test(raw) || raw.trim().startsWith('↳ ');
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^\|\s*[-:]+(?:\s*\|\s*[-:]+)+\s*\|$/.test(line)) continue;
+
+    const h1Match = line.match(/^#\s+(.+)$/);
+    if (h1Match && !title && sections.length === 0 && current.points.length === 0) {
+      title = h1Match[1].replace(/\*\*/g, '').trim();
+      continue;
+    }
+
+    const hMatch = line.match(/^(#{1,2})\s+(.+)$/);
+    if (hMatch) {
+      pushCurrent();
+      current = { heading: hMatch[2].replace(/\*\*/g, '').trim(), points: [] };
+      continue;
+    }
+
+    if (line.startsWith('### ')) {
+      current.points.push(`### ${line.slice(4).replace(/\*\*/g, '').trim()}`);
+      continue;
+    }
+
+    const sumMatch = line.match(/^(?:\*\*)?(?:summary|overview)(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    if (sumMatch && !summary) {
+      summary = sumMatch[1].trim();
+      continue;
+    }
+
+    const tipMatch = line.match(/^(?:\*\*)?exam(?:iner)?\s*tip(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    if (tipMatch) {
+      examTip = examTip ? `${examTip}\n${tipMatch[1].trim()}` : tipMatch[1].trim();
+      continue;
+    }
+
+    const exMatch = line.match(/^(?:\*\*)?worked\s*example(?:\*\*)?\s*[:–—-]\s*(.+)$/i);
+    if (exMatch) {
+      workedExample = workedExample ? `${workedExample}\n${exMatch[1].trim()}` : exMatch[1].trim();
+      continue;
+    }
+
+    if (/^\|.+\|$/.test(line) || line.startsWith('📌 ') || line.startsWith('⇒ ')) {
+      current.points.push(line);
+      continue;
+    }
+
+    const cleanedBullet = line.replace(/^(?:[-*•▪◦‣↳]|\d+[.)])\s+/, '').trim();
+    const isBullet = /^(?:[-*•▪◦‣↳]|\d+[.)])\s+/.test(line);
+
+    const kv = cleanedBullet.match(/^\*\*(.+?)\*\*\s*[:–—-]\s*(.+)$/);
+    if (kv && kv[1].length <= 65 && !seenTerms.has(kv[1].toLowerCase())) {
+      const term = kv[1].trim();
+      const def = kv[2].trim();
+      seenTerms.add(term.toLowerCase());
+      keyTerms.push({ term, definition: def });
+      if (includeCards) {
+        cards.push({ q: term, a: def, sectionName: current.heading });
+      }
+    }
+
+    if (isSub) {
+      current.points.push(`↳ ${cleanedBullet}`);
+    } else if (isBullet) {
+      current.points.push(cleanedBullet);
+    } else {
+      current.points.push(cleanedBullet.startsWith('¶ ') ? cleanedBullet : `¶ ${cleanedBullet}`);
+    }
+  }
+  pushCurrent();
+
+  const finalSections = sections.length ? sections : [{ heading: 'Study Notes', points: [] }];
+  return {
+    title,
+    summary,
+    sections: colorCodeParts ? applyVerifiedPartColors(finalSections, true) : finalSections,
+    keyTerms,
+    examTip,
+    workedExample,
+    timelineEvents: [],
+    cards: includeCards ? cards.slice(0, 8) : [],
   };
 }
 
@@ -1105,6 +1233,7 @@ export function registerAiRoutes(app: Express): void {
       detectFlowDiagrams?: boolean;
       autoTables?: boolean;
       colorCodeParts?: boolean;
+      forceRewrite?: boolean;
       stream?: boolean;
       byok?: unknown;
     };
@@ -1129,6 +1258,39 @@ export function registerAiRoutes(app: Express): void {
         return;
       }
 
+      const compacted = compactInputForAi(rawText);
+      const forceRewrite = Boolean(body.forceRewrite);
+      const includeCards = Boolean(body.includeCards);
+      const colorCodeParts = Boolean(body.colorCodeParts);
+
+      if (!forceRewrite && compacted && detectAlreadyGoodFormatting(compacted)) {
+        const preserved = preserveWellFormattedText(compacted, includeCards, colorCodeParts);
+        const usage: AiUsageMeta = {
+          provider: config.provider,
+          model: 'kept-existing',
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          cachedTokens: 0,
+        };
+        if (wantsStream) {
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders?.();
+          res.write(
+            `data: ${JSON.stringify({ type: 'status', message: 'Format is already good — keeping existing layout (0 tokens)…' })}\n\n`
+          );
+          res.write(
+            `data: ${JSON.stringify({ type: 'done', formatted: preserved, usage, keptExistingFormat: true })}\n\n`
+          );
+          res.end();
+          return;
+        }
+        res.json({ formatted: preserved, usage, keptExistingFormat: true });
+        return;
+      }
+
       if (wantsStream) {
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1144,11 +1306,11 @@ export function registerAiRoutes(app: Express): void {
           config,
           rawText,
           preset: body.preset,
-          includeCards: Boolean(body.includeCards),
+          includeCards,
           includeTimeline: body.includeTimeline !== false,
           detectFlowDiagrams: body.detectFlowDiagrams !== false,
           autoTables: body.autoTables !== false,
-          colorCodeParts: Boolean(body.colorCodeParts),
+          colorCodeParts,
           onProgress: (ev) => sendSse(ev),
         });
         sendSse({ type: 'done', ...result });
@@ -1160,11 +1322,11 @@ export function registerAiRoutes(app: Express): void {
         config,
         rawText,
         preset: body.preset,
-        includeCards: Boolean(body.includeCards),
+        includeCards,
         includeTimeline: body.includeTimeline !== false,
         detectFlowDiagrams: body.detectFlowDiagrams !== false,
         autoTables: body.autoTables !== false,
-        colorCodeParts: Boolean(body.colorCodeParts),
+        colorCodeParts,
       });
 
       res.json(result);

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertCircle,
   AlignCenter,
   AlignLeft,
   AlignRight,
@@ -18,12 +19,15 @@ import {
   Clock,
   CornerDownRight,
   Edit3,
+  Eraser,
   Eye,
   EyeOff,
   FileCheck2,
   FolderPlus,
+  GitBranch,
   Globe,
   Heading2,
+  Heading3,
   Highlighter,
   Italic,
   Layers,
@@ -34,9 +38,12 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Quote,
+  Redo2,
   Search,
   Share2,
   Star,
+  Table2,
   Trash2,
   Underline,
   Undo2,
@@ -44,6 +51,14 @@ import {
   X,
 } from 'lucide-react';
 import { sanitizeDocumentHtml } from '../lib/documentRenderer';
+import {
+  getTableSurfaceStyles,
+  NOTE_HIGHLIGHT_COLORS,
+  NOTE_SURFACE_COLORS,
+  NOTE_TEXT_COLORS,
+  renderRichInline,
+  resolveSurfaceAccentHex,
+} from '../lib/inlineRichText';
 import {
   applyVerifiedPartColors,
   NOTE_COLOR_OPTIONS,
@@ -119,43 +134,12 @@ function parseChronologicalWeight(rawDate: string): number {
   return year * 100 + month;
 }
 
-function renderInlineBold(text: string) {
-  const parts = String(text || '').split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-      return (
-        <strong key={i} className="font-semibold text-[var(--ink)]">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
-      return (
-        <em key={i} className="italic">
-          {part.slice(1, -1)}
-        </em>
-      );
-    }
-    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
-      return (
-        <code
-          key={i}
-          className="font-mono-num rounded bg-[var(--bg)] px-1.5 py-0.5 text-[0.9em] text-[var(--e3)]"
-        >
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    return <span key={i}>{part}</span>;
-  });
-}
-
 function cleanSectionTitle(heading: string): {
   title: string;
   isCaseStudy: boolean;
   contextTag?: string;
 } {
-  let raw = String(heading || '').replace(/^\d+[.)]\s*/, '').trim();
+  let raw = String(heading || '').trim();
   let contextTag: string | undefined;
   const tagMatch = raw.match(/\s*\[([A-Za-z0-9 /&-]{2,14})\]\s*$/);
   if (tagMatch) {
@@ -258,17 +242,32 @@ export function NotesStudioView({
   const [glossaryExpanded, setGlossaryExpanded] = useState(false);
   const [glossaryFilter, setGlossaryFilter] = useState('');
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
+  const [docTextColorOpen, setDocTextColorOpen] = useState(false);
+  const [docHighlightOpen, setDocHighlightOpen] = useState(false);
+  const activeDocTableRef = useRef<HTMLTableElement | null>(null);
   const colorMenuRef = useRef<HTMLDivElement | null>(null);
+  const docTextColorRef = useRef<HTMLDivElement | null>(null);
+  const docHighlightRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!colorMenuOpen) return;
+    if (!colorMenuOpen && !docTextColorOpen && !docHighlightOpen) return;
     const onDown = (e: MouseEvent) => {
       if (colorMenuRef.current && !colorMenuRef.current.contains(e.target as Node)) {
         setColorMenuOpen(false);
       }
+      if (docTextColorRef.current && !docTextColorRef.current.contains(e.target as Node)) {
+        setDocTextColorOpen(false);
+      }
+      if (docHighlightRef.current && !docHighlightRef.current.contains(e.target as Node)) {
+        setDocHighlightOpen(false);
+      }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setColorMenuOpen(false);
+      if (e.key === 'Escape') {
+        setColorMenuOpen(false);
+        setDocTextColorOpen(false);
+        setDocHighlightOpen(false);
+      }
     };
     window.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey);
@@ -276,7 +275,7 @@ export function NotesStudioView({
       window.removeEventListener('mousedown', onDown);
       window.removeEventListener('keydown', onKey);
     };
-  }, [colorMenuOpen]);
+  }, [colorMenuOpen, docTextColorOpen, docHighlightOpen]);
 
   // History Timeline state
   const [hideTimelineDates, setHideTimelineDates] = useState(false);
@@ -440,10 +439,115 @@ export function NotesStudioView({
     if (!docEditorRef.current) return;
     docEditorRef.current.focus();
     try {
+      if (cmd === 'foreColor' || cmd === 'hiliteColor') {
+        document.execCommand('styleWithCSS', false, 'true');
+      }
       document.execCommand(cmd, false, value);
     } catch {
-      // ignore unsupported command
+      if (cmd === 'hiliteColor') {
+        try {
+          document.execCommand('backColor', false, value);
+        } catch {
+          // ignore
+        }
+      }
     }
+  };
+
+  const trackActiveDocTable = () => {
+    const sel = window.getSelection();
+    const anchor = sel?.anchorNode;
+    const el = anchor instanceof Element ? anchor : anchor?.parentElement;
+    const tbl = el?.closest('table') || null;
+    if (tbl && docEditorRef.current?.contains(tbl)) {
+      activeDocTableRef.current = tbl as HTMLTableElement;
+    }
+  };
+
+  const insertDocSnippet = (html: string, focusTable = false) => {
+    if (!docEditorRef.current) return;
+    docEditorRef.current.focus();
+    try {
+      document.execCommand('insertHTML', false, html);
+    } catch {
+      docEditorRef.current.insertAdjacentHTML('beforeend', html);
+    }
+    if (focusTable) {
+      const tables = docEditorRef.current.querySelectorAll('table');
+      if (tables.length > 0) {
+        activeDocTableRef.current = tables[tables.length - 1] as HTMLTableElement;
+      }
+    }
+    commitDocumentHtmlEdit(false);
+  };
+
+  const applyDocTableColor = (colorId: string) => {
+    if (!docEditorRef.current) return;
+    trackActiveDocTable();
+    const targetTable =
+      activeDocTableRef.current && docEditorRef.current.contains(activeDocTableRef.current)
+        ? activeDocTableRef.current
+        : (docEditorRef.current.querySelector('table') as HTMLTableElement | null);
+    if (!targetTable) return;
+    activeDocTableRef.current = targetTable;
+
+    const hex = resolveSurfaceAccentHex(colorId);
+    if (!hex) {
+      targetTable.style.borderColor = '';
+      targetTable.querySelectorAll('th').forEach((th) => {
+        (th as HTMLElement).style.backgroundColor = '';
+        (th as HTMLElement).style.borderColor = '';
+      });
+      targetTable.querySelectorAll('td').forEach((td) => {
+        (td as HTMLElement).style.borderColor = '';
+      });
+    } else {
+      targetTable.style.borderColor = `color-mix(in srgb, ${hex} 40%, var(--line))`;
+      targetTable.querySelectorAll('th').forEach((th) => {
+        (th as HTMLElement).style.backgroundColor = `color-mix(in srgb, ${hex} 18%, var(--card))`;
+        (th as HTMLElement).style.borderColor = `color-mix(in srgb, ${hex} 34%, var(--line))`;
+      });
+      targetTable.querySelectorAll('td').forEach((td) => {
+        (td as HTMLElement).style.borderColor = `color-mix(in srgb, ${hex} 26%, var(--line))`;
+      });
+    }
+    commitDocumentHtmlEdit(false);
+  };
+
+  const addDocTableRow = () => {
+    if (!docEditorRef.current) return;
+    trackActiveDocTable();
+    const tbl =
+      activeDocTableRef.current && docEditorRef.current.contains(activeDocTableRef.current)
+        ? activeDocTableRef.current
+        : (docEditorRef.current.querySelector('table') as HTMLTableElement | null);
+    if (!tbl) return;
+    const cols = Math.max(1, tbl.rows[0]?.cells.length || 2);
+    const tbody = tbl.tBodies[0] || tbl;
+    const tr = document.createElement('tr');
+    for (let c = 0; c < cols; c++) {
+      const td = document.createElement('td');
+      td.innerHTML = '&nbsp;';
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+    commitDocumentHtmlEdit(false);
+  };
+
+  const addDocTableCol = () => {
+    if (!docEditorRef.current) return;
+    trackActiveDocTable();
+    const tbl =
+      activeDocTableRef.current && docEditorRef.current.contains(activeDocTableRef.current)
+        ? activeDocTableRef.current
+        : (docEditorRef.current.querySelector('table') as HTMLTableElement | null);
+    if (!tbl) return;
+    Array.from(tbl.rows).forEach((row, idx) => {
+      const cell = document.createElement(idx === 0 && row.querySelector('th') ? 'th' : 'td');
+      cell.innerHTML = idx === 0 ? 'Column' : '&nbsp;';
+      row.appendChild(cell);
+    });
+    commitDocumentHtmlEdit(false);
   };
 
   const updateTopic = (topicId: string, updater: (t: StudyTopic) => StudyTopic) => {
@@ -1124,7 +1228,7 @@ export function NotesStudioView({
       </aside>
 
       {/* Main Reader / Notion Editor / History Timeline Canvas */}
-      <div className="min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+      <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-7">
         {!activeTopic ? (
           <div className="mx-auto max-w-2xl sd-card p-6 text-center text-sm text-[var(--mute)]">
             Select or create a topic on the left to start writing structured notes.
@@ -1139,15 +1243,27 @@ export function NotesStudioView({
           const activeColorOpt =
             NOTE_COLOR_OPTIONS.find((c) => c.id === activeNoteColor) ||
             NOTE_COLOR_OPTIONS[0];
+          const isDocViewActive =
+            hasDocHtml &&
+            activeTopic.notes.preferOriginalFormat !== false &&
+            !preferStructuredInRead &&
+            !isPdfPageDoc;
+          const isEditingAnything =
+            viewMode === 'edit' || (viewMode === 'read' && isDocViewActive && editingDocHtml);
+
           return (
           <div
             className="sd-note-scope mx-auto space-y-6"
             data-note-color={activeNoteColor}
-            style={{ maxWidth: 'var(--mw, 860px)' }}
+            style={{ maxWidth: 'var(--mw, 1200px)' }}
           >
-            {/* Topic Header & Action Toolbar */}
-            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] pb-4">
-              <div className="min-w-0 flex-1">
+            {/* Top Breadcrumb & Action Toolbar */}
+            <div
+              className={`flex flex-wrap items-center justify-between gap-3 ${
+                viewMode === 'edit' ? 'border-b border-[var(--line)] pb-4' : ''
+              }`}
+            >
+              <div className="min-w-[min(100%,220px)] flex-1">
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--mute)]">
                   {sidebarCompressed && (
                     <>
@@ -1189,56 +1305,78 @@ export function NotesStudioView({
                     </>
                   )}
                   <span aria-hidden="true">·</span>
-                  <span className="inline-flex items-center gap-1 font-mono-num">
+                  <span className="inline-flex items-center gap-1 font-mono-num whitespace-nowrap">
                     <Clock className="h-3 w-3" aria-hidden="true" />
                     {estimateNoteReadingMinutes(activeTopic.notes)} min read
                   </span>
                 </div>
-                {viewMode !== 'edit' && (
-                  <div className="mt-2.5">
-                    <div
-                      className="mb-2 h-1 w-14 rounded-full bg-[var(--note-accent)]"
-                      aria-hidden="true"
-                    />
-                    <h1
-                      className="font-display text-3xl font-extrabold tracking-tight text-[var(--ink)] sm:text-[2.4rem] sm:leading-[1.14]"
-                      style={{ textWrap: 'balance' }}
-                    >
-                      {activeTopic.name}
-                    </h1>
-                  </div>
-                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <div className="sd-seg" role="tablist" aria-label="Note mode">
-                  <button
-                    type="button"
-                    aria-pressed={viewMode === 'read'}
-                    onClick={() => setViewMode('read')}
-                    className="sd-seg-btn"
-                  >
-                    Read
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={viewMode === 'edit'}
-                    onClick={() => setViewMode('edit')}
-                    className="sd-seg-btn"
-                  >
-                    Edit
-                  </button>
-                  {isHistorySubject && (
+                {isHistorySubject && (
+                  <div className="sd-seg" role="tablist" aria-label="Note mode">
+                    <button
+                      type="button"
+                      aria-pressed={viewMode !== 'timeline'}
+                      onClick={() => {
+                        if (editingDocHtml) commitDocumentHtmlEdit(true);
+                        setViewMode('read');
+                      }}
+                      className="sd-seg-btn"
+                    >
+                      Read
+                    </button>
                     <button
                       type="button"
                       aria-pressed={viewMode === 'timeline'}
-                      onClick={() => setViewMode('timeline')}
+                      onClick={() => {
+                        if (editingDocHtml) commitDocumentHtmlEdit(true);
+                        setViewMode('timeline');
+                      }}
                       className="sd-seg-btn"
                     >
                       Timeline ({activeTopic.timelineEvents?.length || 0})
                     </button>
+                  </div>
+                )}
+
+                {/* Compact Standalone Edit Toggle Button */}
+                <button
+                  type="button"
+                  aria-pressed={isEditingAnything}
+                  onClick={() => {
+                    if (viewMode === 'timeline') {
+                      setViewMode('edit');
+                      return;
+                    }
+                    if (isDocViewActive) {
+                      if (editingDocHtml) {
+                        commitDocumentHtmlEdit(true);
+                      } else {
+                        setEditingDocHtml(true);
+                      }
+                      return;
+                    }
+                    setViewMode((cur) => (cur === 'edit' ? 'read' : 'edit'));
+                  }}
+                  className={
+                    isEditingAnything
+                      ? 'sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap shrink-0'
+                      : 'sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0'
+                  }
+                >
+                  {isEditingAnything ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Done Editing</span>
+                    </>
+                  ) : (
+                    <>
+                      <Edit3 className="h-3.5 w-3.5 text-[var(--note-accent)]" aria-hidden="true" />
+                      <span>Edit</span>
+                    </>
                   )}
-                </div>
+                </button>
 
                 {/* Note Colour Option */}
                 <div className="relative" ref={colorMenuRef}>
@@ -1407,6 +1545,18 @@ export function NotesStudioView({
               </div>
             </div>
 
+            {viewMode !== 'edit' && (
+              <div className="w-full border-b border-[var(--line)] pb-4">
+                <div
+                  className="mb-2.5 h-1 w-14 rounded-full bg-[var(--note-accent)]"
+                  aria-hidden="true"
+                />
+                <h1 className="w-full font-display text-3xl font-extrabold tracking-tight text-[var(--ink)] sm:text-[2.4rem] sm:leading-[1.14]">
+                  {activeTopic.name}
+                </h1>
+              </div>
+            )}
+
             {confirmDeleteTopicId === activeTopic.id && (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--bad)]/40 bg-[color-mix(in_srgb,var(--bad)_7%,var(--card))] px-4 py-2.5 text-xs">
                 <span className="font-semibold text-[var(--ink)]">
@@ -1503,165 +1653,392 @@ export function NotesStudioView({
                           </button>
                         )}
 
-                        {!isPdfPageDoc && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (editingDocHtml) {
-                                commitDocumentHtmlEdit(true);
-                              } else {
-                                setEditingDocHtml(true);
-                              }
-                            }}
-                            className={
-                              editingDocHtml
-                                ? 'sd-btn-pri px-3 py-1 text-xs whitespace-nowrap'
-                                : 'sd-btn px-3 py-1 text-xs whitespace-nowrap'
-                            }
-                          >
-                            {editingDocHtml ? (
-                              <>
-                                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                                <span>Save Document</span>
-                              </>
-                            ) : (
-                              <>
-                                <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                                <span>Edit Document</span>
-                              </>
-                            )}
-                          </button>
-                        )}
                       </div>
                     </div>
 
-                    {/* Inline Word/Docs Formatting Ribbon when Editing Document */}
+                    {/* Enhanced Word/Docs Formatting & One-Click Study Ribbon */}
                     {editingDocHtml && !isPdfPageDoc && (
-                      <div className="sd-card sticky top-2 z-20 flex flex-wrap items-center gap-1 px-3 py-2 text-xs">
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('undo');
-                          }}
-                          title="Undo"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('bold');
-                          }}
-                          title="Bold"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <Bold className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('italic');
-                          }}
-                          title="Italic"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <Italic className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('underline');
-                          }}
-                          title="Underline"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <Underline className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('hiliteColor', '#fef08a');
-                          }}
-                          title="Highlight Yellow"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <Highlighter className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('formatBlock', '<h2>');
-                          }}
-                          title="Heading 2"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <Heading2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('insertUnorderedList');
-                          }}
-                          title="Bullet List"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <List className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('insertOrderedList');
-                          }}
-                          title="Numbered List"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('justifyLeft');
-                          }}
-                          title="Align Left"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <AlignLeft className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('justifyCenter');
-                          }}
-                          title="Align Center"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <AlignCenter className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            execDocCommand('justifyRight');
-                          }}
-                          title="Align Right"
-                          className="sd-btn h-7 w-7 p-0"
-                        >
-                          <AlignRight className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
+                      <div className="sd-card sticky top-2 z-20 space-y-2 px-3 py-2 text-xs backdrop-blur">
+                        {/* Row 1: Undo/Redo, Formatting, Text/Highlight Colour, Headings, Lists, Alignment */}
+                        <div className="flex flex-wrap items-center gap-1">
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('undo');
+                            }}
+                            title="Undo"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('redo');
+                            }}
+                            title="Redo"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <Redo2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('bold');
+                            }}
+                            title="Bold"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <Bold className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('italic');
+                            }}
+                            title="Italic"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <Italic className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('underline');
+                            }}
+                            title="Underline"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <Underline className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+
+                          {/* Text Colour Picker */}
+                          <div className="relative" ref={docTextColorRef}>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                setDocTextColorOpen((v) => !v);
+                                setDocHighlightOpen(false);
+                              }}
+                              title="Text Colour"
+                              className="sd-btn h-7 px-2 text-xs font-bold"
+                            >
+                              <span className="border-b-2 border-[var(--note-accent,var(--e3))] leading-none">
+                                A
+                              </span>
+                              <Palette className="h-3 w-3 text-[var(--mute)]" aria-hidden="true" />
+                            </button>
+                            {docTextColorOpen && (
+                              <div className="sd-card absolute left-0 top-8 z-40 w-52 p-2.5">
+                                <div className="mb-1.5 text-[11px] font-bold text-[var(--mute)]">
+                                  Text Colour
+                                </div>
+                                <div className="grid grid-cols-5 gap-1.5">
+                                  {NOTE_TEXT_COLORS.map((c) => (
+                                    <button
+                                      key={c.id}
+                                      type="button"
+                                      title={c.label}
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        if (!c.value) {
+                                          execDocCommand('removeFormat');
+                                        } else {
+                                          execDocCommand('foreColor', c.value);
+                                        }
+                                        setDocTextColorOpen(false);
+                                      }}
+                                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-[var(--line)] text-xs font-bold transition-transform hover:scale-110"
+                                      style={{
+                                        backgroundColor: c.value ? c.preview : 'var(--card)',
+                                        color: c.value ? '#FFFFFF' : 'var(--ink)',
+                                      }}
+                                    >
+                                      {!c.value ? 'A' : ''}
+                                    </button>
+                                  ))}
+                                </div>
+                                <label className="mt-2 flex cursor-pointer items-center justify-between border-t border-[var(--line)] pt-2 text-[11px] font-semibold text-[var(--mute)]">
+                                  <span>Custom Hex</span>
+                                  <input
+                                    type="color"
+                                    defaultValue="#2563EB"
+                                    onChange={(e) => {
+                                      execDocCommand('foreColor', e.target.value);
+                                    }}
+                                    className="h-6 w-8 cursor-pointer rounded border border-[var(--line)] bg-transparent p-0"
+                                  />
+                                </label>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Highlight Picker */}
+                          <div className="relative" ref={docHighlightRef}>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                setDocHighlightOpen((v) => !v);
+                                setDocTextColorOpen(false);
+                              }}
+                              title="Highlight Colour"
+                              className="sd-btn h-7 w-7 p-0"
+                            >
+                              <Highlighter className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                            </button>
+                            {docHighlightOpen && (
+                              <div className="sd-card absolute left-0 top-8 z-40 w-48 p-2.5">
+                                <div className="mb-1.5 text-[11px] font-bold text-[var(--mute)]">
+                                  Highlight Colour
+                                </div>
+                                <div className="grid grid-cols-4 gap-1.5">
+                                  {NOTE_HIGHLIGHT_COLORS.map((c) => (
+                                    <button
+                                      key={c.id}
+                                      type="button"
+                                      title={c.label}
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        execDocCommand('hiliteColor', c.value || 'transparent');
+                                        setDocHighlightOpen(false);
+                                      }}
+                                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-[var(--line)] text-[11px] font-bold transition-transform hover:scale-110"
+                                      style={{
+                                        backgroundColor: c.value ? c.preview : 'var(--card)',
+                                        color: '#17202E',
+                                      }}
+                                    >
+                                      {!c.value ? (
+                                        <Eraser className="h-3.5 w-3.5 text-[var(--mute)]" />
+                                      ) : (
+                                        ''
+                                      )}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('formatBlock', '<h2>');
+                            }}
+                            title="Section Heading (H2)"
+                            className="sd-btn h-7 px-2 font-bold"
+                          >
+                            <Heading2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('formatBlock', '<h3>');
+                            }}
+                            title="Subheading (H3)"
+                            className="sd-btn h-7 px-2 font-bold"
+                          >
+                            <Heading3 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('formatBlock', '<p>');
+                            }}
+                            title="Body Paragraph"
+                            className="sd-btn h-7 px-2 text-[11px] font-semibold"
+                          >
+                            Text
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('insertUnorderedList');
+                            }}
+                            title="Bullet List"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <List className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('insertOrderedList');
+                            }}
+                            title="Numbered List"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('justifyLeft');
+                            }}
+                            title="Align Left"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <AlignLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('justifyCenter');
+                            }}
+                            title="Align Center"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <AlignCenter className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              execDocCommand('justifyRight');
+                            }}
+                            title="Align Right"
+                            className="sd-btn h-7 w-7 p-0"
+                          >
+                            <AlignRight className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+
+                        {/* Row 2: One-Click Study Inserts + Table Colour Controls */}
+                        <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--line)] pt-2">
+                          <span className="mr-0.5 text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                            Insert:
+                          </span>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              insertDocSnippet(
+                                '<table><thead><tr><th>Term / Date</th><th>Key Detail</th></tr></thead><tbody><tr><td>Point 1</td><td>Explanation…</td></tr><tr><td>Point 2</td><td>Explanation…</td></tr></tbody></table><p><br></p>',
+                                true
+                              );
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+                          >
+                            <Table2 className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
+                            <span>+ Table</span>
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              insertDocSnippet(
+                                '<blockquote style="border-color: color-mix(in srgb, var(--e2) 45%, var(--line)); background-color: color-mix(in srgb, var(--e2) 8%, var(--card))"><strong style="color: var(--e2)">Examiner Tip:</strong> Write advice examiners look for…</blockquote><p><br></p>'
+                              );
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+                          >
+                            <AlertCircle className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                            <span>+ Examiner Tip</span>
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              insertDocSnippet(
+                                '<blockquote style="border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background-color: color-mix(in srgb, var(--ok) 8%, var(--card))"><strong style="color: var(--ok)">Worked Example:</strong> Step-by-step model answer…</blockquote><p><br></p>'
+                              );
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
+                            <span>+ Worked Example</span>
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              insertDocSnippet(
+                                '<blockquote><strong>Key Fact:</strong> High-yield fact, rule, or formula…</blockquote><p><br></p>'
+                              );
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+                          >
+                            <Quote className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
+                            <span>+ Fact Box</span>
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              insertDocSnippet(
+                                '<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0"><div style="border: 1px solid var(--line); background: var(--bg); padding: 8px 12px; border-radius: 8px"><strong>1.</strong> Step one</div><span>→</span><div style="border: 1px solid var(--line); background: var(--bg); padding: 8px 12px; border-radius: 8px"><strong>2.</strong> Step two</div><span>→</span><div style="border: 1px solid var(--line); background: var(--bg); padding: 8px 12px; border-radius: 8px"><strong>3.</strong> Outcome</div></div><p><br></p>'
+                              );
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+                          >
+                            <GitBranch className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
+                            <span>+ Flow Steps</span>
+                          </button>
+
+                          <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                          <span className="text-[11px] font-bold text-[var(--mute)]">
+                            Table Colour:
+                          </span>
+                          <div className="flex items-center gap-1">
+                            {NOTE_SURFACE_COLORS.slice(0, 7).map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                title={`Set active table colour to ${c.label}`}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  applyDocTableColor(c.id);
+                                }}
+                                className="h-4 w-4 cursor-pointer rounded-full border border-black/20 transition-transform hover:scale-110"
+                                style={{ background: c.swatch }}
+                              />
+                            ))}
+                            <input
+                              type="color"
+                              title="Custom table colour"
+                              defaultValue="#2563EB"
+                              onChange={(e) => applyDocTableColor(e.target.value)}
+                              className="h-5 w-5 cursor-pointer rounded border border-[var(--line)] bg-transparent p-0"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              addDocTableRow();
+                            }}
+                            className="sd-btn px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap"
+                          >
+                            + Row
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              addDocTableCol();
+                            }}
+                            className="sd-btn px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap"
+                          >
+                            + Col
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -1671,7 +2048,7 @@ export function NotesStudioView({
                         className="mx-auto transition-[max-width] duration-150"
                         style={{
                           maxWidth:
-                            docZoom === 85 ? '700px' : docZoom === 115 ? '980px' : '820px',
+                            docZoom === 85 ? '860px' : docZoom === 115 ? '100%' : '1160px',
                           fontSize:
                             docZoom === 85 ? '0.9em' : docZoom === 115 ? '1.12em' : undefined,
                         }}
@@ -1681,6 +2058,8 @@ export function NotesStudioView({
                             ref={docEditorRef}
                             contentEditable
                             suppressContentEditableWarning
+                            onClick={trackActiveDocTable}
+                            onKeyUp={trackActiveDocTable}
                             onBlur={() => commitDocumentHtmlEdit(false)}
                             className="sd-doc-sheet ring-2 ring-[var(--e3)] outline-none"
                           />
@@ -1733,7 +2112,6 @@ export function NotesStudioView({
                 );
               }
 
-              let theorySectionCounter = 0;
               const filteredTerms = activeTopic.notes.keyTerms.filter((kt) => {
                 if (!glossaryFilter.trim()) return true;
                 const q = glossaryFilter.trim().toLowerCase();
@@ -1774,7 +2152,7 @@ export function NotesStudioView({
                       className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-[var(--line)] pb-3.5 text-sm"
                     >
                       <span className="font-bold text-[var(--mute)]">Contents</span>
-                      {populatedSections.map((sec, idx) => {
+                      {populatedSections.map((sec) => {
                         const meta = cleanSectionTitle(sec.heading);
                         const secAccent = normalizeNoteColor(sec.accentColor);
                         return (
@@ -1784,10 +2162,7 @@ export function NotesStudioView({
                             data-note-color={secAccent !== 'default' ? secAccent : undefined}
                             className="inline-flex items-baseline gap-1.5 font-semibold text-[var(--note-accent)] hover:underline whitespace-nowrap"
                           >
-                            <span className="font-mono-num text-xs opacity-85">
-                              {meta.isCaseStudy ? 'CS' : String(idx + 1).padStart(2, '0')}
-                            </span>
-                            <span className="max-w-[220px] truncate">{meta.title}</span>
+                            <span className="max-w-[260px] truncate">{meta.title}</span>
                           </a>
                         );
                       })}
@@ -1808,8 +2183,8 @@ export function NotesStudioView({
                       <div className="text-sm font-bold text-[var(--note-accent)]">
                         Topic Overview
                       </div>
-                      <p className="mt-2 max-w-[70ch] whitespace-pre-line text-[17px] leading-[1.76] text-[var(--ink)]">
-                        {renderInlineBold(activeTopic.notes.summary)}
+                      <p className="mt-2 whitespace-pre-line text-[17px] leading-[1.76] text-[var(--ink)]">
+                        {renderRichInline(activeTopic.notes.summary)}
                       </p>
                     </section>
                   ) : null}
@@ -1901,11 +2276,9 @@ export function NotesStudioView({
 
                   {/* Specification Sections (Open Editorial Flowing Layout — Big Bold Titles, Clear Typography, Clear Tables) */}
                   {populatedSections.length > 0 ? (
-                    <div className="space-y-12 pt-1">
+                    <div className="space-y-11 pt-1">
                       {populatedSections.map((sec) => {
                         const meta = cleanSectionTitle(sec.heading);
-                        if (!meta.isCaseStudy) theorySectionCounter += 1;
-                        const sectionNumber = String(theorySectionCounter).padStart(2, '0');
                         const blocks = groupSectionPoints(sec.points);
                         const secAccent = normalizeNoteColor(sec.accentColor);
                         const roleInfo = sec.partRole ? NOTE_PART_ROLE_MAP[sec.partRole] : undefined;
@@ -1931,29 +2304,22 @@ export function NotesStudioView({
                                   : 'border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))]'
                               }`}
                             >
-                              <div className="flex min-w-0 items-baseline gap-3">
-                                {meta.isCaseStudy ? (
+                              <div className="flex min-w-[min(100%,240px)] flex-1 items-baseline gap-3">
+                                {meta.isCaseStudy && (
                                   <span
-                                    className={`text-sm font-bold whitespace-nowrap ${
+                                    className={`shrink-0 text-sm font-bold whitespace-nowrap ${
                                       hasCustomAccent ? 'text-[var(--note-accent)]' : 'text-[var(--e2)]'
                                     }`}
                                   >
                                     Case Study
                                   </span>
-                                ) : (
-                                  <span className="font-mono-num text-lg font-extrabold text-[var(--note-accent)] sm:text-xl">
-                                    {sectionNumber}.
-                                  </span>
                                 )}
-                                <h2
-                                  className="font-display text-2xl font-extrabold tracking-tight text-[var(--ink)] sm:text-[1.75rem] sm:leading-[1.22]"
-                                  style={{ textWrap: 'balance' }}
-                                >
-                                  {meta.title}
+                                <h2 className="min-w-0 flex-1 font-display text-2xl font-extrabold tracking-tight text-[var(--ink)] sm:text-[1.75rem] sm:leading-[1.22]">
+                                  {renderRichInline(meta.title)}
                                 </h2>
                               </div>
                               {(roleInfo || meta.contextTag) && (
-                                <span className="flex items-baseline gap-2.5 text-sm font-semibold text-[var(--note-accent)]">
+                                <span className="flex shrink-0 items-baseline gap-2.5 whitespace-nowrap text-sm font-semibold text-[var(--note-accent)]">
                                   {roleInfo && <span>{roleInfo.label}</span>}
                                   {meta.contextTag && (
                                     <span className="font-mono-num opacity-90">{meta.contextTag}</span>
@@ -1973,22 +2339,27 @@ export function NotesStudioView({
                                           i > 0 ? 'mt-7 border-t border-[var(--line)]/70 pt-5' : ''
                                         }`}
                                       >
-                                        {renderInlineBold(blk.text)}
+                                        {renderRichInline(blk.text)}
                                       </h3>
                                     );
                                   }
 
                                   if (blk.kind === 'factbox') {
+                                    const boxStyles = getTableSurfaceStyles(blk.color);
                                     return (
                                       <div
                                         key={i}
+                                        style={boxStyles.boxStyle}
                                         className="my-5 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--card))] px-5 py-4 sm:px-6 sm:py-4.5"
                                       >
-                                        <div className="text-sm font-bold text-[var(--note-accent)]">
+                                        <div
+                                          style={boxStyles.boxTitleStyle}
+                                          className="text-sm font-bold text-[var(--note-accent)]"
+                                        >
                                           {blk.title || 'Key Fact'}
                                         </div>
                                         <div className="mt-1.5 text-[16px] leading-[1.72] text-[var(--ink)]">
-                                          {renderInlineBold(blk.text)}
+                                          {renderRichInline(blk.text)}
                                         </div>
                                       </div>
                                     );
@@ -2009,13 +2380,13 @@ export function NotesStudioView({
                                           {blk.steps.map((step, sIdx) => (
                                             <div
                                               key={sIdx}
-                                              className="flex items-center gap-2.5 sm:max-w-[270px]"
+                                              className="flex flex-1 min-w-[200px] items-center gap-2.5"
                                             >
                                               <div className="flex-1 rounded-xl border border-[var(--line)] bg-[var(--card)] px-4 py-3 text-[15px] leading-snug text-[var(--ink)]">
                                                 <span className="font-mono-num mr-2 font-bold text-[var(--note-accent)]">
                                                   {sIdx + 1}.
                                                 </span>
-                                                {renderInlineBold(step)}
+                                                {renderRichInline(step)}
                                               </div>
                                               {sIdx < blk.steps.length - 1 && (
                                                 <ArrowRight
@@ -2031,20 +2402,25 @@ export function NotesStudioView({
                                   }
 
                                   if (blk.kind === 'table') {
+                                    const tblStyles = getTableSurfaceStyles(blk.color);
                                     return (
                                       <div
                                         key={i}
+                                        style={tblStyles.wrapperStyle}
                                         className="my-5 overflow-x-auto rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[var(--card)]"
                                       >
                                         <table className="w-full border-collapse text-left text-[15px] sm:text-[16px]">
-                                          <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_12%,var(--card))]">
+                                          <thead
+                                            style={tblStyles.theadStyle}
+                                            className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_12%,var(--card))]"
+                                          >
                                             <tr>
                                               {blk.headers.map((h, hi) => (
                                                 <th
                                                   key={hi}
                                                   className="px-5 py-3.5 text-[15px] font-bold text-[var(--ink)] sm:text-[16px]"
                                                 >
-                                                  {renderInlineBold(h)}
+                                                  {renderRichInline(h)}
                                                 </th>
                                               ))}
                                             </tr>
@@ -2053,8 +2429,9 @@ export function NotesStudioView({
                                             {blk.rows.map((row, ri) => (
                                               <tr
                                                 key={ri}
+                                                style={ri % 2 === 1 ? tblStyles.zebraStyle : undefined}
                                                 className={
-                                                  ri % 2 === 1
+                                                  ri % 2 === 1 && !tblStyles.zebraStyle
                                                     ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
                                                     : ''
                                                 }
@@ -2062,13 +2439,16 @@ export function NotesStudioView({
                                                 {row.map((cell, ci) => (
                                                   <td
                                                     key={ci}
+                                                    style={ci === 0 ? tblStyles.firstColStyle : undefined}
                                                     className={`px-5 py-3.5 align-top leading-[1.65] text-[var(--ink)] ${
-                                                      ci === 0
+                                                      ci === 0 && !tblStyles.firstColStyle
                                                         ? 'font-semibold text-[color-mix(in_srgb,var(--note-accent)_45%,var(--ink))]'
+                                                        : ci === 0
+                                                        ? 'font-semibold'
                                                         : ''
                                                     }`}
                                                   >
-                                                    {renderInlineBold(cell)}
+                                                    {renderRichInline(cell)}
                                                   </td>
                                                 ))}
                                               </tr>
@@ -2083,9 +2463,9 @@ export function NotesStudioView({
                                     return (
                                       <p
                                         key={i}
-                                        className="max-w-[70ch] whitespace-pre-line text-[16.5px] leading-[1.78] text-[var(--ink)] sm:text-[17px]"
+                                        className="whitespace-pre-line text-[16.5px] leading-[1.78] text-[var(--ink)] sm:text-[17px]"
                                       >
-                                        {renderInlineBold(blk.text)}
+                                        {renderRichInline(blk.text)}
                                       </p>
                                     );
                                   }
@@ -2108,12 +2488,12 @@ export function NotesStudioView({
                                           }`}
                                           aria-hidden="true"
                                         />
-                                        <div className="max-w-[70ch]">
+                                        <div className="min-w-0 flex-1">
                                           <span className="font-bold text-[color-mix(in_srgb,var(--note-accent)_55%,var(--ink))]">
-                                            {kv.term}:{' '}
+                                            {renderRichInline(kv.term)}:{' '}
                                           </span>
                                           <span className="text-[var(--ink)]/92">
-                                            {renderInlineBold(kv.body)}
+                                            {renderRichInline(kv.body)}
                                           </span>
                                         </div>
                                       </div>
@@ -2135,8 +2515,8 @@ export function NotesStudioView({
                                         }`}
                                         aria-hidden="true"
                                       />
-                                      <span className="max-w-[70ch]">
-                                        {renderInlineBold(blk.text)}
+                                      <span className="min-w-0 flex-1">
+                                        {renderRichInline(blk.text)}
                                       </span>
                                     </div>
                                   );
@@ -2193,7 +2573,7 @@ export function NotesStudioView({
                             Worked Example
                           </div>
                           <p className="mt-2.5 whitespace-pre-line text-[16px] leading-[1.72] text-[var(--ink)]">
-                            {renderInlineBold(activeTopic.notes.workedExample)}
+                            {renderRichInline(activeTopic.notes.workedExample)}
                           </p>
                         </section>
                       )}
@@ -2204,7 +2584,7 @@ export function NotesStudioView({
                             Examiner Tip
                           </div>
                           <p className="mt-2.5 whitespace-pre-line text-[16px] leading-[1.72] text-[var(--ink)]">
-                            {renderInlineBold(activeTopic.notes.examTip)}
+                            {renderRichInline(activeTopic.notes.examTip)}
                           </p>
                         </section>
                       )}

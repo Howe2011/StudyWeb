@@ -25,6 +25,7 @@ import {
   incrementSharedCopyCount,
   lookupSharedItemByCode,
 } from '../lib/communityService';
+import { getTableSurfaceStyles, renderRichInline } from '../lib/inlineRichText';
 import { NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints } from '../lib/noteFormat';
 import {
@@ -50,19 +51,7 @@ interface CommunityViewProps {
   onOpenCopiedFlashcards?: (subjectId: string) => void;
 }
 
-function renderInlineBold(text: string) {
-  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-      return (
-        <strong key={i} className="font-semibold text-[var(--ink)]">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    return <span key={i}>{part}</span>;
-  });
-}
+
 
 function StructuredNoteReader({
   notes,
@@ -90,8 +79,6 @@ function StructuredNoteReader({
     );
   }
 
-  let sectionIdx = 0;
-
   return (
     <div
       className="sd-note-scope space-y-8 text-[16px] leading-[1.72] text-[var(--ink)]"
@@ -107,15 +94,13 @@ function StructuredNoteReader({
         <div className="rounded-2xl border border-[color-mix(in_srgb,var(--note-accent)_28%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--card))] px-5 py-4">
           <div className="text-sm font-bold text-[var(--note-accent)]">Topic Overview</div>
           <p className="mt-1.5 text-[16px] leading-[1.72] text-[var(--ink)]">
-            {renderInlineBold(notes.summary)}
+            {renderRichInline(notes.summary)}
           </p>
         </div>
       )}
 
       {notes.sections.map((sec) => {
         if (!sec.heading.trim() && sec.points.length === 0) return null;
-        sectionIdx += 1;
-        const secNum = String(sectionIdx).padStart(2, '0');
         const secAccent = normalizeNoteColor(sec.accentColor);
         const roleInfo = sec.partRole ? NOTE_PART_ROLE_MAP[sec.partRole] : undefined;
         return (
@@ -125,16 +110,11 @@ function StructuredNoteReader({
             className="space-y-3.5"
           >
             <div className="flex flex-wrap items-baseline justify-between gap-2 border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] pb-2.5">
-              <div className="flex min-w-0 items-baseline gap-2.5">
-                <span className="font-mono-num text-base font-extrabold text-[var(--note-accent)]">
-                  {secNum}.
-                </span>
-                <h3 className="font-display text-xl font-extrabold tracking-tight text-[var(--ink)] sm:text-2xl">
-                  {sec.heading || 'Key Points'}
-                </h3>
-              </div>
+              <h3 className="min-w-0 flex-1 font-display text-xl font-extrabold tracking-tight text-[var(--ink)] sm:text-2xl">
+                {sec.heading || 'Key Points'}
+              </h3>
               {roleInfo && (
-                <span className="text-xs font-bold text-[var(--note-accent)]">
+                <span className="shrink-0 whitespace-nowrap text-xs font-bold text-[var(--note-accent)]">
                   {roleInfo.label}
                 </span>
               )}
@@ -150,37 +130,47 @@ function StructuredNoteReader({
                           i > 0 ? 'pt-3' : ''
                         }`}
                       >
-                        {renderInlineBold(blk.text)}
+                        {renderRichInline(blk.text)}
                       </h4>
                     );
                   }
                   if (blk.kind === 'factbox') {
+                    const boxSurface = getTableSurfaceStyles(blk.color);
                     return (
                       <div
                         key={i}
                         className="my-3 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--card))] px-4 py-3.5"
+                        style={boxSurface.boxStyle}
                       >
-                        <div className="text-sm font-bold text-[var(--note-accent)]">
+                        <div
+                          className="text-sm font-bold text-[var(--note-accent)]"
+                          style={boxSurface.boxTitleStyle}
+                        >
                           {blk.title || 'Key Fact'}
                         </div>
                         <div className="mt-1 text-[15.5px] leading-[1.68] text-[var(--ink)]">
-                          {renderInlineBold(blk.text)}
+                          {renderRichInline(blk.text)}
                         </div>
                       </div>
                     );
                   }
                   if (blk.kind === 'table') {
+                    const tblSurface = getTableSurfaceStyles(blk.color);
                     return (
                       <div
                         key={i}
                         className="my-4 overflow-x-auto rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[var(--card)]"
+                        style={tblSurface.wrapperStyle}
                       >
                         <table className="w-full border-collapse text-left text-[15px]">
-                          <thead className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_12%,var(--card))]">
+                          <thead
+                            className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_12%,var(--card))]"
+                            style={tblSurface.theadStyle}
+                          >
                             <tr>
                               {blk.headers.map((h, hi) => (
                                 <th key={hi} className="px-4 py-3 font-bold text-[var(--ink)]">
-                                  {renderInlineBold(h)}
+                                  {renderRichInline(h)}
                                 </th>
                               ))}
                             </tr>
@@ -190,10 +180,11 @@ function StructuredNoteReader({
                               <tr
                                 key={ri}
                                 className={
-                                  ri % 2 === 1
+                                  !tblSurface.isCustom && ri % 2 === 1
                                     ? 'bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))]'
                                     : ''
                                 }
+                                style={ri % 2 === 1 ? tblSurface.zebraStyle : undefined}
                               >
                                 {row.map((cell, ci) => (
                                   <td
@@ -201,8 +192,9 @@ function StructuredNoteReader({
                                     className={`px-4 py-3 align-top leading-relaxed text-[var(--ink)] ${
                                       ci === 0 ? 'font-semibold' : ''
                                     }`}
+                                    style={ci === 0 ? tblSurface.firstColStyle : undefined}
                                   >
-                                    {renderInlineBold(cell)}
+                                    {renderRichInline(cell)}
                                   </td>
                                 ))}
                               </tr>
@@ -230,7 +222,7 @@ function StructuredNoteReader({
                                 <strong className="font-mono-num text-[var(--note-accent)]">
                                   {sIdx + 1}.
                                 </strong>{' '}
-                                {renderInlineBold(step)}
+                                {renderRichInline(step)}
                               </span>
                               {sIdx < blk.steps.length - 1 && (
                                 <span className="text-[var(--note-accent)]" aria-hidden="true">
@@ -245,8 +237,8 @@ function StructuredNoteReader({
                   }
                   if (blk.kind === 'paragraph') {
                     return (
-                      <p key={i} className="max-w-[70ch] whitespace-pre-line leading-[1.75]">
-                        {renderInlineBold(blk.text)}
+                      <p key={i} className="whitespace-pre-line leading-[1.75]">
+                        {renderRichInline(blk.text)}
                       </p>
                     );
                   }
@@ -264,7 +256,7 @@ function StructuredNoteReader({
                         }`}
                         aria-hidden="true"
                       />
-                      <span className="max-w-[70ch]">{renderInlineBold(blk.text)}</span>
+                      <span className="min-w-0 flex-1">{renderRichInline(blk.text)}</span>
                     </div>
                   );
                 })}
@@ -313,7 +305,7 @@ function StructuredNoteReader({
         <div className="rounded-2xl border border-[color-mix(in_srgb,var(--ok)_32%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_5%,var(--card))] p-5">
           <div className="text-sm font-bold text-[var(--ok)]">Worked Example</div>
           <p className="mt-1.5 whitespace-pre-line text-[15.5px] leading-[1.7] text-[var(--ink)]">
-            {renderInlineBold(notes.workedExample)}
+            {renderRichInline(notes.workedExample)}
           </p>
         </div>
       )}
@@ -322,7 +314,7 @@ function StructuredNoteReader({
         <div className="rounded-2xl border border-[color-mix(in_srgb,var(--e2)_38%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_6%,var(--card))] p-5">
           <div className="text-sm font-bold text-[var(--e2)]">Examiner Tip</div>
           <p className="mt-1.5 whitespace-pre-line text-[15.5px] leading-[1.7] text-[var(--ink)]">
-            {renderInlineBold(notes.examTip)}
+            {renderRichInline(notes.examTip)}
           </p>
         </div>
       )}

@@ -83,15 +83,105 @@ const DEFAULT_LOOK: AppearanceSettings = {
   ff: '',
 };
 
+const VALID_PALETTES = new Set([
+  '',
+  'paper',
+  'sage',
+  'contrast',
+  'ocean',
+  'lavender',
+  'rose',
+  'sand',
+  'nord',
+  'emerald',
+  'custom',
+]);
+
+const DEFAULT_CUSTOM_THEME = {
+  bg: '#F2F4F7',
+  card: '#FFFFFF',
+  ink: '#17202E',
+  accent: '#2F5F8A',
+  line: '#CBD2DC',
+};
+
+function sanitizeHex(val: unknown, fallback: string): string {
+  const s = typeof val === 'string' ? val.trim() : '';
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toUpperCase() : fallback;
+}
+
+function isHexDark(hex: string): boolean {
+  const m = hex.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (!m) return false;
+  const r = parseInt(m[1], 16) / 255;
+  const g = parseInt(m[2], 16) / 255;
+  const b = parseInt(m[3], 16) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.45;
+}
+
+function mixHexColors(hexA: string, hexB: string, weightA = 0.65): string {
+  const parse = (h: string) => {
+    const clean = h.replace('#', '');
+    return [
+      parseInt(clean.slice(0, 2), 16),
+      parseInt(clean.slice(2, 4), 16),
+      parseInt(clean.slice(4, 6), 16),
+    ];
+  };
+  const [r1, g1, b1] = parse(sanitizeHex(hexA, '#17202E'));
+  const [r2, g2, b2] = parse(sanitizeHex(hexB, '#FFFFFF'));
+  const r = Math.round(r1 * weightA + r2 * (1 - weightA));
+  const g = Math.round(g1 * weightA + g2 * (1 - weightA));
+  const b = Math.round(b1 * weightA + b2 * (1 - weightA));
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
 function normalizeLook(raw: Partial<AppearanceSettings> | null | undefined): AppearanceSettings {
   const th = raw?.th === 'light' || raw?.th === 'dark' ? raw.th : '';
   const pal =
-    raw?.pal === 'paper' || raw?.pal === 'sage' || raw?.pal === 'contrast' ? raw.pal : '';
+    typeof raw?.pal === 'string' && VALID_PALETTES.has(raw.pal)
+      ? (raw.pal as AppearanceSettings['pal'])
+      : '';
   const zm = typeof raw?.zm === 'number' && raw.zm >= 85 && raw.zm <= 150 ? raw.zm : 100;
   const lh = typeof raw?.lh === 'number' && raw.lh >= 12 && raw.lh <= 24 ? raw.lh : 14;
   const mw = typeof raw?.mw === 'string' ? raw.mw : '';
   const ff = typeof raw?.ff === 'string' ? raw.ff : '';
-  return { th, pal, zm, lh, mw, ff };
+  const customTheme = raw?.customTheme
+    ? {
+        bg: sanitizeHex(raw.customTheme.bg, DEFAULT_CUSTOM_THEME.bg),
+        card: sanitizeHex(raw.customTheme.card, DEFAULT_CUSTOM_THEME.card),
+        ink: sanitizeHex(raw.customTheme.ink, DEFAULT_CUSTOM_THEME.ink),
+        accent: sanitizeHex(raw.customTheme.accent, DEFAULT_CUSTOM_THEME.accent),
+        line: sanitizeHex(raw.customTheme.line, DEFAULT_CUSTOM_THEME.line),
+      }
+    : undefined;
+  const savedThemes = Array.isArray(raw?.savedThemes)
+    ? raw.savedThemes
+        .filter((t) => t && typeof t.id === 'string' && typeof t.name === 'string' && t.tokens)
+        .slice(0, 12)
+        .map((t) => ({
+          id: t.id,
+          name: t.name.trim().slice(0, 36) || 'Custom Theme',
+          tokens: {
+            bg: sanitizeHex(t.tokens.bg, DEFAULT_CUSTOM_THEME.bg),
+            card: sanitizeHex(t.tokens.card, DEFAULT_CUSTOM_THEME.card),
+            ink: sanitizeHex(t.tokens.ink, DEFAULT_CUSTOM_THEME.ink),
+            accent: sanitizeHex(t.tokens.accent, DEFAULT_CUSTOM_THEME.accent),
+            line: sanitizeHex(t.tokens.line, DEFAULT_CUSTOM_THEME.line),
+          },
+        }))
+    : undefined;
+
+  return {
+    th,
+    pal,
+    zm,
+    lh,
+    mw,
+    ff,
+    ...(customTheme ? { customTheme } : {}),
+    ...(savedThemes && savedThemes.length ? { savedThemes } : {}),
+  };
 }
 
 function loadInitialLook(): AppearanceSettings {
@@ -219,6 +309,36 @@ export default function App() {
 
       if (look.pal) root.setAttribute('data-pal', look.pal);
       else root.removeAttribute('data-pal');
+
+      if (look.pal === 'custom' && look.customTheme) {
+        const ct = look.customTheme;
+        const customDark = isHexDark(ct.bg);
+        root.style.setProperty('--bg', ct.bg);
+        root.style.setProperty('--card', ct.card);
+        root.style.setProperty('--ink', ct.ink);
+        root.style.setProperty('--mute', mixHexColors(ct.ink, ct.card, 0.62));
+        root.style.setProperty('--line', ct.line);
+        root.style.setProperty('--e3', ct.accent);
+        root.style.setProperty('color-scheme', customDark ? 'dark' : 'light');
+        if (customDark) {
+          root.setAttribute('data-theme', 'dark');
+          root.classList.add('dark');
+        } else {
+          root.setAttribute('data-theme', 'light');
+          root.classList.remove('dark');
+        }
+      } else {
+        root.style.removeProperty('--bg');
+        root.style.removeProperty('--card');
+        root.style.removeProperty('--ink');
+        root.style.removeProperty('--mute');
+        root.style.removeProperty('--line');
+        root.style.removeProperty('--e3');
+        root.style.removeProperty('color-scheme');
+      }
+
+      if (look.mw) root.style.setProperty('--mw', look.mw);
+      else root.style.removeProperty('--mw');
 
       if (look.ff) root.style.setProperty('--ff', look.ff);
       else root.style.removeProperty('--ff');
