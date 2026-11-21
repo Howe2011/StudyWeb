@@ -966,11 +966,11 @@ export function parseUniversalStudyImport(
 
       if (t.includes('\t')) {
         const parts = t.split('\t').map((x) => x.trim()).filter(Boolean);
-        if (parts.length >= 2) {
+        if (parts.length === 2) {
           cards.push({
             q: parts[0],
             a: parts[1],
-            sectionName: parts[2] || 'Imported Deck',
+            sectionName: 'Imported Deck',
           });
           detectedPureFlashcards++;
           continue;

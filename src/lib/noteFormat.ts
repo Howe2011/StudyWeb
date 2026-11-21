@@ -314,26 +314,40 @@ function preprocessPlainStudyText(
       continue;
     }
 
-    // Convert multi-space column lines ("Term    Value    Impact") into pipe tables if autoTables is active
+    // Convert multi-row or 3+ column tab-separated rows AND multi-space column lines into pipe tables
     if (
       opts.autoTables !== false &&
-      !/^[-*•#\d|]/.test(trimmed) &&
-      /\S\s{3,}\S/.test(trimmed)
+      !/^(?:[-*•#|]|\d+[.)]\s+)/.test(trimmed)
     ) {
-      const cols = trimmed.split(/\s{3,}/).map((c) => c.trim()).filter(Boolean);
-      if (cols.length >= 2 && cols.length <= 5) {
-        outLines.push(`| ${cols.join(' | ')} |`);
-        continue;
+      if (trimmed.includes('\t')) {
+        const tabCols = trimmed.split('\t').map((c) => c.trim()).filter(Boolean);
+        const prevHasTab = i > 0 && rawLines[i - 1].trim().includes('\t');
+        const nextHasTab = i + 1 < rawLines.length && rawLines[i + 1].trim().includes('\t');
+        if (
+          (tabCols.length >= 3 && tabCols.length <= 6) ||
+          (tabCols.length === 2 && (prevHasTab || nextHasTab))
+        ) {
+          outLines.push(`| ${tabCols.map((c) => c.replace(/\|/g, '/')).join(' | ')} |`);
+          continue;
+        }
+      }
+      if (/\S\s{3,}\S/.test(trimmed)) {
+        const cols = trimmed.split(/\s{3,}/).map((c) => c.trim()).filter(Boolean);
+        if (cols.length >= 2 && cols.length <= 6) {
+          outLines.push(`| ${cols.map((c) => c.replace(/\|/g, '/')).join(' | ')} |`);
+          continue;
+        }
       }
     }
 
-    // Split dense prose paragraphs (> 260 chars with 2+ sentences) when splitDenseParagraphs is enabled
+    // Split dense prose paragraphs (> 260 chars with 2+ sentences) when splitDenseParagraphs is enabled (never split flow chains)
     if (
       opts.splitDenseParagraphs !== false &&
       trimmed.length > 260 &&
       !trimmed.startsWith('|') &&
       !trimmed.startsWith('#') &&
-      !/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳⇒📌¶]|[☐☑✓✔✅]|\d+[.)])\s+/.test(trimmed)
+      !/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳⇒📌¶]|[☐☑✓✔✅]|\d+[.)])\s+/.test(trimmed) &&
+      countRightArrows(trimmed) < 2
     ) {
       const sentences = splitRespectingAbbreviations(trimmed);
       if (sentences.length >= 2) {
@@ -350,10 +364,10 @@ function tryBuildSequentialFlow(line: string): string | null {
   const normalized = normalizeStudySymbols(line, { preserveLeadingFlowMarker: true }).trim();
   const hasExplicitFlowLead = /^⇒\s+/.test(normalized);
   const clean = normalized.replace(/\*\*/g, '').replace(/^⇒\s*/, '').trim();
-  // Explicit arrows (A -> B -> C or A => B => C or A → B → C or A ➜ B ➜ C)
+  // Explicit arrows (A -> B -> C or A => B => C or A → B → C or A ► B ► C)
   const arrowParts = splitRightArrowSteps(clean);
   const minParts = hasExplicitFlowLead ? 2 : 3;
-  if (arrowParts.length >= minParts && arrowParts.every((p) => p.length <= 90)) {
+  if (arrowParts.length >= minParts && arrowParts.every((p) => p.length <= 220)) {
     return `⇒ ${arrowParts.join(' → ')}`;
   }
 
@@ -1122,11 +1136,25 @@ export function legacyHtmlToStructuredNote(html: string): StructuredNoteData {
         }
       } else if (tag === 'table') {
         const rows = Array.from(el.querySelectorAll('tr'));
-        for (const tr of rows) {
-          const cells = Array.from(tr.children).map((cell) =>
-            extractInlineFormattedText(cell).replace(/\|/g, '/').trim()
-          );
-          if (cells.some(Boolean)) {
+        const extractedRows = rows
+          .map((tr) =>
+            Array.from(tr.children).map((cell) =>
+              extractInlineFormattedText(cell).replace(/\|/g, '/').trim()
+            )
+          )
+          .filter((cells) => cells.some(Boolean));
+        const arrowCellRe = /^(?:[→⇒⟶⟹➜➔➝➞➟➠➡➤►▶▸▹▻▷]|->|-->|=>|==>)$/;
+        const isSingleArrowFlowTable =
+          extractedRows.length === 1 &&
+          extractedRows[0].length >= 3 &&
+          extractedRows[0].some((c) => arrowCellRe.test(c));
+        if (isSingleArrowFlowTable) {
+          const steps = extractedRows[0].filter((c) => c && !arrowCellRe.test(c));
+          if (steps.length >= 2) {
+            current.points.push(`⇒ ${steps.join(' → ')}`);
+          }
+        } else {
+          for (const cells of extractedRows) {
             current.points.push(`| ${cells.join(' | ')} |`);
           }
         }

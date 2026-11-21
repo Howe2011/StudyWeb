@@ -88,7 +88,7 @@ const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
   'NATURAL HIERARCHY (NEVER rigidly split into artificial 01/02 mini-sections or filler boxes):',
   '- Keep coherent ideas together under natural headings h (keep meaningful source numbering like "1. Topic", do NOT invent 01./02. prefixes).',
   '- Start with a clean "| Date/Key | Event/Point |" summary table (under e.g. "Key Dates" or "Key Data") when the material covers multiple dates, stats, or terms.',
-  '- Use "⇒ Step 1 → Step 2 → Step 3" for 2–5 parallel causes, agreements, or sequential steps (convert any external arrow variants like ->, =>, ➜ into "→", and reversible reactions into "⇌" or "↔").',
+  '- Use "⇒ Step 1 → Step 2 → Step 3" for 2–5 parallel causes, agreements, or sequential steps (convert any external arrow variants like ->, =>, ➜, ►, ▶, ▸ into "→", and reversible reactions into "⇌" or "↔").',
   '- Use "### Question or Sub-group" for natural sub-points, "**Term**: concise point" + "↳ sub-detail" for bullets, "| A | B |" tables for contrasts, and "📌 Label | Key stat/formula" ONLY for standout facts.',
   '- Keep u (overview) empty "" unless an introductory summary genuinely helps.',
   'Never invent facts not grounded in the source.',

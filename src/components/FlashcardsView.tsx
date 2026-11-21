@@ -35,7 +35,7 @@ interface FlashcardsViewProps {
   onSelectSubjectId: (id: string) => void;
   onUpdateWorkspace: (updater: (prev: WorkspaceData) => WorkspaceData) => void;
   onOpenImport: () => void;
-  onShareDeck: (subjectId: string, sectionName: string) => void;
+  onShareDeck: (subjectId: string, sectionName: string, topicId?: string) => void;
   onNavigate: (tab: WorkspaceTab) => void;
 }
 
@@ -1183,18 +1183,30 @@ export function FlashcardsView({
                 {subjectCards.length > 0 && (
                   <button
                     type="button"
-                    onClick={() =>
-                      onShareDeck(
+                    onClick={() => {
+                      const activeTopicObj =
+                        selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unassigned__'
+                          ? topicById.get(selectedTopicFilter)
+                          : undefined;
+                      const shareSubjId =
                         selectedSubjectId && selectedSubjectId !== 'ALL'
                           ? selectedSubjectId
-                          : workspace.subjects[0]?.id || '',
-                        'ALL'
-                      )
-                    }
+                          : activeTopicObj?.subjectId ||
+                            subjectCards[0]?.subjectId ||
+                            workspace.subjects[0]?.id ||
+                            '';
+                      onShareDeck(
+                        shareSubjId,
+                        'ALL',
+                        selectedTopicFilter !== 'ALL' ? selectedTopicFilter : 'ALL'
+                      );
+                    }}
                     className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Share</span>
+                    <span>
+                      {selectedTopicFilter !== 'ALL' ? 'Share Topic' : 'Share'}
+                    </span>
                   </button>
                 )}
               </div>
@@ -1446,6 +1458,24 @@ export function FlashcardsView({
                                 className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:text-[var(--ink)] whitespace-nowrap"
                               >
                                 {allGroupSelected ? 'Deselect' : 'Select'}
+                              </button>
+                              <span className="text-[var(--line)]">·</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onShareDeck(
+                                    grp.buckets[0]?.subjectId ||
+                                      (selectedSubjectId !== 'ALL'
+                                        ? selectedSubjectId
+                                        : workspace.subjects[0]?.id || ''),
+                                    'ALL',
+                                    grp.topicId
+                                  )
+                                }
+                                className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-[var(--mute)] hover:text-[var(--e3)] whitespace-nowrap"
+                              >
+                                <Share2 className="h-3 w-3" aria-hidden="true" />
+                                <span>Share</span>
                               </button>
                             </div>
                           </div>

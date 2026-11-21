@@ -20,10 +20,12 @@ export const LINE_BULLET_PREFIX_RE =
  * Matches any right-pointing arrow variant used across markdown, Word, Notion, web exports, or LaTeX.
  */
 export const RIGHT_ARROW_VARIANTS_RE =
-  /(?:--->|-->|->|===>|==>|(?<!<)=>|[→⟶⟹➜➔➝➞➟➠➡➤➥➦↦⇢⇥⇾])/g;
+  /(?:--->|-->|->|===>|==>|(?<!<)=>|[→⟶⟹➜➔➝➞➟➠➡➤➥➦↦⇢⇥⇾►▶▸▹▻▷➣➢])/g;
 
 const RIGHT_ARROW_SEPARATOR_RE =
-  /\s*(?:--->|-->|->|===>|==>|(?<!<)=>|[→⟶⟹➜➔➝➞➟➠➡➤➥➦↦⇢⇥⇾])\s*/g;
+  /\s*(?:--->|-->|->|===>|==>|(?<!<)=>|[→⟶⟹➜➔➝➞➟➠➡➤➥➦↦⇢⇥⇾►▶▸▹▻▷➣➢])\s*/g;
+
+const TRIANGLE_BULLET_GLYPHS_RE = /[►▶▸▹▻▷➣➢◄◀◂◁◃◅]/;
 
 /**
  * Normalizes variant external symbols (arrows, bidirectional/reversible arrows, HTML entities,
@@ -59,8 +61,8 @@ export function normalizeStudySymbols(
   // 3. Decode common HTML entities that appear in web scrapes, Quizlet/Anki exports, or docs
   s = s
     .replace(/&nbsp;/gi, ' ')
-    .replace(/&(?:rarr|Rarr|rArr|longrightarrow|Longrightarrow|rightarrow|Rightarrow);|&#0*8594;|&#x0*2192;|&#0*10230;/gi, '→')
-    .replace(/&(?:larr|Larr|lArr|longleftarrow|Longleftarrow|leftarrow|Leftarrow);|&#0*8592;|&#x0*2190;|&#0*10229;/gi, '←')
+    .replace(/&(?:rarr|Rarr|rArr|longrightarrow|Longrightarrow|rightarrow|Rightarrow|rtrif|blacktriangleright);|&#0*8594;|&#x0*2192;|&#0*10230;|&#0*9658;|&#x0*25ba;|&#0*9654;|&#x0*25b6;|&#0*9656;|&#x0*25b8;/gi, '→')
+    .replace(/&(?:larr|Larr|lArr|longleftarrow|Longleftarrow|leftarrow|Leftarrow|ltrif|blacktriangleleft);|&#0*8592;|&#x0*2190;|&#0*10229;|&#0*9668;|&#x0*25c4;|&#0*9664;|&#x0*25c0;|&#0*9666;|&#x0*25c2;/gi, '←')
     .replace(/&(?:harr|hArr|leftrightarrow|Longleftrightarrow|Leftrightarrow);|&#0*8596;|&#x0*2194;/gi, '↔')
     .replace(/&(?:rlarr|harpoons|rightleftharpoons);|&#0*8652;|&#x0*21cc;/gi, '⇌')
     .replace(/&times;|&#0*215;|&#x0*d7;/gi, '×')
@@ -122,13 +124,14 @@ export function normalizeStudySymbols(
     .replace(/[ \t]*(?:<===>|<==>|<=+>|<--->|<-->|<->|<=>|[⟷⟺⇔])[ \t]*/g, ' ↔ ')
     .replace(/[ \t]*⇌[ \t]*/g, ' ⇌ ');
 
-  // 7. Left arrows (avoid math `x < -5` which has a space between `<` and `-`)
+  // 7. Left arrows (avoid math `x < -5` which has a space between `<` and `-`; keep line-start triangles as bullets)
   s = s.replace(
-    /[ \t]*(?:<---|<--|(?<!<)<-(?![->])|[←⟵⟸⬅⇦⇠])[ \t]*/g,
+    /[ \t]*(?:<---|<--|(?<!<)<-(?![->])|[←⟵⟸⬅⇦⇠◄◀◂◁◃◅])[ \t]*/g,
     (m, offset: number, full: string) => {
       const atLineStart = offset === 0 || full[offset - 1] === '\n';
       const nextChar = full[offset + m.length];
       if (atLineStart) {
+        if (TRIANGLE_BULLET_GLYPHS_RE.test(m)) return m;
         const leadingWs = m.match(/^[ \t]*/)?.[0] ?? '';
         return !nextChar || nextChar === '\n' ? `${leadingWs}←` : `${leadingWs}← `;
       }
@@ -137,13 +140,15 @@ export function normalizeStudySymbols(
     }
   );
 
-  // 8. Forward / right arrows (all external ASCII & Unicode representations -> `→`)
+  // 8. Forward / right arrows (all external ASCII, Unicode, & mid-line triangle pointers -> `→`)
   s = s.replace(
-    /[ \t]*(?:--->|-->|->|===>|==>|(?<!<)=>|[→⇒⟶⟹➜➔➝➞➟➠➡➤➥➦↦⇢⇥⇾])[ \t]*/g,
+    /[ \t]*(?:--->|-->|->|===>|==>|(?<!<)=>|[→⇒⟶⟹➜➔➝➞➟➠➡➤➥➦↦⇢⇥⇾►▶▸▹▻▷➣➢])[ \t]*/g,
     (m, offset: number, full: string) => {
       const atLineStart = offset === 0 || full[offset - 1] === '\n';
       const nextChar = full[offset + m.length];
       if (atLineStart) {
+        // Keep triangle glyphs at the start of a line intact as bullet markers (e.g. `► Point`)
+        if (TRIANGLE_BULLET_GLYPHS_RE.test(m)) return m;
         const leadingWs = m.match(/^[ \t]*/)?.[0] ?? '';
         return !nextChar || nextChar === '\n' ? `${leadingWs}→` : `${leadingWs}→ `;
       }

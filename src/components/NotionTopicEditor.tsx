@@ -787,6 +787,51 @@ export function NotionTopicEditor({
       if (b.id !== id) return b;
       const cleanedText = clearSlash && b.text.startsWith('/') ? '' : b.text;
       const base = makeDefaultBlock(nextType, cleanedText);
+
+      let nextSteps: string[] | undefined;
+      if (nextType === 'flow') {
+        if (b.steps?.length) {
+          nextSteps = b.steps;
+        } else if (b.rows?.length) {
+          const flat = b.rows.flat().map((c) => c.trim()).filter(Boolean);
+          nextSteps = flat.length >= 2 ? flat : ['', ''];
+        } else if (cleanedText) {
+          const parsedSteps = splitRightArrowSteps(cleanedText.replace(/^⇒\s+/, ''));
+          nextSteps = parsedSteps.length >= 2 ? parsedSteps : [cleanedText, ''];
+        } else {
+          nextSteps = ['', ''];
+        }
+      }
+
+      let nextRows: string[][] | undefined;
+      if (nextType === 'table') {
+        if (b.rows?.length) {
+          nextRows = b.rows;
+        } else if (b.steps?.length) {
+          const cols = b.steps.map((s) => normalizeStudySymbols(s, { preserveLeadingFlowMarker: false }).trim());
+          nextRows = [cols, cols.map(() => '')];
+        } else if (cleanedText) {
+          const arrowCols = splitRightArrowSteps(cleanedText.replace(/^⇒\s+/, ''));
+          const tabCols = cleanedText.includes('\t')
+            ? cleanedText.split('\t').map((c) => c.trim()).filter(Boolean)
+            : [];
+          const pipeCols = cleanedText.includes('|')
+            ? cleanedText.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim()).filter(Boolean)
+            : [];
+          const cols =
+            arrowCols.length >= 2
+              ? arrowCols
+              : tabCols.length >= 2
+              ? tabCols
+              : pipeCols.length >= 2
+              ? pipeCols
+              : [];
+          nextRows = cols.length >= 2 ? [cols, cols.map(() => '')] : base.rows;
+        } else {
+          nextRows = base.rows;
+        }
+      }
+
       return {
         ...base,
         id: b.id,
@@ -794,15 +839,8 @@ export function NotionTopicEditor({
           nextType === 'key_term' || nextType === 'factbox' || nextType === 'flow'
             ? b.extra ?? ''
             : undefined,
-        steps:
-          nextType === 'flow'
-            ? b.steps?.length
-              ? b.steps
-              : cleanedText
-              ? [cleanedText, '']
-              : ['', '']
-            : undefined,
-        rows: nextType === 'table' ? (b.rows?.length ? b.rows : base.rows) : undefined,
+        steps: nextSteps,
+        rows: nextRows,
       };
     });
     commitBlocks(next, true, true);
@@ -1015,7 +1053,62 @@ export function NotionTopicEditor({
     const rawPasted = e.clipboardData?.getData('text/plain') || '';
     const pasted = normalizeStudySymbols(rawPasted, { preserveLeadingFlowMarker: true });
     const lines = pasted.replace(/\r/g, '').split('\n');
+    const canConvertBlock =
+      block.type === 'paragraph' || block.type === 'bullet' || block.type === 'heading';
+
     if (lines.length <= 1) {
+      const singleTrimmed = pasted.trim();
+      const { before, after } = splitEditableAtCaret(el);
+      const onEmptyBlock = canConvertBlock && !before.trim() && !after.trim();
+      if (onEmptyBlock && singleTrimmed) {
+        if (/^⇒\s+/.test(singleTrimmed) || countRightArrows(singleTrimmed) >= 2) {
+          const body = singleTrimmed.replace(/^⇒\s+/, '').trim();
+          const steps = splitRightArrowSteps(body);
+          if (steps.length >= 2 && steps.every((s) => s.length <= 220)) {
+            e.preventDefault();
+            const flowBlock: NotionBlock = {
+              ...makeDefaultBlock('flow', ''),
+              id: block.id,
+              steps,
+            };
+            const replaced = [...blocks.slice(0, idx), flowBlock, ...blocks.slice(idx + 1)];
+            commitBlocks(replaced, true, true);
+            return;
+          }
+        }
+        if (/^\|.+\|$/.test(singleTrimmed)) {
+          const cols = singleTrimmed
+            .replace(/^\|/, '')
+            .replace(/\|$/, '')
+            .split('|')
+            .map((c) => c.trim());
+          if (cols.length >= 2 && cols.some(Boolean)) {
+            e.preventDefault();
+            const tblBlock: NotionBlock = {
+              ...makeDefaultBlock('table', ''),
+              id: block.id,
+              rows: [cols, cols.map(() => '')],
+            };
+            const replaced = [...blocks.slice(0, idx), tblBlock, ...blocks.slice(idx + 1)];
+            commitBlocks(replaced, true, true);
+            return;
+          }
+        }
+        if (singleTrimmed.includes('\t')) {
+          const tabCols = singleTrimmed.split('\t').map((c) => c.trim()).filter(Boolean);
+          if (tabCols.length >= 3 && tabCols.length <= 8) {
+            e.preventDefault();
+            const tblBlock: NotionBlock = {
+              ...makeDefaultBlock('table', ''),
+              id: block.id,
+              rows: [tabCols, tabCols.map(() => '')],
+            };
+            const replaced = [...blocks.slice(0, idx), tblBlock, ...blocks.slice(idx + 1)];
+            commitBlocks(replaced, true, true);
+            return;
+          }
+        }
+      }
       if (rawPasted && rawPasted !== pasted) {
         e.preventDefault();
         try {
@@ -1027,15 +1120,59 @@ export function NotionTopicEditor({
       }
       return;
     }
-    if (block.type !== 'paragraph' && block.type !== 'bullet' && block.type !== 'heading') return;
+    if (!canConvertBlock) return;
 
     e.preventDefault();
     const bulletGlyphRe =
       /^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣]|\d+[.)])\s+/;
     const newBlocks: NotionBlock[] = [];
-    for (const rawLine of lines) {
+    for (let li = 0; li < lines.length; li++) {
+      const rawLine = lines[li];
       const trimmed = rawLine.trim();
       if (!trimmed) continue;
+
+      if (/^\|.+\|$/.test(trimmed)) {
+        const tableRows: string[][] = [];
+        while (li < lines.length && /^\|.+\|$/.test(lines[li].trim())) {
+          const rowLine = lines[li].trim();
+          if (!/^\|\s*[-:]+(?:\s*\|\s*[-:]+)+\s*\|$/.test(rowLine)) {
+            tableRows.push(
+              rowLine
+                .replace(/^\|/, '')
+                .replace(/\|$/, '')
+                .split('|')
+                .map((c) => c.trim())
+            );
+          }
+          li++;
+        }
+        li--;
+        if (tableRows.length > 0) {
+          const maxCols = tableRows.reduce((m, r) => Math.max(m, r.length), 1);
+          const padded = tableRows.map((r) => Array.from({ length: maxCols }, (_, ci) => r[ci] || ''));
+          if (padded.length === 1) padded.push(Array.from({ length: maxCols }, () => ''));
+          newBlocks.push({ ...makeDefaultBlock('table', ''), rows: padded });
+        }
+        continue;
+      }
+
+      if (trimmed.includes('\t')) {
+        const tsvRows: string[][] = [];
+        while (li < lines.length && lines[li].trim().includes('\t')) {
+          const cols = lines[li].trim().split('\t').map((c) => c.trim());
+          if (cols.some(Boolean)) tsvRows.push(cols);
+          li++;
+        }
+        li--;
+        if (tsvRows.length >= 2 || (tsvRows.length === 1 && tsvRows[0].length >= 3)) {
+          const maxCols = tsvRows.reduce((m, r) => Math.max(m, r.length), 1);
+          const padded = tsvRows.map((r) => Array.from({ length: maxCols }, (_, ci) => r[ci] || ''));
+          if (padded.length === 1) padded.push(Array.from({ length: maxCols }, () => ''));
+          newBlocks.push({ ...makeDefaultBlock('table', ''), rows: padded });
+          continue;
+        }
+      }
+
       if (/^#{1,2}\s+/.test(trimmed)) {
         newBlocks.push(makeDefaultBlock('heading', trimmed.replace(/^#{1,2}\s+/, '')));
       } else if (/^###\s+/.test(trimmed)) {
@@ -1139,17 +1276,21 @@ export function NotionTopicEditor({
           (anchorNode.nodeType === 1 && (anchorNode as Element).tagName.toLowerCase() === 'code');
         if (!inCode && anchorNode.nodeType === 3) {
           const txtBefore = (anchorNode.textContent || '').slice(0, range.startOffset);
-          const arrowMatch = txtBefore.match(/(<===>|<==>|<=+>|<--->|<-->|<->|<=>|--->|-->|->|===>|==>|=>|<---|<--|<-|!=)$/);
+          const arrowMatch = txtBefore.match(/(<===>|<==>|<=+>|<--->|<-->|<->|<=>|--->|-->|->|===>|==>|=>|<---|<--|<-|!=|[►▶▸▹▻▷◄◀◂◁◃◅])$/);
           const fullBefore = el.textContent?.slice(0, range.startOffset) || txtBefore;
           const isEmptyFlowTrigger =
             (block.type === 'paragraph' || block.type === 'bullet') &&
             (fullBefore === '=>' || fullBefore === '->' || fullBefore === '==>' || fullBefore === '-->');
-          if (arrowMatch && !isEmptyFlowTrigger) {
+          const isLeadingTriangleBullet =
+            arrowMatch &&
+            /[►▶▸▹▻▷◄◀◂◁◃◅]/.test(arrowMatch[1]) &&
+            fullBefore.trim() === arrowMatch[1];
+          if (arrowMatch && !isEmptyFlowTrigger && !isLeadingTriangleBullet) {
             const token = arrowMatch[1];
             const replacement =
               token === '<->' || token === '<=>' || token === '<-->' || token === '<==>' || token === '<===>' || token === '<--->'
                 ? '↔ '
-                : token === '<-' || token === '<--' || token === '<---'
+                : token === '<-' || token === '<--' || token === '<---' || /^[◄◀◂◁◃◅]$/.test(token)
                 ? '← '
                 : token === '!='
                 ? '≠ '

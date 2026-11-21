@@ -372,12 +372,28 @@ export function copySharedItemIntoWorkspace(
 
   if (item.type === 'flashcards' && item.flashcardsPayload) {
     const subj = ensureSubj(item.subjectName, item.examBoard);
-    let topic = next.topics.find((t) => t.subjectId === subj.id);
+    const desiredTopicName = (
+      item.flashcardsPayload.sectionName ||
+      item.title ||
+      'Shared Deck'
+    )
+      .replace(/\s+Flashcards$/i, '')
+      .trim();
+    const isSubjectLevelDeck =
+      desiredTopicName.toLowerCase() === subj.name.trim().toLowerCase() ||
+      /^(?:shared deck|imported deck|general \/ unassigned|core deck)$/i.test(desiredTopicName);
+    let topic = isSubjectLevelDeck
+      ? next.topics.find((t) => t.subjectId === subj.id)
+      : next.topics.find(
+          (t) =>
+            t.subjectId === subj.id &&
+            t.name.trim().toLowerCase() === desiredTopicName.toLowerCase()
+        );
     if (!topic) {
       topic = {
         id: makeId('top'),
         subjectId: subj.id,
-        name: item.flashcardsPayload.sectionName || item.title,
+        name: desiredTopicName || item.title,
         notes: createEmptyStructuredNote(),
         createdAt: new Date().toISOString(),
       };

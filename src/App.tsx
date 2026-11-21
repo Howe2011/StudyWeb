@@ -750,25 +750,94 @@ export default function App() {
   );
 
   const handleShareDeck = useCallback(
-    (subjectId: string, sectionName: string) => {
-      const subj = workspace.subjects.find((s) => s.id === subjectId);
+    (subjectId: string, sectionName: string, initialTopicId?: string) => {
+      const explicitTopic =
+        initialTopicId && initialTopicId !== 'ALL' && initialTopicId !== '__unassigned__'
+          ? workspace.topics.find((t) => t.id === initialTopicId)
+          : undefined;
+      const targetSubjId =
+        subjectId && subjectId !== 'ALL'
+          ? subjectId
+          : explicitTopic?.subjectId ||
+            workspace.flashcards[0]?.subjectId ||
+            workspace.subjects[0]?.id ||
+            '';
+      const subj = workspace.subjects.find((s) => s.id === targetSubjId);
       if (!subj) return;
-      const cards = workspace.flashcards.filter(
-        (c) => c.subjectId === subjectId && (sectionName === 'ALL' || (c.sectionName || 'Core Deck') === sectionName)
-      );
-      if (cards.length === 0) return;
 
-      const label = sectionName === 'ALL' ? `${subj.name} Flashcards` : sectionName;
+      const allSubjCards = workspace.flashcards.filter(
+        (c) =>
+          c.subjectId === subj.id &&
+          (sectionName === 'ALL' || (c.sectionName || 'Core Deck') === sectionName)
+      );
+      if (allSubjCards.length === 0) return;
+
+      const subjTopics = workspace.topics.filter((t) => t.subjectId === subj.id);
+      const topicMap = new Map(subjTopics.map((t) => [t.id, t]));
+      const grouped = new Map<
+        string,
+        {
+          topicId: string;
+          topicName: string;
+          cards: Array<{ q: string; a: string; sectionName?: string }>;
+        }
+      >();
+
+      for (const c of allSubjCards) {
+        const matchedTopic = topicMap.get(c.topicId);
+        const tid = matchedTopic ? matchedTopic.id : '__unassigned__';
+        const tName = matchedTopic ? matchedTopic.name : 'General / Unassigned';
+        const existing = grouped.get(tid);
+        const payloadCard = { q: c.q, a: c.a, sectionName: c.sectionName };
+        if (existing) {
+          existing.cards.push(payloadCard);
+        } else {
+          grouped.set(tid, {
+            topicId: tid,
+            topicName: tName,
+            cards: [payloadCard],
+          });
+        }
+      }
+
+      const orderedTopicOptions = [
+        ...subjTopics
+          .map((t) => grouped.get(t.id))
+          .filter((x): x is NonNullable<typeof x> => Boolean(x)),
+        ...(grouped.has('__unassigned__') ? [grouped.get('__unassigned__')!] : []),
+      ];
+
+      const resolvedInitTopic =
+        initialTopicId && initialTopicId !== 'ALL' && grouped.has(initialTopicId)
+          ? initialTopicId
+          : 'ALL';
+      const initialCards =
+        resolvedInitTopic !== 'ALL'
+          ? grouped.get(resolvedInitTopic)?.cards || allSubjCards
+          : allSubjCards;
+      const initialTopicName =
+        resolvedInitTopic !== 'ALL' ? grouped.get(resolvedInitTopic)?.topicName : undefined;
+      const label =
+        initialTopicName
+          ? `${initialTopicName} Flashcards`
+          : sectionName === 'ALL'
+          ? `${subj.name} Flashcards`
+          : sectionName;
+
       setShareTarget({
         type: 'flashcards',
         defaultTitle: label,
         subjectName: subj.name,
         examBoard: subj.examBoard,
-        defaultSummary: `${cards.length} active-recall flashcards for ${subj.name}.`,
-        itemCount: cards.length,
+        defaultSummary: `${initialCards.length} active-recall flashcards for ${
+          initialTopicName ? `${initialTopicName} (${subj.name})` : subj.name
+        }.`,
+        itemCount: initialCards.length,
+        initialFlashcardTopicId: resolvedInitTopic,
+        flashcardTopicOptions: orderedTopicOptions,
         flashcardsPayload: {
-          sectionName: label,
-          cards: cards.map((c) => ({ q: c.q, a: c.a, sectionName: c.sectionName })),
+          sectionName: initialTopicName || (sectionName === 'ALL' ? `${subj.name} Flashcards` : sectionName),
+          cards: initialCards.map((c) => ({ q: c.q, a: c.a, sectionName: c.sectionName })),
         },
       });
     },

@@ -18,6 +18,12 @@ export interface SubTopicShareOption {
   itemCount: number;
 }
 
+export interface FlashcardTopicShareOption {
+  topicId: string;
+  topicName: string;
+  cards: Array<{ q: string; a: string; sectionName?: string }>;
+}
+
 export interface ShareTargetConfig {
   type: SharedItemType;
   defaultTitle: string;
@@ -27,6 +33,8 @@ export interface ShareTargetConfig {
   itemCount: number;
   rootTopicOldId?: string;
   subTopicShareOptions?: SubTopicShareOption[];
+  initialFlashcardTopicId?: string;
+  flashcardTopicOptions?: FlashcardTopicShareOption[];
   notesPayload?: SharedNotesPayload;
   flashcardsPayload?: SharedFlashcardsPayload;
   subjectPayload?: SharedSubjectPayload;
@@ -55,8 +63,14 @@ export function ShareItemModal({
 }: ShareItemModalProps) {
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
+  const [titleEdited, setTitleEdited] = useState(false);
+  const [summaryEdited, setSummaryEdited] = useState(false);
   const [visibility, setVisibility] = useState<SharedItemVisibility>('public');
   const [selectedSubTopicIds, setSelectedSubTopicIds] = useState<Set<string>>(() => new Set());
+  const [flashcardScopeMode, setFlashcardScopeMode] = useState<'all' | 'topics'>('all');
+  const [selectedFlashcardTopicIds, setSelectedFlashcardTopicIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [publishedItem, setPublishedItem] = useState<SharedStudyItem | null>(null);
@@ -66,10 +80,28 @@ export function ShareItemModal({
     if (open && target) {
       setTitle(target.defaultTitle);
       setSummary(target.defaultSummary);
+      setTitleEdited(false);
+      setSummaryEdited(false);
       setVisibility('public');
       setSelectedSubTopicIds(
         new Set((target.subTopicShareOptions || []).map((opt) => opt.topic.id))
       );
+
+      const fcOpts = target.flashcardTopicOptions || [];
+      const initTopicId = target.initialFlashcardTopicId;
+      if (
+        target.type === 'flashcards' &&
+        initTopicId &&
+        initTopicId !== 'ALL' &&
+        fcOpts.some((o) => o.topicId === initTopicId)
+      ) {
+        setFlashcardScopeMode('topics');
+        setSelectedFlashcardTopicIds(new Set([initTopicId]));
+      } else {
+        setFlashcardScopeMode('all');
+        setSelectedFlashcardTopicIds(new Set(fcOpts.map((o) => o.topicId)));
+      }
+
       setPublishedItem(null);
       setErrorMsg(null);
       setCopiedLink(false);
@@ -77,18 +109,73 @@ export function ShareItemModal({
   }, [open, target]);
 
   const subTopicOptions = target?.subTopicShareOptions || [];
+  const flashcardTopicOptions = target?.flashcardTopicOptions || [];
 
   const selectedSubTopics = useMemo(
     () => subTopicOptions.filter((opt) => selectedSubTopicIds.has(opt.topic.id)),
     [subTopicOptions, selectedSubTopicIds]
   );
 
+  const selectedFlashcardTopics = useMemo(() => {
+    if (flashcardScopeMode === 'all') return flashcardTopicOptions;
+    return flashcardTopicOptions.filter((opt) => selectedFlashcardTopicIds.has(opt.topicId));
+  }, [flashcardScopeMode, flashcardTopicOptions, selectedFlashcardTopicIds]);
+
+  const resolvedFlashcardsPayload = useMemo<SharedFlashcardsPayload | undefined>(() => {
+    if (!target || target.type !== 'flashcards') return target?.flashcardsPayload;
+    if (flashcardTopicOptions.length === 0) return target.flashcardsPayload;
+
+    const cards = selectedFlashcardTopics.flatMap((opt) => opt.cards);
+    const sectionName =
+      flashcardScopeMode === 'topics' && selectedFlashcardTopics.length === 1
+        ? selectedFlashcardTopics[0].topicName
+        : `${target.subjectName} Flashcards`;
+
+    return {
+      sectionName,
+      cards,
+    };
+  }, [target, flashcardTopicOptions, selectedFlashcardTopics, flashcardScopeMode]);
+
   const resolvedItemCount = useMemo(() => {
     if (!target) return 0;
+    if (target.type === 'flashcards' && resolvedFlashcardsPayload) {
+      return resolvedFlashcardsPayload.cards.length;
+    }
     return (
       target.itemCount + selectedSubTopics.reduce((sum, opt) => sum + opt.itemCount, 0)
     );
-  }, [target, selectedSubTopics]);
+  }, [target, selectedSubTopics, resolvedFlashcardsPayload]);
+
+  // Keep title & description synced when user switches between All Subject vs Topic flashcards (unless edited manually)
+  useEffect(() => {
+    if (!open || !target || target.type !== 'flashcards' || flashcardTopicOptions.length === 0) {
+      return;
+    }
+    const cardCount = resolvedFlashcardsPayload?.cards.length || 0;
+    const isSingleTopic =
+      flashcardScopeMode === 'topics' && selectedFlashcardTopics.length === 1;
+    const nextDefaultTitle = isSingleTopic
+      ? `${selectedFlashcardTopics[0].topicName} Flashcards`
+      : flashcardScopeMode === 'topics' && selectedFlashcardTopics.length > 1
+      ? `${target.subjectName} (${selectedFlashcardTopics.length} Topics)`
+      : `${target.subjectName} Flashcards`;
+    const nextDefaultSummary = isSingleTopic
+      ? `${cardCount} active-recall flashcard${cardCount === 1 ? '' : 's'} for ${selectedFlashcardTopics[0].topicName} (${target.subjectName}).`
+      : `${cardCount} active-recall flashcard${cardCount === 1 ? '' : 's'} for ${target.subjectName}.`;
+
+    if (!titleEdited) setTitle(nextDefaultTitle);
+    if (!summaryEdited) setSummary(nextDefaultSummary);
+  }, [
+    open,
+    target,
+    flashcardTopicOptions.length,
+    flashcardScopeMode,
+    selectedFlashcardTopics,
+    resolvedFlashcardsPayload,
+    titleEdited,
+    summaryEdited,
+  ]);
 
   const resolvedNotesPayload = useMemo<SharedNotesPayload | undefined>(() => {
     if (!target || target.type !== 'notes' || !target.notesPayload) return target?.notesPayload;
@@ -115,15 +202,17 @@ export function ShareItemModal({
     try {
       return JSON.stringify({
         notesPayload: resolvedNotesPayload,
-        flashcardsPayload: target.flashcardsPayload,
+        flashcardsPayload: resolvedFlashcardsPayload,
         subjectPayload: target.subjectPayload,
       }).length;
     } catch {
       return 0;
     }
-  }, [target, resolvedNotesPayload]);
+  }, [target, resolvedNotesPayload, resolvedFlashcardsPayload]);
 
   const isOverSizeLimit = estimatedPayloadBytes > MAX_SHARE_PAYLOAD_BYTES;
+  const isEmptyFlashcardsSelection =
+    target?.type === 'flashcards' && resolvedItemCount === 0;
 
   if (!open || !target) return null;
 
@@ -151,9 +240,24 @@ export function ShareItemModal({
     });
   };
 
+  const toggleFlashcardTopic = (id: string) => {
+    setFlashcardScopeMode('topics');
+    setSelectedFlashcardTopicIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectSingleFlashcardTopic = (id: string) => {
+    setFlashcardScopeMode('topics');
+    setSelectedFlashcardTopicIds(new Set([id]));
+  };
+
   const handlePublish = async (e: FormEvent) => {
     e.preventDefault();
-    if (!firebaseUser || isOverSizeLimit) return;
+    if (!firebaseUser || isOverSizeLimit || isEmptyFlashcardsSelection) return;
     setErrorMsg(null);
     setBusy(true);
     try {
@@ -168,7 +272,7 @@ export function ShareItemModal({
         visibility,
         itemCount: resolvedItemCount,
         notesPayload: resolvedNotesPayload,
-        flashcardsPayload: target.flashcardsPayload,
+        flashcardsPayload: resolvedFlashcardsPayload,
         subjectPayload: target.subjectPayload,
       });
       setPublishedItem(item);
@@ -179,6 +283,11 @@ export function ShareItemModal({
       setBusy(false);
     }
   };
+
+  const totalSubjectFlashcardsCount = flashcardTopicOptions.reduce(
+    (sum, opt) => sum + opt.cards.length,
+    0
+  );
 
   return (
     <div
@@ -208,7 +317,10 @@ export function ShareItemModal({
                   }`}
             </h2>
             <p className="mt-0.5 text-xs text-[var(--mute)]">
-              {target.subjectName} · {resolvedItemCount} items
+              {target.subjectName} · {resolvedItemCount}{' '}
+              {target.type === 'flashcards'
+                ? `card${resolvedItemCount === 1 ? '' : 's'}`
+                : 'items'}
               {selectedSubTopics.length > 0
                 ? ` (+${selectedSubTopics.length} sub-topic${
                     selectedSubTopics.length === 1 ? '' : 's'
@@ -294,9 +406,117 @@ export function ShareItemModal({
 
               {isOverSizeLimit && (
                 <div className="rounded-lg border border-[var(--bad)] bg-[var(--bg)] px-3 py-2 text-xs font-semibold text-[var(--bad)]">
-                  Selected notes &amp; embedded formatting exceed the 400 KB share limit (~
-                  {Math.round(estimatedPayloadBytes / 1024)} KB). Uncheck some sub-topics or remove
+                  Selected items exceed the 400 KB share limit (~
+                  {Math.round(estimatedPayloadBytes / 1024)} KB). Uncheck some topics or remove
                   large embedded images.
+                </div>
+              )}
+
+              {target.type === 'flashcards' && flashcardTopicOptions.length > 0 && (
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2">
+                    <div className="text-xs font-bold text-[var(--ink)]">
+                      Flashcards to Share
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFlashcardScopeMode('all');
+                          setSelectedFlashcardTopicIds(
+                            new Set(flashcardTopicOptions.map((o) => o.topicId))
+                          );
+                        }}
+                        className={`sd-btn px-2 py-0.5 text-[11px] whitespace-nowrap ${
+                          flashcardScopeMode === 'all'
+                            ? 'border-[var(--e3)] text-[var(--e3)] font-bold'
+                            : ''
+                        }`}
+                      >
+                        All Subject ({totalSubjectFlashcardsCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFlashcardScopeMode('topics');
+                          if (
+                            selectedFlashcardTopicIds.size === 0 ||
+                            selectedFlashcardTopicIds.size === flashcardTopicOptions.length
+                          ) {
+                            setSelectedFlashcardTopicIds(
+                              new Set(
+                                flashcardTopicOptions[0]
+                                  ? [flashcardTopicOptions[0].topicId]
+                                  : []
+                              )
+                            );
+                          }
+                        }}
+                        className={`sd-btn px-2 py-0.5 text-[11px] whitespace-nowrap ${
+                          flashcardScopeMode === 'topics'
+                            ? 'border-[var(--e3)] text-[var(--e3)] font-bold'
+                            : ''
+                        }`}
+                      >
+                        By Topic
+                      </button>
+                    </div>
+                  </div>
+
+                  {flashcardScopeMode === 'topics' ? (
+                    <div className="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">
+                      {flashcardTopicOptions.map((opt) => {
+                        const checked = selectedFlashcardTopicIds.has(opt.topicId);
+                        return (
+                          <div
+                            key={opt.topicId}
+                            className={`flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors ${
+                              checked
+                                ? 'bg-[color-mix(in_srgb,var(--e3)_9%,var(--card))] text-[var(--ink)]'
+                                : 'text-[var(--mute)] hover:bg-[var(--card)]'
+                            }`}
+                          >
+                            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleFlashcardTopic(opt.topicId)}
+                                className="h-3.5 w-3.5 shrink-0 accent-[var(--e3)]"
+                              />
+                              <span className="truncate font-medium">{opt.topicName}</span>
+                            </label>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {flashcardTopicOptions.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => selectSingleFlashcardTopic(opt.topicId)}
+                                  className="cursor-pointer text-[11px] font-semibold text-[var(--e3)] hover:underline"
+                                >
+                                  Only
+                                </button>
+                              )}
+                              <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                                {opt.cards.length}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {isEmptyFlashcardsSelection && (
+                        <div className="px-1 pt-1 text-[11px] font-semibold text-[var(--bad)]">
+                          Select at least one topic to share.
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-[var(--mute)]">
+                      Sharing all {totalSubjectFlashcardsCount} flashcards across{' '}
+                      {flashcardTopicOptions.length} topic
+                      {flashcardTopicOptions.length === 1 ? '' : 's'} in {target.subjectName}. Click{' '}
+                      <span className="font-semibold text-[var(--ink)]">By Topic</span> to share a
+                      single topic instead.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -307,7 +527,10 @@ export function ShareItemModal({
                   required
                   maxLength={120}
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    setTitleEdited(true);
+                  }}
                   className="sd-input mt-1 text-sm"
                 />
               </label>
@@ -318,7 +541,10 @@ export function ShareItemModal({
                   rows={2}
                   maxLength={240}
                   value={summary}
-                  onChange={(e) => setSummary(e.target.value)}
+                  onChange={(e) => {
+                    setSummary(e.target.value);
+                    setSummaryEdited(true);
+                  }}
                   placeholder="What does this cover? Exam board, topic, or key definitions..."
                   className="sd-input mt-1 text-sm"
                 />
@@ -438,7 +664,7 @@ export function ShareItemModal({
                 </button>
                 <button
                   type="submit"
-                  disabled={busy || isOverSizeLimit}
+                  disabled={busy || isOverSizeLimit || isEmptyFlashcardsSelection}
                   className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap disabled:opacity-50"
                 >
                   {visibility === 'public' ? (
