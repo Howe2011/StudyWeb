@@ -1128,7 +1128,7 @@ export function FlashcardsView({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `studydeck-cards-${new Date().toISOString().slice(0, 10)}.tsv`;
+    a.download = `studyweb-cards-${new Date().toISOString().slice(0, 10)}.tsv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

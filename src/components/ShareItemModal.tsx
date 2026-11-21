@@ -263,7 +263,7 @@ export function ShareItemModal({
     try {
       const item = await publishSharedItem({
         uid: firebaseUser.uid,
-        ownerName: authorName || firebaseUser.displayName || 'StudyDeck Student',
+        ownerName: authorName || firebaseUser.displayName || 'StudyWeb Student',
         type: target.type,
         title: title.trim() || target.defaultTitle,
         subjectName: target.subjectName,

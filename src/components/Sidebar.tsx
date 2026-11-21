@@ -69,7 +69,7 @@ export function Sidebar({
               onClick={() => handleSelect('home')}
               className="font-display cursor-pointer text-lg font-extrabold tracking-tight text-[var(--ink)] whitespace-nowrap"
             >
-              StudyDeck
+              StudyWeb
             </button>
           )}
           {isMobileDrawer ? (
@@ -146,7 +146,7 @@ export function Sidebar({
   return (
     <>
       <aside
-        aria-label="StudyDeck sidebar"
+        aria-label="StudyWeb sidebar"
         className={`hidden shrink-0 border-r border-[var(--line)] lg:block ${
           collapsed ? 'w-[64px]' : 'w-[228px]'
         } transition-[width] duration-150`}

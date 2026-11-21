@@ -88,7 +88,7 @@ export function PWAInstallButton() {
       <button
         type="button"
         onClick={() => void install()}
-        title="Install StudyDeck for offline use at school"
+        title="Install StudyWeb for offline use at school"
         className="sd-btn h-9 px-2.5 text-xs whitespace-nowrap"
       >
         <Download className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
@@ -103,7 +103,7 @@ export function PWAInstallButton() {
         <button
           type="button"
           onClick={() => setShowIOSGuide(true)}
-          title="Install StudyDeck on iPhone / iPad for offline study"
+          title="Install StudyWeb on iPhone / iPad for offline study"
           className="sd-btn h-9 px-2.5 text-xs whitespace-nowrap"
         >
           <Download className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
@@ -115,7 +115,7 @@ export function PWAInstallButton() {
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Install StudyDeck on iOS"
+            aria-label="Install StudyWeb on iOS"
             onClick={(e) => {
               if (e.target === e.currentTarget) setShowIOSGuide(false);
             }}
@@ -142,7 +142,7 @@ export function PWAInstallButton() {
                   Scroll down and tap <strong className="text-[var(--ink)]">Add to Home Screen</strong>.
                 </li>
                 <li>
-                  Open StudyDeck from your Home Screen — your cached notes, flashcards, and planner stay available offline.
+                  Open StudyWeb from your Home Screen — your cached notes, flashcards, and planner stay available offline.
                 </li>
               </ol>
             </div>

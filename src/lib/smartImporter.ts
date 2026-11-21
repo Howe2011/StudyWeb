@@ -1130,21 +1130,21 @@ export function parseBackupJsonToWorkspace(rawJson: string): ParsedBackupBundle 
     const obj = JSON.parse(trimmed) as Record<string, unknown>;
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
 
-    let formatLabel = 'StudyDeck Backup (.json)';
+    let formatLabel = 'StudyWeb Backup (.json)';
     let parsedWs: WorkspaceData | null = null;
 
-    if (obj.app === 'studydeck' && obj.v === 2 && obj.workspace) {
-      formatLabel = 'StudyDeck v2 Full Backup';
+    if ((obj.app === 'studydeck' || obj.app === 'studyweb') && obj.v === 2 && obj.workspace) {
+      formatLabel = 'StudyWeb v2 Full Backup';
       parsedWs = normalizeWorkspace(obj.workspace);
     } else if (obj.version === 2 && Array.isArray(obj.subjects)) {
-      formatLabel = 'StudyDeck Workspace Backup';
+      formatLabel = 'StudyWeb Workspace Backup';
       parsedWs = normalizeWorkspace(obj);
     } else {
       const rev: Record<string, string> = {};
       const pln: Record<string, string> = {};
 
-      if (obj.app === 'studydeck') {
-        formatLabel = 'StudyDeck v1 Legacy Backup';
+      if (obj.app === 'studydeck' || obj.app === 'studyweb') {
+        formatLabel = 'StudyWeb v1 Legacy Backup';
         const rObj = (
           obj.revision && typeof obj.revision === 'object' ? obj.revision : {}
         ) as Record<string, unknown>;

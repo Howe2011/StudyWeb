@@ -38,6 +38,7 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Plus,
   Quote,
   Redo2,
@@ -187,6 +188,29 @@ function splitEventDetailAndSignificance(ev: TimelineEventItem): {
   return { what: ev.detail.trim(), why: '' };
 }
 
+const TIMELINE_ERA_PALETTE = [
+  '#2F5F8A',
+  '#7C3AED',
+  '#0F766E',
+  '#B45309',
+  '#BE185D',
+  '#1D4ED8',
+  '#15803D',
+  '#C2410C',
+] as const;
+
+function getTimelineEraColor(era: string | undefined, allEras: string[]): string | null {
+  const clean = (era || '').trim();
+  if (!clean) return null;
+  const idx = allEras.indexOf(clean);
+  if (idx >= 0) return TIMELINE_ERA_PALETTE[idx % TIMELINE_ERA_PALETTE.length];
+  let hash = 0;
+  for (let i = 0; i < clean.length; i++) {
+    hash = (hash * 31 + clean.charCodeAt(i)) >>> 0;
+  }
+  return TIMELINE_ERA_PALETTE[hash % TIMELINE_ERA_PALETTE.length];
+}
+
 export function NotesStudioView({
   workspace,
   selectedSubjectId,
@@ -288,7 +312,12 @@ export function NotesStudioView({
 
   // History Timeline state
   const [hideTimelineDates, setHideTimelineDates] = useState(false);
-  const [revealedEventIds, setRevealedEventIds] = useState<Set<string>>(new Set());
+  const [hideTimelineEvents, setHideTimelineEvents] = useState(false);
+  const [revealedDateIds, setRevealedDateIds] = useState<Set<string>>(new Set());
+  const [revealedEventBodyIds, setRevealedEventBodyIds] = useState<Set<string>>(new Set());
+  const [colorTimelineEras, setColorTimelineEras] = useState(false);
+  const [timelineEditAll, setTimelineEditAll] = useState(false);
+  const [expandedActionEventId, setExpandedActionEventId] = useState<string | null>(null);
   const [timelineEraFilter, setTimelineEraFilter] = useState<string>('ALL');
   const [timelineSearch, setTimelineSearch] = useState('');
   const [timelineKeyOnly, setTimelineKeyOnly] = useState(false);
@@ -406,6 +435,9 @@ export function NotesStudioView({
       setConfirmDeleteTopicId(null);
       setEditingDocHtml(false);
       setEditingEventId(null);
+      setExpandedActionEventId(null);
+      setRevealedDateIds(new Set());
+      setRevealedEventBodyIds(new Set());
       setTimelineEraFilter('ALL');
       setTimelineSearch('');
       setTimelineKeyOnly(false);
@@ -2971,9 +3003,9 @@ export function NotesStudioView({
                 {/* Timeline Command & Study Toolbar */}
                 <div className="sd-card space-y-3 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--mute)]">
                       <Calendar className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
-                      <span className="font-mono-num font-semibold text-[var(--ink)]">
+                      <span className="font-mono-num font-bold text-[var(--ink)]">
                         {timelineEventsAll.length} event{timelineEventsAll.length === 1 ? '' : 's'}
                       </span>
                       {timelineEventsAll.some((e) => e.keyEvent) && (
@@ -2987,21 +3019,120 @@ export function NotesStudioView({
                       {hideTimelineDates && timelineEventsAll.length > 0 && (
                         <>
                           <span aria-hidden="true">·</span>
-                          <span className="font-mono-num font-semibold text-[var(--e3)]">
-                            Revealed {revealedEventIds.size}/{timelineEventsAll.length}
+                          <span className="font-mono-num text-xs font-semibold text-[var(--e3)]">
+                            Dates {revealedDateIds.size}/{timelineEventsAll.length}
+                          </span>
+                        </>
+                      )}
+                      {hideTimelineEvents && timelineEventsAll.length > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono-num text-xs font-semibold text-[var(--e2)]">
+                            Events {revealedEventBodyIds.size}/{timelineEventsAll.length}
                           </span>
                         </>
                       )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      {timelineEventsAll.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHideTimelineDates((v) => !v);
+                              setRevealedDateIds(new Set());
+                            }}
+                            className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
+                              hideTimelineDates ? 'border-[var(--e3)] text-[var(--e3)]' : ''
+                            }`}
+                          >
+                            {hideTimelineDates ? (
+                              <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                            ) : (
+                              <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                            <span>{hideTimelineDates ? 'Show Dates' : 'Hide Date'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHideTimelineEvents((v) => !v);
+                              setRevealedEventBodyIds(new Set());
+                            }}
+                            className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
+                              hideTimelineEvents ? 'border-[var(--e2)] text-[var(--e2)]' : ''
+                            }`}
+                          >
+                            {hideTimelineEvents ? (
+                              <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                            ) : (
+                              <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                            <span>{hideTimelineEvents ? 'Show Events' : 'Hide Event'}</span>
+                          </button>
+
+                          {timelineEras.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setColorTimelineEras((v) => !v)}
+                              className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
+                                colorTimelineEras ? 'border-[var(--e3)] text-[var(--e3)]' : ''
+                              }`}
+                            >
+                              <Palette className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>{colorTimelineEras ? 'Era Colours: On' : 'Colour Eras'}</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={handleMakeFlashcardsFromTimeline}
+                            className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                          >
+                            <Layers className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                            <span>Make Flashcards</span>
+                          </button>
+                        </>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTimelineEditAll((v) => {
+                            const next = !v;
+                            if (!next) {
+                              setAddEventOpen(false);
+                              setBulkOpen(false);
+                              setEditingEventId(null);
+                              setExpandedActionEventId(null);
+                            }
+                            return next;
+                          });
+                        }}
+                        className={`px-3.5 py-1.5 text-xs whitespace-nowrap ${
+                          timelineEditAll
+                            ? 'sd-btn-pri'
+                            : 'sd-btn'
+                        }`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{timelineEditAll ? 'Done Editing' : 'Edit All'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Rolled-out Bulk & Add Management Tools (only shown when Edit All is enabled or timeline empty) */}
+                  {(timelineEditAll || timelineEventsAll.length === 0) && (
+                    <div className="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-3">
                       <button
                         type="button"
                         onClick={() => setAddEventOpen((v) => !v)}
-                        className={`sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap`}
+                        className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
                       >
                         <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Add Event</span>
+                        <span>{addEventOpen ? 'Close Add Form' : 'Add Event'}</span>
                       </button>
                       <button
                         type="button"
@@ -3026,37 +3157,8 @@ export function NotesStudioView({
                           <span>Sort Chronologically</span>
                         </button>
                       )}
-                      {timelineEventsAll.length > 0 && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setHideTimelineDates((v) => !v);
-                              setRevealedEventIds(new Set());
-                            }}
-                            className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
-                              hideTimelineDates ? 'border-[var(--e3)] text-[var(--e3)]' : ''
-                            }`}
-                          >
-                            {hideTimelineDates ? (
-                              <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                            ) : (
-                              <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-                            )}
-                            <span>{hideTimelineDates ? 'Show Dates' : 'Date Recall Test'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleMakeFlashcardsFromTimeline}
-                            className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
-                          >
-                            <Layers className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                            <span>Make Flashcards</span>
-                          </button>
-                        </>
-                      )}
                     </div>
-                  </div>
+                  )}
 
                   {/* Era Filter & Search Strip */}
                   {timelineEventsAll.length > 0 && (
@@ -3075,20 +3177,47 @@ export function NotesStudioView({
                             >
                               All Eras
                             </button>
-                            {timelineEras.map((era) => (
-                              <button
-                                key={era}
-                                type="button"
-                                onClick={() => setTimelineEraFilter(era)}
-                                className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
-                                  timelineEraFilter === era
-                                    ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
-                                    : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
-                                }`}
-                              >
-                                {era}
-                              </button>
-                            ))}
+                            {timelineEras.map((era) => {
+                              const eraHex = colorTimelineEras
+                                ? getTimelineEraColor(era, timelineEras)
+                                : null;
+                              const isSelected = timelineEraFilter === era;
+                              return (
+                                <button
+                                  key={era}
+                                  type="button"
+                                  onClick={() => setTimelineEraFilter(era)}
+                                  style={
+                                    eraHex
+                                      ? {
+                                          borderColor: isSelected
+                                            ? eraHex
+                                            : `color-mix(in srgb, ${eraHex} 45%, var(--line))`,
+                                          backgroundColor: isSelected
+                                            ? `color-mix(in srgb, ${eraHex} 18%, var(--card))`
+                                            : `color-mix(in srgb, ${eraHex} 8%, var(--bg))`,
+                                          color: eraHex,
+                                        }
+                                      : undefined
+                                  }
+                                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                                    eraHex
+                                      ? ''
+                                      : isSelected
+                                      ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                                      : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                                  }`}
+                                >
+                                  {eraHex && (
+                                    <span
+                                      className="h-2 w-2 rounded-full"
+                                      style={{ backgroundColor: eraHex }}
+                                    />
+                                  )}
+                                  <span>{era}</span>
+                                </button>
+                              );
+                            })}
                           </>
                         )}
                         {timelineEventsAll.some((e) => e.keyEvent) && (
@@ -3296,60 +3425,96 @@ export function NotesStudioView({
 
                 {/* Editorial Two-Column Chronological Track */}
                 {filteredTimelineEvents.length === 0 ? (
-                  <div className="sd-card p-6 text-center text-xs text-[var(--mute)]">
+                  <div className="sd-card p-6 text-center text-sm text-[var(--mute)]">
                     {timelineEventsAll.length === 0
                       ? `No History events for ${activeTopic.name} yet. Enter a date and event above or use Bulk Import.`
                       : 'No timeline events match your current era or search filter.'}
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {filteredTimelineEvents.map((ev) => {
-                      const isHidden = hideTimelineDates && !revealedEventIds.has(ev.id);
+                      const isDateHidden = hideTimelineDates && !revealedDateIds.has(ev.id);
+                      const isEventHidden = hideTimelineEvents && !revealedEventBodyIds.has(ev.id);
                       const isEditingEv = editingEventId === ev.id;
+                      const showNodeActions =
+                        timelineEditAll || expandedActionEventId === ev.id;
                       const fullIdx = timelineEventsAll.findIndex((x) => x.id === ev.id);
                       const { what, why } = splitEventDetailAndSignificance(ev);
+                      const eraHex = colorTimelineEras
+                        ? getTimelineEraColor(ev.era, timelineEras)
+                        : null;
 
                       return (
                         <div key={ev.id} className="flex items-stretch gap-3 sm:gap-5">
                           {/* Left Chronological Date Anchor */}
-                          <div className="flex w-24 shrink-0 flex-col items-end pt-4 text-right sm:w-36">
+                          <div className="flex w-28 shrink-0 flex-col items-end pt-4 text-right sm:w-44">
                             <button
                               type="button"
                               onClick={() =>
-                                setRevealedEventIds((prev) => {
+                                setRevealedDateIds((prev) => {
                                   const next = new Set(prev);
                                   if (next.has(ev.id)) next.delete(ev.id);
                                   else next.add(ev.id);
                                   return next;
                                 })
                               }
-                              className={`font-mono-num cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-bold transition-colors ${
-                                isHidden
+                              style={
+                                !isDateHidden && eraHex
+                                  ? {
+                                      borderColor: `color-mix(in srgb, ${eraHex} 55%, var(--line))`,
+                                      backgroundColor: `color-mix(in srgb, ${eraHex} 12%, var(--card))`,
+                                      color: eraHex,
+                                    }
+                                  : undefined
+                              }
+                              className={`font-mono-num cursor-pointer rounded-xl border px-3 py-1.5 text-sm font-extrabold tracking-tight transition-colors sm:text-base ${
+                                isDateHidden
                                   ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))] text-[var(--e3)]'
+                                  : eraHex
+                                  ? ''
                                   : ev.keyEvent
                                   ? 'border-[color-mix(in_srgb,var(--e2)_50%,var(--line))] bg-[var(--card)] text-[var(--e2)]'
                                   : 'border-[var(--line)] bg-[var(--card)] text-[var(--ink)]'
                               }`}
-                              title={isHidden ? 'Click to reveal date' : ev.date}
+                              title={isDateHidden ? 'Click to reveal date' : ev.date}
                             >
-                              {isHidden ? 'Reveal Date' : ev.date}
+                              {isDateHidden ? 'Reveal Date' : ev.date}
                             </button>
                             {ev.era && (
-                              <span className="mt-1 text-[11px] font-medium text-[var(--mute)]">
+                              <span
+                                style={eraHex ? { color: eraHex } : undefined}
+                                className={`mt-1.5 text-xs font-semibold sm:text-[13px] ${
+                                  eraHex ? '' : 'text-[var(--mute)]'
+                                }`}
+                              >
                                 {ev.era}
                               </span>
                             )}
                           </div>
 
                           {/* Center Spine & Node */}
-                          <div className="relative flex w-4 shrink-0 justify-center">
+                          <div className="relative flex w-5 shrink-0 justify-center">
                             <div
-                              className="w-px bg-[var(--line)]"
+                              className="w-[2px]"
+                              style={{
+                                backgroundColor: eraHex
+                                  ? `color-mix(in srgb, ${eraHex} 45%, var(--line))`
+                                  : 'var(--line)',
+                              }}
                               aria-hidden="true"
                             />
                             <span
-                              className={`absolute top-5 h-3 w-3 rounded-full border-2 border-[var(--bg)] ${
-                                ev.keyEvent ? 'bg-[var(--e2)]' : 'bg-[var(--e3)]'
+                              style={
+                                eraHex
+                                  ? { backgroundColor: eraHex }
+                                  : undefined
+                              }
+                              className={`absolute top-5 h-3.5 w-3.5 rounded-full border-2 border-[var(--bg)] ${
+                                eraHex
+                                  ? ''
+                                  : ev.keyEvent
+                                  ? 'bg-[var(--e2)]'
+                                  : 'bg-[var(--e3)]'
                               }`}
                               aria-hidden="true"
                             />
@@ -3365,21 +3530,21 @@ export function NotesStudioView({
                                     value={editEvDate}
                                     onChange={(e) => setEditEvDate(e.target.value)}
                                     placeholder="Date / Year"
-                                    className="sd-input font-mono-num text-xs font-bold sm:col-span-3"
+                                    className="sd-input font-mono-num text-sm font-bold sm:col-span-3"
                                   />
                                   <input
                                     type="text"
                                     value={editEvTitle}
                                     onChange={(e) => setEditEvTitle(e.target.value)}
                                     placeholder="Event title"
-                                    className="sd-input text-xs sm:col-span-6"
+                                    className="sd-input text-sm sm:col-span-6"
                                   />
                                   <input
                                     type="text"
                                     value={editEvEra}
                                     onChange={(e) => setEditEvEra(e.target.value)}
                                     placeholder="Era (optional)"
-                                    className="sd-input text-xs sm:col-span-3"
+                                    className="sd-input text-sm sm:col-span-3"
                                   />
                                 </div>
                                 <textarea
@@ -3387,14 +3552,14 @@ export function NotesStudioView({
                                   value={editEvDetail}
                                   onChange={(e) => setEditEvDetail(e.target.value)}
                                   placeholder="What happened…"
-                                  className="sd-input text-xs"
+                                  className="sd-input text-sm"
                                 />
                                 <textarea
                                   rows={2}
                                   value={editEvSignificance}
                                   onChange={(e) => setEditEvSignificance(e.target.value)}
                                   placeholder="Why it mattered / exam significance…"
-                                  className="sd-input text-xs"
+                                  className="sd-input text-sm"
                                 />
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                   <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-[var(--mute)]">
@@ -3428,103 +3593,197 @@ export function NotesStudioView({
                               </div>
                             ) : (
                               <div
-                                className={`sd-card p-4 transition-colors ${
-                                  ev.keyEvent
+                                style={
+                                  eraHex
+                                    ? {
+                                        borderColor: `color-mix(in srgb, ${eraHex} 45%, var(--line))`,
+                                        backgroundColor: `color-mix(in srgb, ${eraHex} 6%, var(--card))`,
+                                      }
+                                    : undefined
+                                }
+                                className={`sd-card p-5 transition-colors ${
+                                  !eraHex && ev.keyEvent
                                     ? 'border-[color-mix(in_srgb,var(--e2)_50%,var(--line))]'
                                     : ''
                                 }`}
                               >
-                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="flex items-start justify-between gap-3">
                                   <div className="min-w-0 flex-1">
-                                    {ev.keyEvent && (
-                                      <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wider text-[var(--e2)]">
-                                        Key Turning Point
+                                    {isEventHidden ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setRevealedEventBodyIds((prev) => {
+                                            const next = new Set(prev);
+                                            next.add(ev.id);
+                                            return next;
+                                          })
+                                        }
+                                        className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border border-dashed border-[var(--e2)] bg-[color-mix(in_srgb,var(--e2)_8%,var(--bg))] px-4 py-3 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--e2)_14%,var(--bg))]"
+                                      >
+                                        <div>
+                                          <div className="text-sm font-bold text-[var(--e2)]">
+                                            Event Hidden — Active Recall
+                                          </div>
+                                          <div className="mt-0.5 text-xs text-[var(--mute)]">
+                                            Try to recall what happened on this date, then click to reveal
+                                          </div>
+                                        </div>
+                                        <Eye className="h-4 w-4 shrink-0 text-[var(--e2)]" aria-hidden="true" />
+                                      </button>
+                                    ) : (
+                                      <div
+                                        onClick={
+                                          hideTimelineEvents
+                                            ? () =>
+                                                setRevealedEventBodyIds((prev) => {
+                                                  const next = new Set(prev);
+                                                  next.delete(ev.id);
+                                                  return next;
+                                                })
+                                            : undefined
+                                        }
+                                        className={hideTimelineEvents ? 'cursor-pointer' : undefined}
+                                        title={
+                                          hideTimelineEvents
+                                            ? 'Click to hide this event again'
+                                            : undefined
+                                        }
+                                      >
+                                        {ev.keyEvent && (
+                                          <div className="mb-1 text-xs font-bold uppercase tracking-wider text-[var(--e2)]">
+                                            Key Turning Point
+                                          </div>
+                                        )}
+                                        <h3 className="font-display text-lg font-bold leading-snug text-[var(--ink)] sm:text-xl">
+                                          {ev.title}
+                                        </h3>
                                       </div>
                                     )}
-                                    <h3 className="font-display text-base font-bold leading-snug text-[var(--ink)]">
-                                      {ev.title}
-                                    </h3>
                                   </div>
 
-                                  <div className="flex shrink-0 items-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        updateTopic(activeTopic.id, (t) => ({
-                                          ...t,
-                                          timelineEvents: (t.timelineEvents || []).map((x) =>
-                                            x.id === ev.id ? { ...x, keyEvent: !x.keyEvent } : x
-                                          ),
-                                        }))
-                                      }
-                                      aria-label={
-                                        ev.keyEvent ? 'Unmark key turning point' : 'Mark as key turning point'
-                                      }
-                                      title="Toggle Key Turning Point"
-                                      className={`sd-btn h-7 w-7 p-0 ${
-                                        ev.keyEvent ? 'border-[var(--e2)] text-[var(--e2)]' : 'text-[var(--mute)]'
-                                      }`}
-                                    >
-                                      <Star className="h-3.5 w-3.5" aria-hidden="true" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={fullIdx <= 0}
-                                      onClick={() => handleMoveTimelineEvent(ev.id, -1)}
-                                      aria-label="Move event earlier"
-                                      className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
-                                    >
-                                      <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={fullIdx >= timelineEventsAll.length - 1}
-                                      onClick={() => handleMoveTimelineEvent(ev.id, 1)}
-                                      aria-label="Move event later"
-                                      className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
-                                    >
-                                      <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const split = splitEventDetailAndSignificance(ev);
-                                        setEditingEventId(ev.id);
-                                        setEditEvDate(ev.date);
-                                        setEditEvTitle(ev.title);
-                                        setEditEvDetail(split.what);
-                                        setEditEvSignificance(split.why);
-                                        setEditEvEra(ev.era || '');
-                                        setEditEvKeyEvent(Boolean(ev.keyEvent));
-                                      }}
-                                      aria-label="Edit timeline event"
-                                      className="sd-btn h-7 w-7 p-0 text-[var(--mute)]"
-                                    >
-                                      <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        updateTopic(activeTopic.id, (t) => ({
-                                          ...t,
-                                          timelineEvents: (t.timelineEvents || []).filter(
-                                            (x) => x.id !== ev.id
-                                          ),
-                                        }))
-                                      }
-                                      aria-label="Delete timeline event"
-                                      className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                                    </button>
+                                  {/* Compact Pencil Button & Rolled-out Management Controls */}
+                                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                                    {showNodeActions && (
+                                      <div className="flex flex-wrap items-center gap-1 pr-1">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            updateTopic(activeTopic.id, (t) => ({
+                                              ...t,
+                                              timelineEvents: (t.timelineEvents || []).map((x) =>
+                                                x.id === ev.id ? { ...x, keyEvent: !x.keyEvent } : x
+                                              ),
+                                            }))
+                                          }
+                                          aria-label={
+                                            ev.keyEvent
+                                              ? 'Unmark key turning point'
+                                              : 'Mark as key turning point'
+                                          }
+                                          title="Toggle Key Turning Point"
+                                          className={`sd-btn h-7 w-7 p-0 ${
+                                            ev.keyEvent
+                                              ? 'border-[var(--e2)] text-[var(--e2)]'
+                                              : 'text-[var(--mute)]'
+                                          }`}
+                                        >
+                                          <Star className="h-3.5 w-3.5" aria-hidden="true" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={fullIdx <= 0}
+                                          onClick={() => handleMoveTimelineEvent(ev.id, -1)}
+                                          aria-label="Move event earlier"
+                                          title="Move earlier"
+                                          className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
+                                        >
+                                          <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={fullIdx >= timelineEventsAll.length - 1}
+                                          onClick={() => handleMoveTimelineEvent(ev.id, 1)}
+                                          aria-label="Move event later"
+                                          title="Move later"
+                                          className="sd-btn h-7 w-7 p-0 disabled:opacity-35"
+                                        >
+                                          <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const split = splitEventDetailAndSignificance(ev);
+                                            setEditingEventId(ev.id);
+                                            setEditEvDate(ev.date);
+                                            setEditEvTitle(ev.title);
+                                            setEditEvDetail(split.what);
+                                            setEditEvSignificance(split.why);
+                                            setEditEvEra(ev.era || '');
+                                            setEditEvKeyEvent(Boolean(ev.keyEvent));
+                                          }}
+                                          aria-label="Edit timeline fields"
+                                          title="Edit date, title & significance"
+                                          className="sd-btn h-7 px-2 text-xs text-[var(--ink)]"
+                                        >
+                                          <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                                          <span className="hidden sm:inline">Edit</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            updateTopic(activeTopic.id, (t) => ({
+                                              ...t,
+                                              timelineEvents: (t.timelineEvents || []).filter(
+                                                (x) => x.id !== ev.id
+                                              ),
+                                            }))
+                                          }
+                                          aria-label="Delete timeline event"
+                                          title="Delete event"
+                                          className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                        </button>
+                                      </div>
+                                    )}
+
+                                    {!timelineEditAll && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setExpandedActionEventId((prev) =>
+                                            prev === ev.id ? null : ev.id
+                                          )
+                                        }
+                                        aria-expanded={expandedActionEventId === ev.id}
+                                        aria-label={
+                                          expandedActionEventId === ev.id
+                                            ? 'Hide node management buttons'
+                                            : 'Expand node management buttons'
+                                        }
+                                        title={
+                                          expandedActionEventId === ev.id
+                                            ? 'Hide edit buttons'
+                                            : 'Manage / Edit node'
+                                        }
+                                        className={`sd-btn h-7 w-7 p-0 ${
+                                          expandedActionEventId === ev.id
+                                            ? 'border-[var(--e3)] text-[var(--e3)]'
+                                            : 'text-[var(--mute)]'
+                                        }`}
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
-                                {(what || why) && (
-                                  <div className="mt-2 space-y-1.5 text-sm leading-relaxed">
+                                {!isEventHidden && (what || why) && (
+                                  <div className="mt-2.5 space-y-2 text-[15px] leading-relaxed sm:text-base">
                                     {what && <p className="text-[var(--ink)]/90">{what}</p>}
                                     {why && (
-                                      <p className="rounded-lg bg-[var(--bg)] px-3 py-1.5 text-xs leading-relaxed text-[var(--mute)]">
+                                      <p className="rounded-lg bg-[var(--bg)] px-3.5 py-2 text-xs leading-relaxed text-[var(--mute)] sm:text-sm">
                                         <span className="font-bold text-[var(--e3)]">
                                           Significance:{' '}
                                         </span>

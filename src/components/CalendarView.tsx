@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  ListTodo,
   Play,
   Plus,
   Sparkles,
@@ -15,7 +16,7 @@ import {
   DEFAULT_PLANNER_PREFS,
   makeId,
 } from '../lib/workspaceStore';
-import { CalendarStudyBlock, WorkspaceData } from '../types';
+import { CalendarStudyBlock, TodoTaskItem, WorkspaceData } from '../types';
 
 interface CalendarViewProps {
   workspace: WorkspaceData;
@@ -73,6 +74,7 @@ export function CalendarView({
   const [calMode, setCalMode] = useState<CalViewMode>('week');
   const [refDate, setRefDate] = useState<string>(todayStr);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null);
   const [showHowPlans, setShowHowPlans] = useState<boolean>(false);
 
   // Auto-plan prefs state initialized from workspace.plannerPrefs
@@ -123,13 +125,38 @@ export function CalendarView({
     return map;
   }, [workspace.calendarBlocks]);
 
+  // Always keep workspace tasks that have a due date on the calendar
+  const todosByDate = useMemo(() => {
+    const map = new Map<string, TodoTaskItem[]>();
+    for (const t of workspace.todos) {
+      if (!t.dueDate || !/^\d{4}-\d{2}-\d{2}$/.test(t.dueDate)) continue;
+      const list = map.get(t.dueDate) || [];
+      list.push(t);
+      map.set(t.dueDate, list);
+    }
+    map.forEach((arr) =>
+      arr.sort((a, b) => Number(a.done) - Number(b.done) || b.priority - a.priority)
+    );
+    return map;
+  }, [workspace.todos]);
+
   const selectedBlock = useMemo(
     () => workspace.calendarBlocks.find((b) => b.id === selectedBlockId) || null,
     [workspace.calendarBlocks, selectedBlockId]
   );
 
-  const stepPeriod = (dir: -1 | 1) => {
+  const selectedTodo = useMemo(
+    () => workspace.todos.find((t) => t.id === selectedTodoId) || null,
+    [workspace.todos, selectedTodoId]
+  );
+
+  const clearSelection = () => {
     setSelectedBlockId(null);
+    setSelectedTodoId(null);
+  };
+
+  const stepPeriod = (dir: -1 | 1) => {
+    clearSelection();
     if (calMode === 'month') {
       const dt = new Date(`${refDate.slice(0, 8)}01T12:00:00`);
       dt.setMonth(dt.getMonth() + dir);
@@ -184,12 +211,16 @@ export function CalendarView({
     const out: string[] = [];
     for (let k = 0; k < 14; k++) {
       const d = addDaysIso(refDate, k);
-      if ((blocksByDate.get(d)?.length || 0) > 0 || (examsByDate.get(d)?.length || 0) > 0) {
+      if (
+        (blocksByDate.get(d)?.length || 0) > 0 ||
+        (examsByDate.get(d)?.length || 0) > 0 ||
+        (todosByDate.get(d)?.length || 0) > 0
+      ) {
         out.push(d);
       }
     }
     return out;
-  }, [refDate, blocksByDate, examsByDate]);
+  }, [refDate, blocksByDate, examsByDate, todosByDate]);
 
   const updatePrefs = (patch: Partial<typeof prefs>) => {
     onUpdateWorkspace((prev) => ({
@@ -207,6 +238,39 @@ export function CalendarView({
     const next = [...prefs.availHours];
     next[idx] = clamped;
     updatePrefs({ availHours: next });
+  };
+
+  const hasExamPlanning = useMemo(
+    () =>
+      workspace.subjects.some((s) => Boolean(s.examDate)) ||
+      workspace.calendarBlocks.some(
+        (b) => (!b.manual && b.kind !== 'busy') || b.kind === 'exam'
+      ),
+    [workspace.subjects, workspace.calendarBlocks]
+  );
+
+  const handleRemoveExamPlanning = () => {
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      subjects: prev.subjects.map((s) => (s.examDate ? { ...s, examDate: '' } : s)),
+      calendarBlocks: prev.calendarBlocks.filter(
+        (b) => (b.manual && b.kind !== 'exam') || b.kind === 'busy'
+      ),
+      updatedAt: new Date().toISOString(),
+    }));
+    clearSelection();
+    setPlanBanner(
+      'Removed exam planning (exam dates and auto-planned revision blocks). Your tasks and manual sessions were kept.'
+    );
+    window.setTimeout(() => setPlanBanner(null), 3800);
+  };
+
+  const handleToggleTodo = (todoId: string) => {
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      todos: prev.todos.map((t) => (t.id === todoId ? { ...t, done: !t.done } : t)),
+      updatedAt: new Date().toISOString(),
+    }));
   };
 
   const runAutoPlan = () => {
@@ -342,6 +406,9 @@ export function CalendarView({
   const completedStudyCount = workspace.calendarBlocks.filter(
     (b) => b.kind !== 'busy' && b.kind !== 'exam' && b.done
   ).length;
+  const datedTasksCount = workspace.todos.filter((t) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate || '')
+  ).length;
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--bg)]">
@@ -353,14 +420,36 @@ export function CalendarView({
               Revision Calendar
             </h1>
             <p className="mt-1 text-sm text-[var(--mute)]">
-              Month, Week, Day &amp; Agenda timetable with exam markers, rescheduling, busy blocks, and spaced Auto-Plan.
+              Month, Week, Day &amp; Agenda timetable with exam markers, due tasks, rescheduling, busy blocks, and Auto-Plan.
             </p>
           </div>
 
-          <div className="font-mono-num text-xs font-semibold text-[var(--mute)]">
-            {plannedStudyCount} planned sessions · {completedStudyCount} done
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="font-mono-num text-xs font-semibold text-[var(--mute)]">
+              {plannedStudyCount} sessions ({completedStudyCount} done) · {datedTasksCount} due tasks
+            </div>
+            {hasExamPlanning && (
+              <button
+                type="button"
+                onClick={handleRemoveExamPlanning}
+                className="sd-btn px-3 py-1.5 text-xs font-semibold text-[var(--bad)] whitespace-nowrap"
+                title="Remove exam dates and auto-planned revision blocks while keeping tasks and manual sessions"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Remove Exam Planning</span>
+              </button>
+            )}
           </div>
         </div>
+
+        {planBanner && (
+          <div
+            role="status"
+            className="rounded-xl border border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,var(--card))] px-4 py-2.5 text-xs font-semibold text-[var(--ok)]"
+          >
+            {planBanner}
+          </div>
+        )}
 
         {/* Main Calendar Surface */}
         <section className="sd-card space-y-4 p-4 sm:p-5">
@@ -381,7 +470,7 @@ export function CalendarView({
                   aria-pressed={calMode === mode}
                   onClick={() => {
                     setCalMode(mode);
-                    setSelectedBlockId(null);
+                    clearSelection();
                   }}
                   className="sd-seg-btn"
                 >
@@ -403,7 +492,7 @@ export function CalendarView({
                 type="button"
                 onClick={() => {
                   setRefDate(todayStr);
-                  setSelectedBlockId(null);
+                  clearSelection();
                 }}
                 className="sd-btn px-3 py-1.5 text-xs"
               >
@@ -423,19 +512,21 @@ export function CalendarView({
           {/* Period Title & Subject Legend */}
           <div>
             <h2 className="font-display text-xl font-bold text-[var(--ink)]">{periodTitle}</h2>
-            {workspace.subjects.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-[var(--mute)]">
-                {workspace.subjects.map((s) => (
-                  <span key={s.id} className="inline-flex items-center gap-1.5">
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
-                      style={{ backgroundColor: s.color }}
-                    />
-                    <span>{s.name}</span>
-                  </span>
-                ))}
-              </div>
-            )}
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-[var(--mute)]">
+              {workspace.subjects.map((s) => (
+                <span key={s.id} className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
+                    style={{ backgroundColor: s.color }}
+                  />
+                  <span>{s.name}</span>
+                </span>
+              ))}
+              <span className="inline-flex items-center gap-1.5">
+                <ListTodo className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
+                <span>Due Tasks</span>
+              </span>
+            </div>
           </div>
 
           {/* Selected Session Inspector Panel (.sp) */}
@@ -547,6 +638,57 @@ export function CalendarView({
             </div>
           )}
 
+          {/* Selected Task Inspector */}
+          {selectedTodo && (
+            <div className="rounded-xl border border-[var(--ok)] bg-[var(--bg)] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--ok)]">
+                    <ListTodo className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Due Task</span>
+                  </div>
+                  <div className="mt-0.5 font-display text-base font-bold text-[var(--ink)]">
+                    {selectedTodo.title}
+                  </div>
+                  <div className="mt-0.5 text-xs text-[var(--mute)]">
+                    Due {formatLongDate(selectedTodo.dueDate, { weekday: 'short', day: 'numeric', month: 'short' })}
+                    {selectedTodo.subjectId && subjById.get(selectedTodo.subjectId)
+                      ? ` · ${subjById.get(selectedTodo.subjectId)?.name}`
+                      : ''}
+                    {selectedTodo.priority === 3
+                      ? ' · High priority'
+                      : selectedTodo.priority === 1
+                      ? ' · Low priority'
+                      : ''}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleTodo(selectedTodo.id)}
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                  >
+                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{selectedTodo.done ? 'Mark not done' : 'Mark done'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const subjName =
+                        (selectedTodo.subjectId && subjById.get(selectedTodo.subjectId)?.name) ||
+                        'General Study';
+                      onStartSession(subjName);
+                    }}
+                    className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+                  >
+                    <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Start session</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* MONTH VIEW */}
           {calMode === 'month' && (
             <div className="grid grid-cols-7 gap-1">
@@ -562,6 +704,11 @@ export function CalendarView({
                 const isToday = iso === todayStr;
                 const blocks = blocksByDate.get(iso) || [];
                 const exams = examsByDate.get(iso) || [];
+                const dayTodos = todosByDate.get(iso) || [];
+                const combinedCount = blocks.length + dayTodos.length;
+                const visibleBlocks = blocks.slice(0, 2);
+                const visibleTodos = dayTodos.slice(0, 2);
+                const shownCount = visibleBlocks.length + visibleTodos.length;
                 return (
                   <div
                     key={iso}
@@ -570,7 +717,7 @@ export function CalendarView({
                     onClick={() => {
                       setRefDate(iso);
                       setCalMode('day');
-                      setSelectedBlockId(null);
+                      clearSelection();
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
@@ -579,7 +726,7 @@ export function CalendarView({
                         setCalMode('day');
                       }
                     }}
-                    className={`flex min-h-[92px] cursor-pointer flex-col gap-1 rounded-xl border p-1.5 transition-colors hover:border-[var(--mute)] ${
+                    className={`flex min-h-[96px] cursor-pointer flex-col gap-1 rounded-xl border p-1.5 transition-colors hover:border-[var(--mute)] ${
                       isToday
                         ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_7%,var(--bg))]'
                         : 'border-[var(--line)] bg-[var(--bg)]'
@@ -602,7 +749,31 @@ export function CalendarView({
                       </span>
                     ))}
 
-                    {blocks.slice(0, 3).map((b) => {
+                    {visibleTodos.map((td) => {
+                      const tCol = (td.subjectId && subjById.get(td.subjectId)?.color) || 'var(--ok)';
+                      return (
+                        <button
+                          key={td.id}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBlockId(null);
+                            setSelectedTodoId(selectedTodoId === td.id ? null : td.id);
+                          }}
+                          style={{
+                            borderLeftColor: tCol,
+                            backgroundColor: `color-mix(in srgb, ${tCol} 14%, var(--card))`,
+                          }}
+                          className={`truncate rounded border-l-[3px] px-1.5 py-0.5 text-left text-[11px] font-medium ${
+                            td.done ? 'line-through opacity-50' : 'text-[var(--ink)]'
+                          } ${selectedTodoId === td.id ? 'ring-2 ring-[var(--ink)]' : ''}`}
+                        >
+                          ✓ {td.title}
+                        </button>
+                      );
+                    })}
+
+                    {visibleBlocks.map((b) => {
                       const col = blockAccentColor(b);
                       return (
                         <button
@@ -610,6 +781,7 @@ export function CalendarView({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
+                            setSelectedTodoId(null);
                             setSelectedBlockId(selectedBlockId === b.id ? null : b.id);
                           }}
                           style={{
@@ -626,9 +798,9 @@ export function CalendarView({
                         </button>
                       );
                     })}
-                    {blocks.length > 3 && (
+                    {combinedCount > shownCount && (
                       <span className="text-[10px] text-[var(--mute)]">
-                        +{blocks.length - 3} more
+                        +{combinedCount - shownCount} more
                       </span>
                     )}
                   </div>
@@ -648,9 +820,12 @@ export function CalendarView({
                 const isToday = iso === todayStr;
                 const blocks = blocksByDate.get(iso) || [];
                 const exams = examsByDate.get(iso) || [];
+                const dayTodos = todosByDate.get(iso) || [];
                 const workBlocks = blocks.filter((b) => b.kind !== 'busy');
                 const doneCount = workBlocks.filter((b) => b.done).length;
                 const oneDay = calMode === 'day';
+                const hasAnything =
+                  blocks.length > 0 || dayTodos.length > 0 || exams.length > 0;
 
                 return (
                   <div
@@ -666,7 +841,7 @@ export function CalendarView({
                       onClick={() => {
                         setRefDate(iso);
                         setCalMode('day');
-                        setSelectedBlockId(null);
+                        clearSelection();
                       }}
                       className="flex cursor-pointer flex-col items-center border-b border-[var(--line)] pb-2 text-center"
                     >
@@ -697,6 +872,63 @@ export function CalendarView({
                     ))}
 
                     <div className="flex-1 space-y-2">
+                      {/* Workspace Tasks with Due Date (always kept on calendar) */}
+                      {dayTodos.map((td) => {
+                        const tCol =
+                          (td.subjectId && subjById.get(td.subjectId)?.color) || 'var(--ok)';
+                        const isSelected = selectedTodoId === td.id;
+                        return (
+                          <div
+                            key={td.id}
+                            style={{
+                              borderLeftColor: tCol,
+                              backgroundColor: `color-mix(in srgb, ${tCol} 12%, var(--card))`,
+                            }}
+                            className={`flex items-start gap-2 rounded-xl border-l-4 ${
+                              oneDay ? 'p-3' : 'p-2'
+                            } ${td.done ? 'opacity-55' : ''} ${
+                              isSelected ? 'ring-2 ring-[var(--ink)]' : ''
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleToggleTodo(td.id)}
+                              aria-label={td.done ? `Mark "${td.title}" incomplete` : `Mark "${td.title}" complete`}
+                              className={`mt-0.5 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded border ${
+                                td.done
+                                  ? 'border-[var(--ok)] bg-[var(--ok)] text-white'
+                                  : 'border-[var(--mute)] bg-[var(--card)]'
+                              }`}
+                            >
+                              {td.done && <Check className="h-2.5 w-2.5" aria-hidden="true" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedBlockId(null);
+                                setSelectedTodoId(isSelected ? null : td.id);
+                              }}
+                              className="min-w-0 flex-1 cursor-pointer text-left"
+                            >
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                                Task
+                                {td.subjectId && subjById.get(td.subjectId)
+                                  ? ` · ${subjById.get(td.subjectId)?.name}`
+                                  : ''}
+                              </div>
+                              <div
+                                className={`font-semibold text-[var(--ink)] ${
+                                  oneDay ? 'text-sm' : 'text-xs'
+                                } ${td.done ? 'line-through' : ''}`}
+                              >
+                                {td.title}
+                              </div>
+                            </button>
+                          </div>
+                        );
+                      })}
+
+                      {/* Study & Busy Calendar Blocks */}
                       {blocks.map((b) => {
                         const col = blockAccentColor(b);
                         const endLabel =
@@ -706,7 +938,10 @@ export function CalendarView({
                           <button
                             key={b.id}
                             type="button"
-                            onClick={() => setSelectedBlockId(isSelected ? null : b.id)}
+                            onClick={() => {
+                              setSelectedTodoId(null);
+                              setSelectedBlockId(isSelected ? null : b.id);
+                            }}
                             style={{
                               borderLeftColor: col,
                               background: `linear-gradient(135deg, color-mix(in srgb, ${col} 26%, var(--card)), color-mix(in srgb, ${col} 10%, var(--card)))`,
@@ -741,7 +976,7 @@ export function CalendarView({
                           </button>
                         );
                       })}
-                      {blocks.length === 0 && (
+                      {!hasAnything && (
                         <div className="py-6 text-center text-xs text-[var(--mute)]">Rest day</div>
                       )}
                     </div>
@@ -756,12 +991,13 @@ export function CalendarView({
             <div className="space-y-4">
               {agendaDays.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-6 text-center text-xs text-[var(--mute)]">
-                  Nothing planned in the next 14 days. Run Auto-plan below or add a session.
+                  Nothing scheduled in the next 14 days. Run Auto-plan below, add a session, or add due dates to your tasks.
                 </div>
               ) : (
                 agendaDays.map((d) => {
                   const blocks = blocksByDate.get(d) || [];
                   const exams = examsByDate.get(d) || [];
+                  const dayTodos = todosByDate.get(d) || [];
                   return (
                     <div key={d} className="space-y-1.5">
                       <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-[var(--ink)]">
@@ -779,15 +1015,66 @@ export function CalendarView({
                         ))}
                       </div>
                       <div className="space-y-1.5">
+                        {dayTodos.map((td) => {
+                          const tCol =
+                            (td.subjectId && subjById.get(td.subjectId)?.color) || 'var(--ok)';
+                          return (
+                            <div
+                              key={td.id}
+                              style={{
+                                borderLeftColor: tCol,
+                                backgroundColor: `color-mix(in srgb, ${tCol} 12%, var(--card))`,
+                              }}
+                              className={`flex items-center justify-between gap-3 rounded-lg border-l-4 px-3 py-2 text-xs ${
+                                td.done ? 'opacity-55' : 'text-[var(--ink)]'
+                              } ${selectedTodoId === td.id ? 'ring-2 ring-[var(--ink)]' : ''}`}
+                            >
+                              <div className="flex min-w-0 flex-1 items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleTodo(td.id)}
+                                  aria-label={td.done ? `Mark "${td.title}" incomplete` : `Mark "${td.title}" complete`}
+                                  className={`flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded border ${
+                                    td.done
+                                      ? 'border-[var(--ok)] bg-[var(--ok)] text-white'
+                                      : 'border-[var(--mute)] bg-[var(--card)]'
+                                  }`}
+                                >
+                                  {td.done && <Check className="h-2.5 w-2.5" aria-hidden="true" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedBlockId(null);
+                                    setSelectedTodoId(selectedTodoId === td.id ? null : td.id);
+                                  }}
+                                  className={`truncate text-left font-semibold ${
+                                    td.done ? 'line-through' : ''
+                                  }`}
+                                >
+                                  {td.title}
+                                </button>
+                              </div>
+                              <span className="shrink-0 text-[var(--mute)]">
+                                Task
+                                {td.subjectId && subjById.get(td.subjectId)
+                                  ? ` · ${subjById.get(td.subjectId)?.name}`
+                                  : ''}
+                              </span>
+                            </div>
+                          );
+                        })}
+
                         {blocks.map((b) => {
                           const col = blockAccentColor(b);
                           return (
                             <button
                               key={b.id}
                               type="button"
-                              onClick={() =>
-                                setSelectedBlockId(selectedBlockId === b.id ? null : b.id)
-                              }
+                              onClick={() => {
+                                setSelectedTodoId(null);
+                                setSelectedBlockId(selectedBlockId === b.id ? null : b.id);
+                              }}
                               style={{
                                 borderLeftColor: col,
                                 backgroundColor: `color-mix(in srgb, ${col} 14%, var(--card))`,
@@ -817,7 +1104,7 @@ export function CalendarView({
           )}
 
           <p className="text-xs text-[var(--mute)]">
-            Tap any block above to start a timed study session, reschedule, or mark it done.
+            Tap any study session or due task above to inspect, complete, or reschedule it.
           </p>
         </section>
 
@@ -830,18 +1117,30 @@ export function CalendarView({
                 <span>Auto-plan</span>
               </h2>
               <p className="mt-0.5 text-xs text-[var(--mute)]">
-                Hours you can revise each day. Sessions you manually move or lock stay put when you re-plan.
+                Hours you can revise each day. Tasks with due dates, manual sessions, and busy blocks always stay on your calendar.
               </p>
             </div>
-            <button
-              type="button"
-              disabled={workspace.subjects.length === 0}
-              onClick={runAutoPlan}
-              className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
-            >
-              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Re-plan from today</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {hasExamPlanning && (
+                <button
+                  type="button"
+                  onClick={handleRemoveExamPlanning}
+                  className="sd-btn px-3.5 py-2 text-xs text-[var(--bad)] whitespace-nowrap"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Remove Exam Planning</span>
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={workspace.subjects.length === 0}
+                onClick={runAutoPlan}
+                className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
+              >
+                <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Re-plan from today</span>
+              </button>
+            </div>
           </div>
 
           {workspace.subjects.length === 0 && (

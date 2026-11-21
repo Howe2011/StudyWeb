@@ -80,7 +80,7 @@ export function AdminPanel({
               Role-Based Access Control
             </h1>
             <p className="mt-1 text-sm text-[var(--mute)]">
-              Manage account roles across StudyDeck. Private PII profiles remain encrypted and inaccessible.
+              Manage account roles across StudyWeb. Private PII profiles remain encrypted and inaccessible.
             </p>
           </div>
           <button

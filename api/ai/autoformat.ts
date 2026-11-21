@@ -179,7 +179,7 @@ const BYOK_OPENAI_CANDIDATES = [
  * while enforcing real synthesis, minimal output tokens, and balanced visual structure.
  */
 const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
-  'StudyDeck AI: distill raw notes, semi-formatted text, or webpages into high-yield, naturally structured revision JSON.',
+  'StudyWeb AI: distill raw notes, semi-formatted text, or webpages into high-yield, naturally structured revision JSON.',
   'LOWEST STANDARD RULE (CRITICAL): If [SOURCE] already contains headings, subheadings, Markdown/HTML tables, bold/highlighted key terms, chronological lists, or arrows, treat that existing formatting as your MINIMUM baseline. NEVER downgrade tables into bullets, flatten sub-hierarchy, or drop key terms—preserve existing structure as the floor and UPGRADE weak raw parts.',
   'PROCESS & COMPLETENESS: Strip site nav, bios, ads & fluff. Cover ALL distinct topics from start to the very end of [SOURCE] without stopping early.',
   'STRONG SECTION & HIERARCHY IDENTIFICATION:',

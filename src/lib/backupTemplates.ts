@@ -15,7 +15,7 @@ function triggerDownload(filename: string, content: string, mime: string): void 
 }
 
 /**
- * Generates a clean, fully-populated StudyDeck v2 JSON workspace template
+ * Generates a clean, fully-populated StudyWeb v2 JSON workspace template
  * compatible with ProfileVaultView's JSON Backup Restore (Merge or Replace).
  */
 export function getWorkspaceJsonTemplate(): string {
@@ -209,7 +209,7 @@ export function getWorkspaceJsonTemplate(): string {
 
   return JSON.stringify(
     {
-      app: 'studydeck',
+      app: 'studyweb',
       v: 2,
       exported: today.toISOString(),
       _instructions:
@@ -258,7 +258,7 @@ Examiner Tip: Never say an enzyme is "killed" by heat — enzymes are not alive.
 
 export function downloadWorkspaceBackupTemplate(): void {
   triggerDownload(
-    'studydeck-backup-template.json',
+    'studyweb-backup-template.json',
     getWorkspaceJsonTemplate(),
     'application/json'
   );
@@ -266,7 +266,7 @@ export function downloadWorkspaceBackupTemplate(): void {
 
 export function downloadFlashcardsCsvTemplate(): void {
   triggerDownload(
-    'studydeck-flashcards-template.csv',
+    'studyweb-flashcards-template.csv',
     getFlashcardsCsvTemplate(),
     'text/csv;charset=utf-8'
   );
@@ -274,7 +274,7 @@ export function downloadFlashcardsCsvTemplate(): void {
 
 export function downloadNotesMarkdownTemplate(): void {
   triggerDownload(
-    'studydeck-notes-template.md',
+    'studyweb-notes-template.md',
     getNotesMarkdownTemplate(),
     'text/markdown;charset=utf-8'
   );

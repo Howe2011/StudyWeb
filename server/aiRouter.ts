@@ -96,7 +96,7 @@ export const BYOK_OPENAI_CANDIDATES = [
  * maximizing implicit prefix prompt caching and enabling explicit Context Caching on reuse.
  */
 const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
-  'You are StudyDeck AI, an elite academic note synthesizer. Convert raw study material, semi-formatted notes, or scraped webpage text into crisp, naturally structured revision JSON.',
+  'You are StudyWeb AI, an elite academic note synthesizer. Convert raw study material, semi-formatted notes, or scraped webpage text into crisp, naturally structured revision JSON.',
   'LOWEST STANDARD RULE (CRITICAL): If [SOURCE] already contains headings, subheadings, Markdown/HTML tables, bold/highlighted key terms, chronological lists, or arrows, treat that existing formatting as your MINIMUM baseline. NEVER downgrade a table into bullets, flatten sub-hierarchy into a blob, or strip key terms/dates—always preserve existing structure as the floor and UPGRADE weak raw sections.',
   'SELECTIVE EXTRACTION: Ignore website chrome (nav bars, author bios, ads, filler). Extract ALL examinable concepts, mechanisms, definitions, data/dates, comparisons, and formulas from start to the very end of [SOURCE] without stopping early or dropping trailing topics.',
   'STRONG SECTION & HIERARCHY IDENTIFICATION:',

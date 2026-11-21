@@ -341,7 +341,7 @@ export function ProfileVaultView({
   const buildBackupJson = () => {
     const filtered = filterWorkspaceByCategories(workspace, exportCats);
     const payload = {
-      app: 'studydeck',
+      app: 'studyweb',
       v: 2,
       exported: new Date().toISOString(),
       workspace: filtered,
@@ -364,7 +364,7 @@ export function ProfileVaultView({
       setExportStatus('No saved items matched your selected categories.');
       return;
     }
-    downloadBlob(`studydeck-backup-${new Date().toISOString().slice(0, 10)}.json`, json, 'application/json');
+    downloadBlob(`studyweb-backup-${new Date().toISOString().slice(0, 10)}.json`, json, 'application/json');
     setExportStatus(`Downloaded JSON backup (${itemCount} study records).`);
   };
 
@@ -400,7 +400,7 @@ export function ProfileVaultView({
           ].join(',')
         )
         .join('\n');
-    downloadBlob(`studydeck-flashcards-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
+    downloadBlob(`studyweb-flashcards-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
     setExportStatus(`Exported ${workspace.flashcards.length} flashcard(s) as CSV.`);
   };
 
@@ -420,8 +420,8 @@ export function ProfileVaultView({
           )}</section><hr>`
       )
       .join('\n');
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>StudyDeck Notes</title><style>body{font-family:system-ui,sans-serif;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.55}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}blockquote{border-left:3px solid #2F5F8A;padding-left:12px;color:#333}</style></head><body>${body}</body></html>`;
-    downloadBlob(`studydeck-notes-${new Date().toISOString().slice(0, 10)}.html`, html, 'text/html');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>StudyWeb Notes</title><style>body{font-family:system-ui,sans-serif;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.55}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}blockquote{border-left:3px solid #2F5F8A;padding-left:12px;color:#333}</style></head><body>${body}</body></html>`;
+    downloadBlob(`studyweb-notes-${new Date().toISOString().slice(0, 10)}.html`, html, 'text/html');
     setExportStatus(`Exported ${populated.length} note document(s) as HTML.`);
   };
 
@@ -444,7 +444,7 @@ export function ProfileVaultView({
           ].join(',')
         )
         .join('\n');
-    downloadBlob(`studydeck-todos-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
+    downloadBlob(`studyweb-todos-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
     setExportStatus(`Exported ${workspace.todos.length} to-do task(s) as CSV.`);
   };
 
@@ -452,7 +452,7 @@ export function ProfileVaultView({
     const trimmed = raw.trim();
     if (!trimmed) {
       setParsedBackup(null);
-      setImportStatus({ ok: false, msg: 'Paste a StudyDeck JSON backup first.' });
+      setImportStatus({ ok: false, msg: 'Paste a StudyWeb JSON backup first.' });
       return;
     }
 
@@ -461,7 +461,7 @@ export function ProfileVaultView({
       setParsedBackup(null);
       setImportStatus({
         ok: false,
-        msg: 'Unrecognized or invalid JSON format. Use a StudyDeck / revision-site JSON backup, or use Smart Import for Word / Markdown / CSV.',
+        msg: 'Unrecognized or invalid JSON format. Use a StudyWeb JSON backup, or use Smart Import for Word / Markdown / CSV.',
       });
       return;
     }
@@ -1133,7 +1133,7 @@ export function ProfileVaultView({
                     </div>
                   </div>
                   <p className="mt-1 text-xs text-[var(--mute)]">
-                    Download a full StudyDeck backup or readable CSV / HTML study files.
+                    Download a full StudyWeb backup or readable CSV / HTML study files.
                   </p>
 
                   <div className="mt-4 space-y-2">
@@ -1242,7 +1242,7 @@ export function ProfileVaultView({
                     </div>
                   </div>
                   <p className="mt-1 text-xs text-[var(--mute)]">
-                    Supports both new StudyDeck v2 backups and legacy Revision / Planner JSON backups.
+                    Supports both StudyWeb v2 backups and legacy StudyDeck / Revision / Planner JSON backups.
                   </p>
 
                   {importSourceTab === 'file' ? (
@@ -1267,7 +1267,7 @@ export function ProfileVaultView({
                         rows={6}
                         value={importTextRaw}
                         onChange={(e) => setImportTextRaw(e.target.value)}
-                        placeholder="Paste StudyDeck v1 or v2 JSON backup here..."
+                        placeholder="Paste StudyWeb v1 or v2 JSON backup here..."
                         className="sd-input font-mono-num text-xs leading-relaxed"
                       />
                       <div className="flex items-center justify-end gap-2">

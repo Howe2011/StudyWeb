@@ -862,7 +862,7 @@ export function LiveQuizView({
     return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
   }, [csvPreviewCards]);
 
-  // Current StudyDeck flashcards grouped by Subject -> Section
+  // Current StudyWeb flashcards grouped by Subject -> Section
   const validSnapshotCards = useMemo(
     () => deckSnapshot.cards.filter((c) => c.q.trim().length > 0 && c.a.trim().length > 0),
     [deckSnapshot.cards]
@@ -953,10 +953,10 @@ export function LiveQuizView({
     const activeSubjects = snapshotSubjectGroups
       .filter((g) => g.sections.some((s) => secSet.has(s.secId)))
       .map((g) => g.subjName);
-    if (activeSubjects.length === 1) return `StudyDeck · ${activeSubjects[0]}`;
-    if (activeSubjects.length === 2) return `StudyDeck · ${activeSubjects.join(' & ')}`;
-    if (activeSubjects.length > 2) return `StudyDeck · ${activeSubjects.length} Subjects`;
-    return 'StudyDeck Flashcards';
+    if (activeSubjects.length === 1) return `StudyWeb · ${activeSubjects[0]}`;
+    if (activeSubjects.length === 2) return `StudyWeb · ${activeSubjects.join(' & ')}`;
+    if (activeSubjects.length > 2) return `StudyWeb · ${activeSubjects.length} Subjects`;
+    return 'StudyWeb Flashcards';
   }, [currentQuizTitle, selectedCurrentSecIds, snapshotSubjectGroups]);
 
   const selectedImportCards = useMemo(() => {
@@ -1082,7 +1082,7 @@ export function LiveQuizView({
   const handleImportWorkspaceFlashcards = async (cardsToImport?: DeckFlashcard[], customTitle?: string) => {
     const sourceCards = cardsToImport ?? validSnapshotCards;
     if (!sourceCards.length) {
-      setErrorMsg('Select at least one StudyDeck flashcard section to import.');
+      setErrorMsg('Select at least one StudyWeb flashcard section to import.');
       return;
     }
     setSavingDeck(true);
@@ -1091,7 +1091,7 @@ export function LiveQuizView({
     try {
       const uniqueSubjects = Array.from(new Set(sourceCards.map((c) => c.subjName).filter(Boolean)));
       const subjectLabel = uniqueSubjects.slice(0, 2).join(' & ') || 'My Flashcards';
-      const title = (customTitle || '').trim() || `StudyDeck · ${subjectLabel}`;
+      const title = (customTitle || '').trim() || `StudyWeb · ${subjectLabel}`;
       const deck = await persistQuizDeck(title, {
         cards: buildQuizCardsFromFlashcards(sourceCards),
       });
@@ -1102,10 +1102,10 @@ export function LiveQuizView({
       setShowCurrentImporter(false);
       setImportDeckTitle('');
       setInfoMsg(
-        `Saved ${deck.cardCount} StudyDeck flashcards into "${deck.title}".`
+        `Saved ${deck.cardCount} StudyWeb flashcards into "${deck.title}".`
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to import StudyDeck cards.');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to import StudyWeb cards.');
     } finally {
       setSavingDeck(false);
     }
@@ -2009,7 +2009,7 @@ export function LiveQuizView({
               Live Quiz
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-[var(--mute)]">
-              Play directly from your current StudyDeck flashcards or import CSV decks into the
+              Play directly from your current StudyWeb flashcards or import CSV decks into the
               built-in database, launch a 4-letter lobby alongside friends, and score speed + streak
               points with instant semantic grading.
             </p>
@@ -2183,7 +2183,7 @@ export function LiveQuizView({
                 </div>
               </form>
 
-              {/* Selective Import from Current StudyDeck Flashcards */}
+              {/* Selective Import from Current StudyWeb Flashcards */}
               <div className="sd-card space-y-3 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -2191,7 +2191,7 @@ export function LiveQuizView({
                       Save Current Flashcards as a Quiz Deck
                     </h3>
                     <p className="mt-0.5 text-xs text-[var(--mute)]">
-                      Pick specific sections from your active StudyDeck flashcards ({validSnapshotCards.length}{' '}
+                      Pick specific sections from your active StudyWeb flashcards ({validSnapshotCards.length}{' '}
                       available) to save permanently into the quiz database.
                     </p>
                   </div>
@@ -2220,7 +2220,7 @@ export function LiveQuizView({
 
                 {validSnapshotCards.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
-                    No current flashcards found in StudyDeck yet. Add cards in Flashcards, use Universal Import, or copy a shared deck from Community.
+                    No current flashcards found in StudyWeb yet. Add cards in Flashcards, use Universal Import, or copy a shared deck from Community.
                   </div>
                 ) : showCurrentImporter ? (
                   <div className="space-y-3 border-t border-[var(--line)] pt-3">
@@ -2430,7 +2430,7 @@ export function LiveQuizView({
                   Host a Multiplayer Live Quiz
                 </h2>
                 <p className="mt-0.5 text-xs text-[var(--mute)]">
-                  Select from your current StudyDeck flashcards or pick a saved quiz deck, set your
+                  Select from your current StudyWeb flashcards or pick a saved quiz deck, set your
                   round timer, and play alongside friends.
                 </p>
               </div>
@@ -2461,7 +2461,7 @@ export function LiveQuizView({
                   <button
                     type="button"
                     onClick={() => onRequestDecks()}
-                    title="Sync latest flashcards from StudyDeck"
+                    title="Sync latest flashcards from StudyWeb"
                     className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
                   >
                     <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -2474,7 +2474,7 @@ export function LiveQuizView({
             {hostSource === 'current' ? (
               validSnapshotCards.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-6 text-center text-sm text-[var(--mute)]">
-                  You don&apos;t have any current flashcards in StudyDeck yet. Add cards in
+                  You don&apos;t have any current flashcards in StudyWeb yet. Add cards in
                   Flashcards, copy from Community, use Universal Import, or import a CSV deck.
                   <div className="mt-3 flex flex-wrap justify-center gap-2">
                     <button

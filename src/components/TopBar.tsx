@@ -179,7 +179,7 @@ export function TopBar({
           <Menu className="h-4 w-4" aria-hidden="true" />
         </button>
         <span className="font-display shrink-0 text-base font-extrabold tracking-tight text-[var(--ink)] lg:hidden">
-          StudyDeck
+          StudyWeb
         </span>
         <span className="hidden truncate text-sm font-semibold text-[var(--ink)] sm:inline lg:text-[15px]">
           {contextTitle}

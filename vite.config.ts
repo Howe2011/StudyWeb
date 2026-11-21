@@ -22,8 +22,8 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'StudyDeck — Revision & Mock Planner',
-          short_name: 'StudyDeck',
+          name: 'StudyWeb — Revision & Mock Planner',
+          short_name: 'StudyWeb',
           description:
             'Structured revision notes, active-recall flashcards, timelines, and exam planner with offline access and encrypted sync.',
           theme_color: '#162333',

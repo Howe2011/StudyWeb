@@ -257,11 +257,11 @@ async function startServer() {
   }
 
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`StudyDeck server listening on http://0.0.0.0:${PORT}`);
+    console.log(`StudyWeb server listening on http://0.0.0.0:${PORT}`);
   });
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start StudyDeck server:', err);
+  console.error('Failed to start StudyWeb server:', err);
   process.exit(1);
 });

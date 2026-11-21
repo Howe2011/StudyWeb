@@ -72,7 +72,7 @@ function parseSharedDoc(id: string, raw: Record<string, unknown>): SharedStudyIt
       summary: String(raw.summary || ''),
       visibility: (raw.visibility as SharedItemVisibility) === 'unlisted' ? 'unlisted' : 'public',
       ownerId: String(raw.ownerId || ''),
-      ownerName: String(raw.ownerName || 'StudyDeck Student'),
+      ownerName: String(raw.ownerName || 'StudyWeb Student'),
       itemCount: Number(raw.itemCount || 0),
       copyCount: Number(raw.copyCount || 0),
       createdAt,
@@ -174,7 +174,7 @@ export async function publishSharedItem(params: {
   const cleanSubject = (params.subjectName || 'General').trim().slice(0, 80);
   const cleanBoard = (params.examBoard || 'GCSE / Revision').trim().slice(0, 80);
   const cleanSummary = (params.summary || '').trim().slice(0, 280);
-  const cleanOwner = (params.ownerName || 'StudyDeck Student').trim().slice(0, 100);
+  const cleanOwner = (params.ownerName || 'StudyWeb Student').trim().slice(0, 100);
 
   try {
     await setDoc(docRef, {

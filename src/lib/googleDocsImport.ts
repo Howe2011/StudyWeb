@@ -75,7 +75,7 @@ function formatGoogleDocsOAuthError(err: unknown): string {
     return 'Google Docs sign-in was cancelled. You can also paste a link-shared Google Docs URL directly without signing in.';
   }
   if (code === 'auth/user-mismatch') {
-    return 'You chose a different Google account than the one currently signed into StudyDeck. Pick your StudyDeck Google account, or share the doc ("Anyone with the link") and paste its URL below.';
+    return 'You chose a different Google account than the one currently signed into StudyWeb. Pick your StudyWeb Google account, or share the doc ("Anyone with the link") and paste its URL below.';
   }
   if (code === 'auth/unauthorized-domain' || /unauthorized-domain|redirect_uri_mismatch/i.test(msg)) {
     return 'Google Docs OAuth is not authorized on this preview domain. Workaround: set your Doc to "Anyone with the link" and paste its URL below, or download it as .docx / .md and use Upload File.';
