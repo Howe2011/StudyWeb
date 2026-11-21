@@ -239,12 +239,19 @@ export function structuredNoteToBlocks(note: StructuredNoteData): NotionBlock[] 
           steps: item.steps.length ? [...item.steps] : ['', ''],
         });
       } else if (item.kind === 'table') {
-        const rows = [[...item.headers], ...item.rows.map((r) => [...r])];
+        const rows = [[...item.headers], ...item.rows.map((r) => [...r])].filter((r) =>
+          r.some((c) => c.trim().length > 0)
+        );
         blocks.push({
           id: makeNoteId('blk'),
           type: 'table',
           text: '',
-          rows: rows.length >= 2 ? rows : [['Column 1', 'Column 2'], ['', '']],
+          rows:
+            rows.length >= 2
+              ? rows
+              : rows.length === 1
+              ? [rows[0], rows[0].map(() => '')]
+              : [['Column 1', 'Column 2'], ['', '']],
           ...(item.color ? { tableColor: item.color } : {}),
         });
       }
