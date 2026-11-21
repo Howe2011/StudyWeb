@@ -10,6 +10,8 @@ import {
   Edit3,
   Eye,
   Flag,
+  Folder,
+  FolderPlus,
   Gamepad2,
   Layers,
   MoreHorizontal,
@@ -29,7 +31,7 @@ import { getByokConfig } from '../lib/byokStore';
 import { gradeAnswerViaVercelOrLocal } from '../lib/liveQuizCloud';
 import { smartSemanticFallbackCheck } from '../lib/quizGrader';
 import { applyFlashcardReview, makeId } from '../lib/workspaceStore';
-import { StudyFlashcard, WorkspaceData, WorkspaceTab } from '../types';
+import { DeckGroup, StudyFlashcard, WorkspaceData, WorkspaceTab } from '../types';
 
 interface FlashcardsViewProps {
   workspace: WorkspaceData;
@@ -246,6 +248,14 @@ export function FlashcardsView({
   const [moveTargetSection, setMoveTargetSection] = useState<string>('');
   const [moveFeedback, setMoveFeedback] = useState<string | null>(null);
 
+  // Folder / Deck Group management state
+  const [folderModalOpen, setFolderModalOpen] = useState<boolean>(false);
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [folderNameDraft, setFolderNameDraft] = useState<string>('');
+  const [folderSubjectIdDraft, setFolderSubjectIdDraft] = useState<string>('');
+  const [folderSelectedDecksDraft, setFolderSelectedDecksDraft] = useState<Set<string>>(new Set());
+  const [manageFolderFilter, setManageFolderFilter] = useState<string>('ALL');
+
   const menuRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -299,11 +309,103 @@ export function FlashcardsView({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [workspace.flashcards, selectedSubjectId, addSubjectId]);
 
+  const activeSubjectDeckGroups = useMemo(() => {
+    const all = workspace.deckGroups || [];
+    if (!selectedSubjectId || selectedSubjectId === 'ALL') return all;
+    return all.filter((g) => g.subjectId === selectedSubjectId);
+  }, [workspace.deckGroups, selectedSubjectId]);
+
+  const folderAvailableDecks = useMemo(() => {
+    if (!folderSubjectIdDraft) return [];
+    const set = new Set<string>();
+    for (const c of workspace.flashcards) {
+      if (c.subjectId === folderSubjectIdDraft) {
+        set.add((c.sectionName || 'Core Deck').trim() || 'Core Deck');
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [workspace.flashcards, folderSubjectIdDraft]);
+
+  const handleOpenCreateFolder = (presetSubjectId?: string) => {
+    const sId =
+      presetSubjectId ||
+      (selectedSubjectId && selectedSubjectId !== 'ALL'
+        ? selectedSubjectId
+        : workspace.subjects[0]?.id || '');
+    setEditingFolderId(null);
+    setFolderNameDraft('');
+    setFolderSubjectIdDraft(sId);
+    setFolderSelectedDecksDraft(new Set());
+    setFolderModalOpen(true);
+  };
+
+  const handleOpenEditFolder = (folder: DeckGroup) => {
+    setEditingFolderId(folder.id);
+    setFolderNameDraft(folder.name);
+    setFolderSubjectIdDraft(folder.subjectId);
+    setFolderSelectedDecksDraft(new Set(folder.sectionNames));
+    setFolderModalOpen(true);
+  };
+
+  const handleSaveDeckFolder = (e: FormEvent) => {
+    e.preventDefault();
+    const cleanName = folderNameDraft.trim();
+    if (!cleanName || !folderSubjectIdDraft) return;
+
+    onUpdateWorkspace((prev) => {
+      const existingGroups = prev.deckGroups || [];
+      const deckNames = Array.from(folderSelectedDecksDraft);
+
+      let nextGroups: DeckGroup[];
+      if (editingFolderId) {
+        nextGroups = existingGroups.map((g) =>
+          g.id === editingFolderId
+            ? { ...g, name: cleanName, subjectId: folderSubjectIdDraft, sectionNames: deckNames }
+            : g
+        );
+      } else {
+        const newGroup: DeckGroup = {
+          id: makeId('grp'),
+          name: cleanName,
+          subjectId: folderSubjectIdDraft,
+          sectionNames: deckNames,
+          createdAt: new Date().toISOString(),
+        };
+        nextGroups = [...existingGroups, newGroup];
+      }
+
+      return {
+        ...prev,
+        deckGroups: nextGroups,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    setFolderModalOpen(false);
+    setMoveFeedback(
+      editingFolderId
+        ? `Folder "${cleanName}" updated with ${folderSelectedDecksDraft.size} deck(s).`
+        : `Created folder "${cleanName}" with ${folderSelectedDecksDraft.size} deck(s).`
+    );
+  };
+
+  const handleDeleteDeckFolder = (folderId: string) => {
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      deckGroups: (prev.deckGroups || []).filter((g) => g.id !== folderId),
+      updatedAt: new Date().toISOString(),
+    }));
+    if (manageFolderFilter === folderId) setManageFolderFilter('ALL');
+    setFolderModalOpen(false);
+    setMoveFeedback('Folder removed (cards and decks remain safe).');
+  };
+
   // Reset filters when subject changes
   useEffect(() => {
     setSelectedTopicFilter('ALL');
     setManageTopicFilter('ALL');
     setManageSectionFilter('ALL');
+    setManageFolderFilter('ALL');
     setSelectedManageIds(new Set());
     setConfirmBulkDelete(false);
     setMoveFeedback(null);
@@ -885,6 +987,21 @@ export function FlashcardsView({
       }
       const sec = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
       if (manageSectionFilter !== 'ALL' && sec !== manageSectionFilter) return false;
+      if (manageFolderFilter !== 'ALL') {
+        const allGroups = workspace.deckGroups || [];
+        if (manageFolderFilter === '__unfoldered__') {
+          const inAnyGroup = allGroups.some(
+            (g) => g.subjectId === c.subjectId && g.sectionNames.includes(sec)
+          );
+          if (inAnyGroup) return false;
+        } else {
+          const targetGroup = allGroups.find((g) => g.id === manageFolderFilter);
+          if (!targetGroup) return false;
+          if (c.subjectId !== targetGroup.subjectId || !targetGroup.sectionNames.includes(sec)) {
+            return false;
+          }
+        }
+      }
       if (manageFilter === 'due' && c.dueAt > now) return false;
       if (manageFilter === 'weak' && c.box > 2) return false;
       if (manageFilter === 'mid' && c.box !== 3) return false;
@@ -922,6 +1039,8 @@ export function FlashcardsView({
     manageSearch,
     manageTopicFilter,
     manageSectionFilter,
+    manageFolderFilter,
+    workspace.deckGroups,
     manageFilter,
     manageSort,
     subjById,
@@ -1485,6 +1604,52 @@ export function FlashcardsView({
                           >
                             Linked: {tp.topicName}{' '}
                             <span className="font-mono-num opacity-75">({tp.count})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Folders / Deck Groups Quick-Select */}
+                  {activeSubjectDeckGroups.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Folders:
+                      </span>
+                      {activeSubjectDeckGroups.map((grp) => {
+                        const memberKeys = grp.sectionNames.map(
+                          (sec) => `${grp.subjectId}:::${sec}`
+                        );
+                        const isFolderFullySelected =
+                          memberKeys.length > 0 &&
+                          memberKeys.every((k) => selectedSections.includes(k));
+
+                        return (
+                          <button
+                            key={grp.id}
+                            type="button"
+                            onClick={() => {
+                              if (isFolderFullySelected) {
+                                setSelectedSections((prev) =>
+                                  prev.filter((k) => !memberKeys.includes(k))
+                                );
+                              } else {
+                                setSelectedSections((prev) =>
+                                  Array.from(new Set([...prev, ...memberKeys]))
+                                );
+                              }
+                            }}
+                            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                              isFolderFullySelected
+                                ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                                : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                            }`}
+                          >
+                            <Folder className="h-3 w-3" aria-hidden="true" />
+                            <span>{grp.name}</span>
+                            <span className="font-mono-num text-[10px] opacity-75">
+                              ({grp.sectionNames.length} decks)
+                            </span>
                           </button>
                         );
                       })}
@@ -2455,6 +2620,15 @@ export function FlashcardsView({
                     </button>
                   </div>
 
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCreateFolder()}
+                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                  >
+                    <FolderPlus className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                    <span>+ New Folder</span>
+                  </button>
+
                   {manageFilteredCards.length > 0 && (
                     <button
                       type="button"
@@ -2612,7 +2786,7 @@ export function FlashcardsView({
                 <div className="space-y-4">
                   {/* Filters, Sort & View Controls */}
                   <div className="sd-card space-y-3 p-4">
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                    <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
                       <select
                         aria-label="Filter by subject"
                         value={selectedSubjectId || 'ALL'}
@@ -2637,6 +2811,21 @@ export function FlashcardsView({
                         {manageAvailableSections.map((sec) => (
                           <option key={sec} value={sec}>
                             {sec}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        aria-label="Filter by folder"
+                        value={manageFolderFilter}
+                        onChange={(e) => setManageFolderFilter(e.target.value)}
+                        className="sd-input py-1.5 text-xs font-semibold"
+                      >
+                        <option value="ALL">All Folders ({activeSubjectDeckGroups.length})</option>
+                        <option value="__unfoldered__">Unfoldered Decks</option>
+                        {activeSubjectDeckGroups.map((grp) => (
+                          <option key={grp.id} value={grp.id}>
+                            📁 {grp.name} ({grp.sectionNames.length} decks)
                           </option>
                         ))}
                       </select>
@@ -2784,6 +2973,123 @@ export function FlashcardsView({
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* Folders Management Panel in Browse Tab */}
+                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Folder className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                        <span className="text-xs font-bold text-[var(--ink)]">
+                          Deck Folders ({activeSubjectDeckGroups.length})
+                        </span>
+                        <span className="text-[11px] text-[var(--mute)]">
+                          Group current decks together for organized browsing and 1-click study
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCreateFolder()}
+                        className="sd-btn px-2.5 py-1 text-xs"
+                      >
+                        <FolderPlus className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                        <span>+ New Folder</span>
+                      </button>
+                    </div>
+
+                    {activeSubjectDeckGroups.length > 0 && (
+                      <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {activeSubjectDeckGroups.map((grp) => {
+                          const isCurrentFilter = manageFolderFilter === grp.id;
+                          const totalCardsInFolder = workspace.flashcards.filter(
+                            (c) =>
+                              c.subjectId === grp.subjectId &&
+                              grp.sectionNames.includes(
+                                (c.sectionName || 'Core Deck').trim() || 'Core Deck'
+                              )
+                          ).length;
+
+                          return (
+                            <div
+                              key={grp.id}
+                              className={`flex flex-col justify-between rounded-xl border p-3 transition-colors ${
+                                isCurrentFilter
+                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))]'
+                                  : 'border-[var(--line)] bg-[var(--card)]'
+                              }`}
+                            >
+                              <div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="flex items-center gap-1.5 font-bold text-xs text-[var(--ink)] truncate">
+                                    <Folder className="h-3.5 w-3.5 text-[var(--e3)] shrink-0" />
+                                    <span className="truncate">{grp.name}</span>
+                                  </span>
+                                  <span className="font-mono-num text-[10px] text-[var(--mute)] shrink-0">
+                                    {grp.sectionNames.length} deck{grp.sectionNames.length === 1 ? '' : 's'} · {totalCardsInFolder} cards
+                                  </span>
+                                </div>
+                                <div className="mt-1.5 flex flex-wrap gap-1">
+                                  {grp.sectionNames.length === 0 ? (
+                                    <span className="text-[11px] text-[var(--mute)] italic">
+                                      No decks in this folder yet
+                                    </span>
+                                  ) : (
+                                    grp.sectionNames.slice(0, 4).map((sec) => (
+                                      <span
+                                        key={sec}
+                                        className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--mute)]"
+                                      >
+                                        {sec}
+                                      </span>
+                                    ))
+                                  )}
+                                  {grp.sectionNames.length > 4 && (
+                                    <span className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--mute)]">
+                                      +{grp.sectionNames.length - 4} more
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-2 text-xs">
+                                <button
+                                  type="button"
+                                  onClick={() => setManageFolderFilter(isCurrentFilter ? 'ALL' : grp.id)}
+                                  className={`font-semibold ${
+                                    isCurrentFilter
+                                      ? 'text-[var(--e3)]'
+                                      : 'text-[var(--mute)] hover:text-[var(--ink)]'
+                                  }`}
+                                >
+                                  {isCurrentFilter ? 'Showing Folder ✓' : 'Filter Cards'}
+                                </button>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditFolder(grp)}
+                                    title="Edit folder and member decks"
+                                    aria-label={`Edit ${grp.name}`}
+                                    className="sd-btn h-7 px-2 text-xs"
+                                  >
+                                    <Edit3 className="h-3 w-3" />
+                                    <span>Edit</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteDeckFolder(grp.id)}
+                                    title="Delete folder"
+                                    aria-label={`Delete ${grp.name}`}
+                                    className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Multi-Select / Organize & Bulk Actions Toolbar */}
@@ -3195,6 +3501,188 @@ export function FlashcardsView({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Create / Edit Folder Modal */}
+      {folderModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3 sm:p-5"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="folder-modal-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setFolderModalOpen(false);
+          }}
+        >
+          <div className="sd-card flex max-h-[88dvh] w-full max-w-lg flex-col overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Folder className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <h2 id="folder-modal-title" className="font-display text-lg font-bold text-[var(--ink)]">
+                    {editingFolderId ? 'Edit Deck Folder' : 'Create Deck Folder'}
+                  </h2>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--mute)]">
+                  Store and organize decks into a folder for quick filtering and 1-click study sessions.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFolderModalOpen(false)}
+                className="sd-btn h-8 w-8 rounded-full p-0"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDeckFolder} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+                {/* Subject selector */}
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    Subject
+                    <select
+                      value={folderSubjectIdDraft}
+                      onChange={(e) => {
+                        setFolderSubjectIdDraft(e.target.value);
+                        setFolderSelectedDecksDraft(new Set());
+                      }}
+                      className="sd-input mt-1 text-xs"
+                    >
+                      {workspace.subjects.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                {/* Folder Name */}
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    Folder Name *
+                    <input
+                      type="text"
+                      required
+                      value={folderNameDraft}
+                      onChange={(e) => setFolderNameDraft(e.target.value)}
+                      placeholder="e.g. Paper 1 Revision, Genetics & Cells, Unit 2..."
+                      className="sd-input mt-1 text-xs"
+                    />
+                  </label>
+                </div>
+
+                {/* Decks Selection */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[var(--ink)]">
+                      Select Current Decks to Store in this Folder ({folderSelectedDecksDraft.size}/{folderAvailableDecks.length})
+                    </span>
+                    {folderAvailableDecks.length > 0 && (
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setFolderSelectedDecksDraft(new Set(folderAvailableDecks))}
+                          className="cursor-pointer font-semibold text-[var(--e3)] hover:underline"
+                        >
+                          Select All
+                        </button>
+                        <span className="text-[var(--line)]">·</span>
+                        <button
+                          type="button"
+                          onClick={() => setFolderSelectedDecksDraft(new Set())}
+                          className="cursor-pointer font-semibold text-[var(--mute)] hover:text-[var(--ink)]"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {folderAvailableDecks.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-[var(--line)] p-4 text-center text-xs text-[var(--mute)]">
+                      No decks found in this subject yet. Add some flashcards first or import a deck.
+                    </p>
+                  ) : (
+                    <div className="max-h-60 space-y-1.5 overflow-y-auto rounded-xl border border-[var(--line)] p-2">
+                      {folderAvailableDecks.map((secName) => {
+                        const isChecked = folderSelectedDecksDraft.has(secName);
+                        const cardsInSec = workspace.flashcards.filter(
+                          (c) =>
+                            c.subjectId === folderSubjectIdDraft &&
+                            (c.sectionName || 'Core Deck').trim() === secName
+                        ).length;
+
+                        return (
+                          <label
+                            key={secName}
+                            className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
+                              isChecked
+                                ? 'bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))] text-[var(--ink)] font-semibold'
+                                : 'text-[var(--ink)] hover:bg-[var(--bg)]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const next = new Set(folderSelectedDecksDraft);
+                                  if (e.target.checked) next.add(secName);
+                                  else next.delete(secName);
+                                  setFolderSelectedDecksDraft(next);
+                                }}
+                                className="h-4 w-4 rounded accent-[var(--e3)]"
+                              />
+                              <span className="truncate">{secName}</span>
+                            </div>
+                            <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                              {cardsInSec} card{cardsInSec === 1 ? '' : 's'}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-[var(--line)] bg-[var(--bg)] px-5 py-3 text-xs">
+                {editingFolderId ? (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteDeckFolder(editingFolderId)}
+                    className="sd-btn px-3 py-1.5 text-xs text-[var(--bad)]"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Delete Folder</span>
+                  </button>
+                ) : (
+                  <div />
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFolderModalOpen(false)}
+                    className="sd-btn px-3.5 py-1.5 text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="sd-btn-pri px-4 py-1.5 text-xs font-bold"
+                  >
+                    {editingFolderId ? 'Save Changes' : 'Create Folder'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

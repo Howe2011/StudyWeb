@@ -111,12 +111,22 @@ export type ColorPalette =
   | 'emerald'
   | 'custom';
 
+export interface ThemeColorSet {
+  bg: string;
+  card: string;
+  ink: string;
+  accent: string;
+  line: string;
+}
+
 export interface CustomThemeTokens {
   bg: string;
   card: string;
   ink: string;
   accent: string;
   line: string;
+  light?: ThemeColorSet;
+  dark?: ThemeColorSet;
 }
 
 export interface SavedCustomTheme {

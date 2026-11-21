@@ -1,10 +1,22 @@
 import { useMemo, useState } from 'react';
-import { Check, Palette, Plus, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
+import {
+  Check,
+  Moon,
+  Palette,
+  Plus,
+  RotateCcw,
+  Sparkles,
+  Sun,
+  Trash2,
+  Wand2,
+  X,
+} from 'lucide-react';
 import {
   AppearanceSettings,
   ColorPalette,
   CustomThemeTokens,
   SavedCustomTheme,
+  ThemeColorSet,
 } from '../types';
 
 interface CustomizeModalProps {
@@ -138,30 +150,37 @@ const PALETTES: ReadonlyArray<{
   },
 ];
 
-const CUSTOM_STARTER_PRESETS: Array<{ label: string; tokens: CustomThemeTokens }> = [
+const DEFAULT_LIGHT_SET: ThemeColorSet = {
+  bg: '#F4F6FB',
+  card: '#FFFFFF',
+  ink: '#151E2E',
+  accent: '#2563EB',
+  line: '#D4DCE8',
+};
+
+const DEFAULT_DARK_SET: ThemeColorSet = {
+  bg: '#0E141F',
+  card: '#161F2E',
+  ink: '#EEF2F8',
+  accent: '#60A5FA',
+  line: '#2B3A52',
+};
+
+const CUSTOM_STARTER_PRESETS: Array<{
+  label: string;
+  light: ThemeColorSet;
+  dark: ThemeColorSet;
+}> = [
   {
-    label: 'Studio Daylight',
-    tokens: {
+    label: 'Daylight & Midnight',
+    light: {
       bg: '#F4F6FB',
       card: '#FFFFFF',
       ink: '#151E2E',
       accent: '#2563EB',
       line: '#D4DCE8',
     },
-  },
-  {
-    label: 'Sepia Journal',
-    tokens: {
-      bg: '#F4ECD8',
-      card: '#FCF8EE',
-      ink: '#2D2418',
-      accent: '#9A4A1C',
-      line: '#DDD0B5',
-    },
-  },
-  {
-    label: 'Midnight Slate',
-    tokens: {
+    dark: {
       bg: '#0E141F',
       card: '#161F2E',
       ink: '#EEF2F8',
@@ -170,18 +189,105 @@ const CUSTOM_STARTER_PRESETS: Array<{ label: string; tokens: CustomThemeTokens }
     },
   },
   {
-    label: 'Deep Forest',
-    tokens: {
-      bg: '#0C1713',
-      card: '#13241D',
-      ink: '#E9F4EE',
+    label: 'Sepia & Espresso',
+    light: {
+      bg: '#F4ECD8',
+      card: '#FCF8EE',
+      ink: '#2D2418',
+      accent: '#9A4A1C',
+      line: '#DDD0B5',
+    },
+    dark: {
+      bg: '#1A1510',
+      card: '#262019',
+      ink: '#F5ECE1',
+      accent: '#E09F5A',
+      line: '#3B3228',
+    },
+  },
+  {
+    label: 'Sage & Deep Forest',
+    light: {
+      bg: '#EDF5F0',
+      card: '#F8FCF9',
+      ink: '#13281E',
+      accent: '#16A34A',
+      line: '#C6DDD0',
+    },
+    dark: {
+      bg: '#0B1612',
+      card: '#12221C',
+      ink: '#E8F5EE',
       accent: '#34D399',
-      line: '#254236',
+      line: '#233C31',
+    },
+  },
+  {
+    label: 'Violet Dusk & Aurora',
+    light: {
+      bg: '#F4F1FB',
+      card: '#FAF8FD',
+      ink: '#201636',
+      accent: '#7C3AED',
+      line: '#DCD4EE',
+    },
+    dark: {
+      bg: '#120F20',
+      card: '#1A162D',
+      ink: '#F0ECFA',
+      accent: '#A78BFA',
+      line: '#2E2749',
     },
   },
 ];
 
-const DEFAULT_CUSTOM_TOKENS: CustomThemeTokens = CUSTOM_STARTER_PRESETS[0].tokens;
+const FONT_OPTIONS: Array<{ value: string; label: string; sample: string }> = [
+  { value: '', label: 'Default (Bitter & Source Sans 3)', sample: 'Editorial balance' },
+  { value: "'Inter', system-ui, sans-serif", label: 'Inter', sample: 'Modern high-clarity UI' },
+  { value: "'Plus Jakarta Sans', system-ui, sans-serif", label: 'Plus Jakarta Sans', sample: 'Geometric tech' },
+  { value: "'Poppins', system-ui, sans-serif", label: 'Poppins', sample: 'Friendly rounded sans' },
+  { value: "'Lexend', system-ui, sans-serif", label: 'Lexend', sample: 'Effortless reading' },
+  { value: "'Roboto', system-ui, sans-serif", label: 'Roboto', sample: 'Classic Google Neo-grotesque' },
+  { value: "'Source Sans 3', system-ui, sans-serif", label: 'Source Sans 3', sample: 'Clean documentation sans' },
+  { value: 'Bitter, Georgia, serif', label: 'Bitter Serif', sample: 'Sturdy reading slab serif' },
+  { value: "'Merriweather', Georgia, serif", label: 'Merriweather Serif', sample: 'Warm literary serif' },
+  { value: "'Playfair Display', Georgia, serif", label: 'Playfair Display', sample: 'Classic elegance' },
+  { value: "'Lora', Georgia, serif", label: 'Lora Serif', sample: 'Contemporary calligraphic' },
+  { value: "'JetBrains Mono', ui-monospace, monospace", label: 'JetBrains Mono', sample: 'Developer code monospace' },
+  { value: "'Comic Neue', cursive, sans-serif", label: 'Comic Neue', sample: 'Casual & friendly' },
+  { value: 'system-ui, -apple-system, sans-serif', label: 'System UI', sample: 'Native OS font' },
+  { value: 'ui-monospace, Menlo, monospace', label: 'System Monospace', sample: 'Terminal typewriter' },
+];
+
+const QUICK_SWATCHES = {
+  bg: {
+    light: ['#FFFFFF', '#F8FAFC', '#F4F6FB', '#F4ECD8', '#EDF5F0', '#F4F1FB', '#FAF2F0'],
+    dark: ['#090D14', '#0E141F', '#121620', '#1A1510', '#0B1612', '#120F20', '#1A1111'],
+  },
+  card: {
+    light: ['#FFFFFF', '#FAFAFA', '#F8FAFC', '#FCF8EE', '#F8FCF9', '#FAF8FD', '#FFFBFB'],
+    dark: ['#161F2E', '#1B2433', '#202938', '#262019', '#12221C', '#1A162D', '#241616'],
+  },
+  ink: {
+    light: ['#0F172A', '#151E2E', '#1E293B', '#2D2418', '#13281E', '#201636', '#261214'],
+    dark: ['#FFFFFF', '#F8FAFC', '#EEF2F8', '#F5ECE1', '#E8F5EE', '#F0ECFA', '#FCEAEA'],
+  },
+  accent: [
+    '#2563EB', // Blue
+    '#0284C7', // Sky
+    '#0D9488', // Teal
+    '#16A34A', // Emerald
+    '#D97706', // Amber
+    '#EA580C', // Orange
+    '#DC2626', // Red
+    '#7C3AED', // Violet
+    '#DB2777', // Pink
+  ],
+  line: {
+    light: ['#D4DCE8', '#CBD5E1', '#E2E8F0', '#DDD0B5', '#C6DDD0', '#DCD4EE', '#ECCECE'],
+    dark: ['#2B3A52', '#334155', '#3A4860', '#3B3228', '#233C31', '#2E2749', '#3E2525'],
+  },
+};
 
 function hexRelativeLuminance(hex: string): number {
   const m = /^#([0-9a-f]{6})$/i.exec(hex);
@@ -202,6 +308,15 @@ function contrastRatio(hexA: string, hexB: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function normalizeHex(input: string): string | null {
+  let val = input.trim();
+  if (!val.startsWith('#')) val = '#' + val;
+  if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+    return val.toUpperCase();
+  }
+  return null;
+}
+
 export function CustomizeModal({
   open,
   onClose,
@@ -210,15 +325,50 @@ export function CustomizeModal({
   onResetLook,
 }: CustomizeModalProps) {
   const [customStudioOpen, setCustomStudioOpen] = useState(look.pal === 'custom');
+  const [activeCustomModeTab, setActiveCustomModeTab] = useState<'light' | 'dark'>(
+    look.th === 'dark' ? 'dark' : 'light'
+  );
   const [themeSaveName, setThemeSaveName] = useState('');
 
-  const activeTokens: CustomThemeTokens = look.customTheme || DEFAULT_CUSTOM_TOKENS;
-  const savedThemes: SavedCustomTheme[] = look.savedThemes || [];
+  // Resolve current custom theme structures
+  const customTheme = look.customTheme;
+  const currentLight: ThemeColorSet = useMemo(() => {
+    if (customTheme?.light) return customTheme.light;
+    if (customTheme && hexRelativeLuminance(customTheme.bg) > 0.4) {
+      return {
+        bg: customTheme.bg,
+        card: customTheme.card,
+        ink: customTheme.ink,
+        accent: customTheme.accent,
+        line: customTheme.line,
+      };
+    }
+    return DEFAULT_LIGHT_SET;
+  }, [customTheme]);
+
+  const currentDark: ThemeColorSet = useMemo(() => {
+    if (customTheme?.dark) return customTheme.dark;
+    if (customTheme && hexRelativeLuminance(customTheme.bg) <= 0.4) {
+      return {
+        bg: customTheme.bg,
+        card: customTheme.card,
+        ink: customTheme.ink,
+        accent: customTheme.accent,
+        line: customTheme.line,
+      };
+    }
+    return DEFAULT_DARK_SET;
+  }, [customTheme]);
+
+  const currentActiveSet: ThemeColorSet =
+    activeCustomModeTab === 'light' ? currentLight : currentDark;
 
   const ratio = useMemo(
-    () => contrastRatio(activeTokens.ink, activeTokens.card),
-    [activeTokens.ink, activeTokens.card]
+    () => contrastRatio(currentActiveSet.ink, currentActiveSet.card),
+    [currentActiveSet.ink, currentActiveSet.card]
   );
+
+  const savedThemes: SavedCustomTheme[] = look.savedThemes || [];
 
   if (!open) return null;
 
@@ -226,22 +376,78 @@ export function CustomizeModal({
     onChangeLook({ ...look, ...patch });
   };
 
-  const updateCustomToken = (key: keyof CustomThemeTokens, value: string) => {
-    const nextTokens: CustomThemeTokens = {
-      ...activeTokens,
-      [key]: value,
-    };
-    updateLook({
-      pal: 'custom',
-      customTheme: nextTokens,
-    });
+  const handleUpdateToken = (key: keyof ThemeColorSet, value: string) => {
+    const cleanHex = normalizeHex(value) || value;
+    if (activeCustomModeTab === 'light') {
+      const nextLight: ThemeColorSet = { ...currentLight, [key]: cleanHex };
+      const nextFull: CustomThemeTokens = {
+        ...(customTheme || DEFAULT_LIGHT_SET),
+        light: nextLight,
+        dark: currentDark,
+        // If current mode is light, also sync top-level tokens for backward compatibility
+        ...(look.th !== 'dark' ? nextLight : {}),
+      };
+      updateLook({ pal: 'custom', customTheme: nextFull });
+    } else {
+      const nextDark: ThemeColorSet = { ...currentDark, [key]: cleanHex };
+      const nextFull: CustomThemeTokens = {
+        ...(customTheme || DEFAULT_LIGHT_SET),
+        light: currentLight,
+        dark: nextDark,
+        // If current mode is dark, sync top-level tokens
+        ...(look.th === 'dark' ? nextDark : {}),
+      };
+      updateLook({ pal: 'custom', customTheme: nextFull });
+    }
   };
 
-  const applyCustomPreset = (tokens: CustomThemeTokens) => {
-    updateLook({
-      pal: 'custom',
-      customTheme: { ...tokens },
-    });
+  const handleAutoGenerateMode = (fromMode: 'light' | 'dark') => {
+    if (fromMode === 'light') {
+      // Generate Dark mode from current Light tokens
+      const newDark: ThemeColorSet = {
+        bg: '#0E141F',
+        card: '#161F2E',
+        ink: '#EEF2F8',
+        accent: currentLight.accent,
+        line: '#2B3A52',
+      };
+      const nextFull: CustomThemeTokens = {
+        ...(customTheme || DEFAULT_LIGHT_SET),
+        light: currentLight,
+        dark: newDark,
+        ...(look.th === 'dark' ? newDark : currentLight),
+      };
+      updateLook({ pal: 'custom', customTheme: nextFull });
+      setActiveCustomModeTab('dark');
+    } else {
+      // Generate Light mode from current Dark tokens
+      const newLight: ThemeColorSet = {
+        bg: '#F4F6FB',
+        card: '#FFFFFF',
+        ink: '#151E2E',
+        accent: currentDark.accent,
+        line: '#D4DCE8',
+      };
+      const nextFull: CustomThemeTokens = {
+        ...(customTheme || DEFAULT_LIGHT_SET),
+        light: newLight,
+        dark: currentDark,
+        ...(look.th === 'dark' ? currentDark : newLight),
+      };
+      updateLook({ pal: 'custom', customTheme: nextFull });
+      setActiveCustomModeTab('light');
+    }
+  };
+
+  const applyCustomPreset = (preset: { light: ThemeColorSet; dark: ThemeColorSet }) => {
+    const isDarkNow = look.th === 'dark';
+    const topLevel = isDarkNow ? preset.dark : preset.light;
+    const nextFull: CustomThemeTokens = {
+      ...topLevel,
+      light: preset.light,
+      dark: preset.dark,
+    };
+    updateLook({ pal: 'custom', customTheme: nextFull });
     setCustomStudioOpen(true);
   };
 
@@ -250,12 +456,16 @@ export function CustomizeModal({
     const newEntry: SavedCustomTheme = {
       id: `thm_${Date.now().toString(36)}`,
       name: cleanName,
-      tokens: { ...activeTokens },
+      tokens: {
+        ...(look.th === 'dark' ? currentDark : currentLight),
+        light: currentLight,
+        dark: currentDark,
+      },
     };
     updateLook({
       pal: 'custom',
-      customTheme: { ...activeTokens },
-      savedThemes: [newEntry, ...savedThemes].slice(0, 12),
+      customTheme: newEntry.tokens,
+      savedThemes: [newEntry, ...savedThemes].slice(0, 16),
     });
     setThemeSaveName('');
   };
@@ -279,6 +489,7 @@ export function CustomizeModal({
       }}
     >
       <div className="sd-card flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden">
+        {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
           <div className="min-w-0">
             <h2
@@ -288,7 +499,7 @@ export function CustomizeModal({
               Website Appearance &amp; Themes
             </h2>
             <p className="mt-0.5 text-xs text-[var(--mute)]">
-              Pick a curated study theme or design and save your own colour palette across the entire workspace.
+              Pick a curated study theme or design your own smooth custom palette with both light and dark modes.
             </p>
           </div>
           <button
@@ -302,13 +513,13 @@ export function CustomizeModal({
         </div>
 
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
-          {/* Theme Mode */}
+          {/* Mode Selector */}
           <div>
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-semibold text-[var(--ink)]">Mode</span>
               <span className="text-xs text-[var(--mute)]">
                 {activePal === 'custom'
-                  ? 'Controlled by your custom background colour'
+                  ? `Custom Theme (${look.th === 'dark' ? 'Dark' : look.th === 'light' ? 'Light' : 'Auto'})`
                   : look.th === 'light'
                   ? 'Light'
                   : look.th === 'dark'
@@ -319,16 +530,20 @@ export function CustomizeModal({
             <div className="sd-seg" role="group" aria-label="Theme mode">
               {(
                 [
-                  ['', 'Auto'],
-                  ['light', 'Light'],
-                  ['dark', 'Dark'],
+                  ['', 'Auto (System)'],
+                  ['light', '☀️ Light'],
+                  ['dark', '🌙 Dark'],
                 ] as const
               ).map(([val, label]) => (
                 <button
                   key={label}
                   type="button"
                   aria-pressed={look.th === val}
-                  onClick={() => updateLook({ th: val })}
+                  onClick={() => {
+                    updateLook({ th: val });
+                    if (val === 'light') setActiveCustomModeTab('light');
+                    if (val === 'dark') setActiveCustomModeTab('dark');
+                  }}
                   className="sd-seg-btn"
                 >
                   {label}
@@ -348,9 +563,14 @@ export function CustomizeModal({
                 onClick={() => {
                   setCustomStudioOpen((v) => !v);
                   if (activePal !== 'custom') {
+                    const baseTokens: CustomThemeTokens = {
+                      ...(look.th === 'dark' ? currentDark : currentLight),
+                      light: currentLight,
+                      dark: currentDark,
+                    };
                     updateLook({
                       pal: 'custom',
-                      customTheme: look.customTheme || DEFAULT_CUSTOM_TOKENS,
+                      customTheme: baseTokens,
                     });
                   }
                 }}
@@ -361,7 +581,7 @@ export function CustomizeModal({
                 }`}
               >
                 <Sparkles className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                <span>{customStudioOpen ? 'Hide Custom Theme Studio' : 'Create Custom Theme'}</span>
+                <span>{customStudioOpen ? 'Hide Custom Studio' : 'Custom Theme Studio'}</span>
               </button>
             </div>
 
@@ -418,36 +638,96 @@ export function CustomizeModal({
                     Custom Theme Studio
                   </h3>
                 </div>
-                <span
-                  className={`font-mono-num text-xs font-bold ${
-                    ratio >= 4.5 ? 'text-[var(--ok)]' : 'text-[var(--bad)]'
-                  }`}
-                >
-                  Text Contrast {ratio.toFixed(1)}:1 ·{' '}
-                  {ratio >= 7 ? 'AAA' : ratio >= 4.5 ? 'AA Pass' : 'Low Contrast'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`font-mono-num text-xs font-bold ${
+                      ratio >= 4.5 ? 'text-[var(--ok)]' : 'text-[var(--bad)]'
+                    }`}
+                  >
+                    Contrast {ratio.toFixed(1)}:1 ({ratio >= 7 ? 'AAA' : ratio >= 4.5 ? 'AA' : 'Low'})
+                  </span>
+                </div>
+              </div>
+
+              {/* Light & Dark Modes Tabs */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveCustomModeTab('light')}
+                    className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                      activeCustomModeTab === 'light'
+                        ? 'bg-[var(--card)] text-[var(--ink)] shadow-sm border border-[var(--line)]'
+                        : 'text-[var(--mute)] hover:text-[var(--ink)]'
+                    }`}
+                  >
+                    <Sun className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+                    <span>Light Mode Palette</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveCustomModeTab('dark')}
+                    className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                      activeCustomModeTab === 'dark'
+                        ? 'bg-[var(--card)] text-[var(--ink)] shadow-sm border border-[var(--line)]'
+                        : 'text-[var(--mute)] hover:text-[var(--ink)]'
+                    }`}
+                  >
+                    <Moon className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+                    <span>Dark Mode Palette</span>
+                  </button>
+                </div>
+
+                {/* Auto-generate button */}
+                {activeCustomModeTab === 'dark' ? (
+                  <button
+                    type="button"
+                    onClick={() => handleAutoGenerateMode('light')}
+                    className="sd-btn px-2.5 py-1 text-xs"
+                    title="Auto-generate dark mode colors from light mode"
+                  >
+                    <Wand2 className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                    <span>Generate Dark from Light</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleAutoGenerateMode('dark')}
+                    className="sd-btn px-2.5 py-1 text-xs"
+                    title="Auto-generate light mode colors from dark mode"
+                  >
+                    <Wand2 className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                    <span>Generate Light from Dark</span>
+                  </button>
+                )}
               </div>
 
               {/* Starter Presets */}
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="mr-1 text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                  Start from:
+                  Starter Palettes:
                 </span>
                 {CUSTOM_STARTER_PRESETS.map((preset) => (
                   <button
                     key={preset.label}
                     type="button"
-                    onClick={() => applyCustomPreset(preset.tokens)}
+                    onClick={() => applyCustomPreset(preset)}
                     className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
                   >
                     <span
                       className="h-2.5 w-2.5 rounded-sm border border-black/20"
-                      style={{ backgroundColor: preset.tokens.bg }}
+                      style={{
+                        backgroundColor:
+                          activeCustomModeTab === 'light' ? preset.light.bg : preset.dark.bg,
+                      }}
                       aria-hidden="true"
                     />
                     <span
                       className="h-2.5 w-2.5 rounded-sm border border-black/20"
-                      style={{ backgroundColor: preset.tokens.accent }}
+                      style={{
+                        backgroundColor:
+                          activeCustomModeTab === 'light' ? preset.light.accent : preset.dark.accent,
+                      }}
                       aria-hidden="true"
                     />
                     <span>{preset.label}</span>
@@ -455,75 +735,167 @@ export function CustomizeModal({
                 ))}
               </div>
 
-              {/* 5 Color Pickers */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              {/* Smooth Color Selectors for the 5 Tokens */}
+              <div className="space-y-3">
                 {(
                   [
-                    ['bg', 'Page BG'],
-                    ['card', 'Card / Note'],
-                    ['ink', 'Body Ink'],
-                    ['accent', 'Accent'],
-                    ['line', 'Borders'],
-                  ] as const
-                ).map(([tokenKey, label]) => (
-                  <label
-                    key={tokenKey}
-                    className="flex cursor-pointer flex-col gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--card)] p-2.5"
-                  >
-                    <span className="text-[11px] font-bold text-[var(--mute)]">{label}</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={activeTokens[tokenKey]}
-                        onChange={(e) => updateCustomToken(tokenKey, e.target.value)}
-                        className="h-7 w-8 cursor-pointer rounded border border-[var(--line)] bg-transparent p-0"
-                      />
-                      <span className="font-mono-num text-[11px] font-semibold uppercase text-[var(--ink)]">
-                        {activeTokens[tokenKey]}
-                      </span>
+                    {
+                      key: 'bg' as const,
+                      label: 'Page Background',
+                      desc: 'Workspace canvas background',
+                      swatches:
+                        activeCustomModeTab === 'light'
+                          ? QUICK_SWATCHES.bg.light
+                          : QUICK_SWATCHES.bg.dark,
+                    },
+                    {
+                      key: 'card' as const,
+                      label: 'Card / Note Surface',
+                      desc: 'Note blocks, flashcards, dialogs',
+                      swatches:
+                        activeCustomModeTab === 'light'
+                          ? QUICK_SWATCHES.card.light
+                          : QUICK_SWATCHES.card.dark,
+                    },
+                    {
+                      key: 'ink' as const,
+                      label: 'Body Text Ink',
+                      desc: 'Primary reading text and headings',
+                      swatches:
+                        activeCustomModeTab === 'light'
+                          ? QUICK_SWATCHES.ink.light
+                          : QUICK_SWATCHES.ink.dark,
+                    },
+                    {
+                      key: 'accent' as const,
+                      label: 'Study Accent Color',
+                      desc: 'Buttons, badges, highlights, links',
+                      swatches: QUICK_SWATCHES.accent,
+                    },
+                    {
+                      key: 'line' as const,
+                      label: 'Borders & Dividers',
+                      desc: 'Card borders, table dividers, outlines',
+                      swatches:
+                        activeCustomModeTab === 'light'
+                          ? QUICK_SWATCHES.line.light
+                          : QUICK_SWATCHES.line.dark,
+                    },
+                  ]
+                ).map(({ key, label, desc, swatches }) => {
+                  const currentValue = currentActiveSet[key] || '#000000';
+                  return (
+                    <div
+                      key={key}
+                      className="rounded-xl border border-[var(--line)] bg-[var(--card)] p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-[var(--ink)]">{label}</div>
+                          <div className="text-[11px] text-[var(--mute)]">{desc}</div>
+                        </div>
+
+                        {/* Direct Color Picker & Hex Input */}
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex items-center">
+                            <span
+                              className="h-8 w-8 shrink-0 rounded-lg border border-[var(--line)] shadow-inner"
+                              style={{ backgroundColor: currentValue }}
+                              aria-hidden="true"
+                            />
+                            <input
+                              type="color"
+                              value={currentValue}
+                              onChange={(e) => handleUpdateToken(key, e.target.value)}
+                              aria-label={`Pick color for ${label}`}
+                              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            value={currentValue}
+                            onChange={(e) => handleUpdateToken(key, e.target.value)}
+                            placeholder="#HEX"
+                            className="sd-input h-8 w-24 text-center font-mono-num text-xs font-semibold uppercase"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Quick Swatches Row */}
+                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-[var(--line)] pt-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                          Quick:
+                        </span>
+                        {swatches.map((color) => {
+                          const isPicked = currentValue.toUpperCase() === color.toUpperCase();
+                          return (
+                            <button
+                              key={color}
+                              type="button"
+                              onClick={() => handleUpdateToken(key, color)}
+                              title={color}
+                              aria-label={`Select ${color} for ${label}`}
+                              className={`h-5 w-5 rounded-md border transition-transform hover:scale-110 ${
+                                isPicked
+                                  ? 'border-[var(--e3)] ring-2 ring-[var(--e3)] ring-offset-1'
+                                  : 'border-black/20 hover:border-black/40'
+                              }`}
+                              style={{ backgroundColor: color }}
+                            />
+                          );
+                        })}
+                      </div>
                     </div>
-                  </label>
-                ))}
+                  );
+                })}
               </div>
 
-              {/* Live Mini Preview */}
+              {/* Live Mini Preview for Current Palette Tab */}
               <div
                 className="rounded-xl border p-4 transition-colors"
                 style={{
-                  backgroundColor: activeTokens.bg,
-                  borderColor: activeTokens.line,
-                  color: activeTokens.ink,
+                  backgroundColor: currentActiveSet.bg,
+                  borderColor: currentActiveSet.line,
+                  color: currentActiveSet.ink,
                 }}
               >
                 <div
-                  className="rounded-lg border p-3.5"
+                  className="rounded-lg border p-3.5 shadow-sm"
                   style={{
-                    backgroundColor: activeTokens.card,
-                    borderColor: activeTokens.line,
+                    backgroundColor: currentActiveSet.card,
+                    borderColor: currentActiveSet.line,
                   }}
                 >
-                  <div
-                    className="mb-1 text-xs font-bold uppercase tracking-wider"
-                    style={{ color: activeTokens.accent }}
-                  >
-                    Live Note Preview
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white"
+                      style={{ backgroundColor: currentActiveSet.accent }}
+                    >
+                      {activeCustomModeTab === 'light' ? 'Light Mode Preview' : 'Dark Mode Preview'}
+                    </span>
+                    <span
+                      className="text-xs font-semibold"
+                      style={{ color: currentActiveSet.accent }}
+                    >
+                      Active Topic
+                    </span>
                   </div>
-                  <div className="font-display text-base font-extrabold">
-                    Clean Hierarchy &amp; Readable Typography
+                  <div className="mt-2 font-display text-base font-extrabold">
+                    Cell Structure &amp; Membrane Transport
                   </div>
                   <p className="mt-1 text-xs opacity-85">
-                    Tables, flow steps, and key concepts automatically match your custom palette.
+                    Tables, flowchart arrows, flashcards, and bold terms adapt seamlessly in both light and dark modes.
                   </p>
                 </div>
               </div>
 
-              {/* Save Custom Theme */}
+              {/* Save Custom Theme Form */}
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="text"
                   value={themeSaveName}
                   onChange={(e) => setThemeSaveName(e.target.value)}
-                  placeholder="Name your theme (e.g. Midnight Indigo)"
+                  placeholder="Name your theme (e.g. Cobalt & Obsidian)"
                   className="sd-input flex-1 min-w-[180px] py-1.5 text-xs"
                 />
                 <button
@@ -532,7 +904,7 @@ export function CustomizeModal({
                   className="sd-btn-pri px-3.5 py-1.5 text-xs whitespace-nowrap"
                 >
                   <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Save Custom Theme</span>
+                  <span>Save Theme</span>
                 </button>
               </div>
 
@@ -543,47 +915,39 @@ export function CustomizeModal({
                     Saved Custom Themes ({savedThemes.length})
                   </div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    {savedThemes.map((saved) => {
-                      const isMatch =
-                        activePal === 'custom' &&
-                        activeTokens.bg === saved.tokens.bg &&
-                        activeTokens.card === saved.tokens.card &&
-                        activeTokens.ink === saved.tokens.ink &&
-                        activeTokens.accent === saved.tokens.accent;
-                      return (
-                        <div
-                          key={saved.id}
-                          className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
-                            isMatch
-                              ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))]'
-                              : 'border-[var(--line)] bg-[var(--card)]'
-                          }`}
+                    {savedThemes.map((saved) => (
+                      <div
+                        key={saved.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--card)] px-3 py-2"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const lightTokens = saved.tokens.light || saved.tokens;
+                            const darkTokens = saved.tokens.dark || saved.tokens;
+                            applyCustomPreset({ light: lightTokens, dark: darkTokens });
+                          }}
+                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
                         >
-                          <button
-                            type="button"
-                            onClick={() => applyCustomPreset(saved.tokens)}
-                            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
-                          >
-                            <span className="grid h-6 w-8 shrink-0 grid-cols-3 overflow-hidden rounded border border-[var(--line)]">
-                              <span style={{ backgroundColor: saved.tokens.bg }} />
-                              <span style={{ backgroundColor: saved.tokens.card }} />
-                              <span style={{ backgroundColor: saved.tokens.accent }} />
-                            </span>
-                            <span className="truncate text-xs font-bold text-[var(--ink)]">
-                              {saved.name}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSavedTheme(saved.id)}
-                            aria-label={`Delete ${saved.name}`}
-                            className="cursor-pointer p-1 text-[var(--mute)] hover:text-[var(--bad)]"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                          </button>
-                        </div>
-                      );
-                    })}
+                          <span className="grid h-6 w-8 shrink-0 grid-cols-3 overflow-hidden rounded border border-[var(--line)]">
+                            <span style={{ backgroundColor: saved.tokens.bg }} />
+                            <span style={{ backgroundColor: saved.tokens.card }} />
+                            <span style={{ backgroundColor: saved.tokens.accent }} />
+                          </span>
+                          <span className="truncate text-xs font-bold text-[var(--ink)]">
+                            {saved.name}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSavedTheme(saved.id)}
+                          aria-label={`Delete ${saved.name}`}
+                          className="cursor-pointer p-1 text-[var(--mute)] hover:text-[var(--bad)]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -630,30 +994,30 @@ export function CustomizeModal({
                 />
               </div>
 
-              <div>
+              <div className="sm:col-span-2">
                 <label className="block text-xs font-semibold text-[var(--mute)]">
-                  Font
+                  Font Family ({FONT_OPTIONS.length} options)
                   <select
                     value={look.ff}
                     onChange={(e) => updateLook({ ff: e.target.value })}
-                    className="sd-input mt-1.5"
+                    className="sd-input mt-1.5 font-semibold text-xs"
                   >
-                    <option value="">Default (Bitter &amp; Source Sans 3)</option>
-                    <option value="'Source Sans 3',system-ui,sans-serif">Sans</option>
-                    <option value="Bitter,Georgia,serif">Serif</option>
-                    <option value="system-ui,sans-serif">System</option>
-                    <option value="ui-monospace,Menlo,monospace">Mono</option>
+                    {FONT_OPTIONS.map((f) => (
+                      <option key={f.label} value={f.value}>
+                        {f.label} — {f.sample}
+                      </option>
+                    ))}
                   </select>
                 </label>
               </div>
 
-              <div>
+              <div className="sm:col-span-2">
                 <label className="block text-xs font-semibold text-[var(--mute)]">
                   Reading page width
                   <select
                     value={look.mw}
                     onChange={(e) => updateLook({ mw: e.target.value })}
-                    className="sd-input mt-1.5"
+                    className="sd-input mt-1.5 text-xs"
                   >
                     <option value="">Default (Spacious 1200px)</option>
                     <option value="820px">Focused (820px)</option>
@@ -666,6 +1030,7 @@ export function CustomizeModal({
             </div>
           </div>
 
+          {/* Footer Actions */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
             <button
               type="button"

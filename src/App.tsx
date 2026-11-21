@@ -373,13 +373,18 @@ export default function App() {
 
       if (look.pal === 'custom' && look.customTheme) {
         const ct = look.customTheme;
-        const customDark = isHexDark(ct.bg);
-        root.style.setProperty('--bg', ct.bg);
-        root.style.setProperty('--card', ct.card);
-        root.style.setProperty('--ink', ct.ink);
-        root.style.setProperty('--mute', mixHexColors(ct.ink, ct.card, 0.62));
-        root.style.setProperty('--line', ct.line);
-        root.style.setProperty('--e3', ct.accent);
+        const wantsDark = look.th === 'dark' || (look.th === '' && mq.matches);
+        const activeTokens = wantsDark
+          ? (ct.dark || (isHexDark(ct.bg) ? ct : undefined) || ct)
+          : (ct.light || (!isHexDark(ct.bg) ? ct : undefined) || ct);
+
+        const customDark = isHexDark(activeTokens.bg);
+        root.style.setProperty('--bg', activeTokens.bg);
+        root.style.setProperty('--card', activeTokens.card);
+        root.style.setProperty('--ink', activeTokens.ink);
+        root.style.setProperty('--mute', mixHexColors(activeTokens.ink, activeTokens.card, 0.62));
+        root.style.setProperty('--line', activeTokens.line);
+        root.style.setProperty('--e3', activeTokens.accent);
         root.style.setProperty('color-scheme', customDark ? 'dark' : 'light');
         if (customDark) {
           root.setAttribute('data-theme', 'dark');

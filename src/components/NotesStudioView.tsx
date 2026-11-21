@@ -14,6 +14,7 @@ import {
   Calendar,
   Check,
   CheckCircle2,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -23,6 +24,7 @@ import {
   Eye,
   EyeOff,
   FileCheck2,
+  Folder,
   FolderPlus,
   GitBranch,
   Globe,
@@ -45,6 +47,7 @@ import {
   Search,
   Share2,
   Star,
+  Square,
   Table2,
   Trash2,
   Underline,
@@ -277,6 +280,8 @@ export function NotesStudioView({
   const [linkedCardsExpanded, setLinkedCardsExpanded] = useState(true);
   const [newLinkedCardQ, setNewLinkedCardQ] = useState('');
   const [newLinkedCardA, setNewLinkedCardA] = useState('');
+  const [linkDecksModalOpen, setLinkDecksModalOpen] = useState(false);
+  const [linkDecksSearch, setLinkDecksSearch] = useState('');
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
   const [docTextColorOpen, setDocTextColorOpen] = useState(false);
   const [docHighlightOpen, setDocHighlightOpen] = useState(false);
@@ -858,6 +863,78 @@ export function NotesStudioView({
       flashcards: prev.flashcards.map((c) => (c.id === cardId ? { ...c, topicId: undefined } : c)),
       updatedAt: new Date().toISOString(),
     }));
+  };
+
+  const subjectDeckSummaries = useMemo(() => {
+    if (!activeSubject) return [];
+    const deckMap = new Map<
+      string,
+      {
+        name: string;
+        totalCards: number;
+        linkedCards: number;
+      }
+    >();
+
+    for (const card of workspace.flashcards) {
+      if (card.subjectId !== activeSubject.id) continue;
+      const deckName = (card.sectionName || '').trim() || 'Core Deck';
+      let entry = deckMap.get(deckName);
+      if (!entry) {
+        entry = { name: deckName, totalCards: 0, linkedCards: 0 };
+        deckMap.set(deckName, entry);
+      }
+      entry.totalCards += 1;
+      if (activeTopic && card.topicId === activeTopic.id) {
+        entry.linkedCards += 1;
+      }
+    }
+
+    return Array.from(deckMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [workspace.flashcards, activeSubject, activeTopic]);
+
+  const linkedDecksCount = useMemo(() => {
+    return subjectDeckSummaries.filter((d) => d.linkedCards > 0).length;
+  }, [subjectDeckSummaries]);
+
+  const handleToggleDeckLink = (deckName: string, shouldLink: boolean) => {
+    if (!activeTopic || !activeSubject) return;
+    onUpdateWorkspace((prev) => {
+      const updatedCards = prev.flashcards.map((c) => {
+        if (c.subjectId !== activeSubject.id) return c;
+        const cDeck = (c.sectionName || '').trim() || 'Core Deck';
+        if (cDeck !== deckName) return c;
+        if (shouldLink) {
+          return { ...c, topicId: activeTopic.id };
+        } else {
+          return c.topicId === activeTopic.id ? { ...c, topicId: undefined } : c;
+        }
+      });
+      return {
+        ...prev,
+        flashcards: updatedCards,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  };
+
+  const handleLinkAllDecks = (shouldLink: boolean) => {
+    if (!activeTopic || !activeSubject) return;
+    onUpdateWorkspace((prev) => {
+      const updatedCards = prev.flashcards.map((c) => {
+        if (c.subjectId !== activeSubject.id) return c;
+        if (shouldLink) {
+          return { ...c, topicId: activeTopic.id };
+        } else {
+          return c.topicId === activeTopic.id ? { ...c, topicId: undefined } : c;
+        }
+      });
+      return {
+        ...prev,
+        flashcards: updatedCards,
+        updatedAt: new Date().toISOString(),
+      };
+    });
   };
 
   const handleAddTimelineEvent = (e: FormEvent) => {
@@ -1750,6 +1827,20 @@ export function NotesStudioView({
                     </div>
                   )}
                 </div>
+
+                {/* Link Decks to Note Button */}
+                <button
+                  type="button"
+                  onClick={() => setLinkDecksModalOpen(true)}
+                  title={`Link flashcard decks to ${activeTopic.name}`}
+                  aria-label={`Link flashcard decks to ${activeTopic.name}`}
+                  className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0 ${
+                    linkedDecksCount > 0 ? 'border-[var(--e3)] text-[var(--e3)] font-semibold' : ''
+                  }`}
+                >
+                  <Layers className="h-3.5 w-3.5 text-[var(--note-accent)]" aria-hidden="true" />
+                  <span>Link Decks{linkedDecksCount > 0 ? ` (${linkedDecksCount})` : ''}</span>
+                </button>
 
                 <button
                   type="button"
@@ -3920,6 +4011,184 @@ export function NotesStudioView({
           );
         })()}
       </div>
+
+      {/* Link Decks to Note Modal */}
+      {linkDecksModalOpen && activeTopic && activeSubject && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3 sm:p-5"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="link-decks-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setLinkDecksModalOpen(false);
+          }}
+        >
+          <div className="sd-card flex max-h-[88dvh] w-full max-w-lg flex-col overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <h2 id="link-decks-title" className="font-display text-lg font-bold text-[var(--ink)]">
+                    Link Flashcard Decks
+                  </h2>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--mute)]">
+                  Connect flashcard decks in <strong>{activeSubject.name}</strong> to note &ldquo;{activeTopic.name}&rdquo;.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLinkDecksModalOpen(false)}
+                className="sd-btn h-8 w-8 rounded-full p-0"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+              {/* Search & Actions Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="relative flex-1 min-w-[160px]">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]" />
+                  <input
+                    type="text"
+                    value={linkDecksSearch}
+                    onChange={(e) => setLinkDecksSearch(e.target.value)}
+                    placeholder="Search decks…"
+                    className="sd-input py-1.5 pl-8 text-xs"
+                  />
+                </div>
+                {subjectDeckSummaries.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleLinkAllDecks(true)}
+                      className="sd-btn px-2.5 py-1 text-xs"
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleLinkAllDecks(false)}
+                      className="sd-btn px-2.5 py-1 text-xs text-[var(--mute)]"
+                    >
+                      Unlink All
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Decks List */}
+              {subjectDeckSummaries.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-[var(--line)] p-6 text-center">
+                  <Layers className="mx-auto h-8 w-8 text-[var(--mute)] opacity-50" aria-hidden="true" />
+                  <p className="mt-2 text-xs font-semibold text-[var(--ink)]">
+                    No flashcard decks in {activeSubject.name} yet
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--mute)]">
+                    Create flashcards or import a deck to organize cards and link them to your notes.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLinkDecksModalOpen(false);
+                      onNavigate('flashcards');
+                    }}
+                    className="sd-btn-pri mt-3 px-3 py-1.5 text-xs"
+                  >
+                    Open Flashcards
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {subjectDeckSummaries
+                    .filter((d) =>
+                      !linkDecksSearch.trim() ||
+                      d.name.toLowerCase().includes(linkDecksSearch.toLowerCase())
+                    )
+                    .map((deck) => {
+                      const isLinked = deck.linkedCards > 0;
+                      const isFullyLinked = deck.linkedCards === deck.totalCards && deck.totalCards > 0;
+                      const memberFolder = workspace.deckGroups?.find(
+                        (g) => g.subjectId === activeSubject.id && g.sectionNames.includes(deck.name)
+                      );
+
+                      return (
+                        <div
+                          key={deck.name}
+                          onClick={() => handleToggleDeckLink(deck.name, !isLinked)}
+                          className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border p-3 transition-colors ${
+                            isLinked
+                              ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))]'
+                              : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
+                          }`}
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="shrink-0 text-[var(--e3)]">
+                              {isLinked ? (
+                                <CheckSquare className="h-4 w-4" aria-hidden="true" />
+                              ) : (
+                                <Square className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                              )}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="truncate text-xs font-bold text-[var(--ink)]">
+                                  {deck.name}
+                                </span>
+                                {memberFolder && (
+                                  <span className="flex items-center gap-1 rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--mute)]">
+                                    <Folder className="h-2.5 w-2.5" />
+                                    {memberFolder.name}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-[var(--mute)]">
+                                {deck.totalCards} card{deck.totalCards === 1 ? '' : 's'}
+                                {isLinked && (
+                                  <>
+                                    {' '}·{' '}
+                                    <span className="font-semibold text-[var(--e3)]">
+                                      {isFullyLinked ? 'All cards linked' : `${deck.linkedCards}/${deck.totalCards} cards linked`}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <span
+                            className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                              isLinked
+                                ? 'bg-[var(--e3)] text-white'
+                                : 'bg-[var(--bg)] text-[var(--mute)]'
+                            }`}
+                          >
+                            {isLinked ? 'Linked' : 'Not linked'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-[var(--line)] bg-[var(--bg)] px-5 py-3 text-xs">
+              <span className="text-[var(--mute)]">
+                {linkedDecksCount} deck{linkedDecksCount === 1 ? '' : 's'} linked to this note
+              </span>
+              <button
+                type="button"
+                onClick={() => setLinkDecksModalOpen(false)}
+                className="sd-btn-pri px-4 py-1.5 text-xs font-bold"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
