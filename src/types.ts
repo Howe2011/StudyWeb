@@ -86,6 +86,18 @@ export interface LiveTimerState {
   subject: string;
 }
 
+export interface StopwatchState {
+  running: boolean;
+  elapsedSec: number;
+  text: string;
+  subjectId?: string;
+  subjectName: string;
+  topicId?: string;
+  topicName?: string;
+  laps: number[];
+  dismissed: boolean;
+}
+
 export type ColorPalette =
   | ''
   | 'paper'

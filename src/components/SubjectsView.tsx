@@ -8,9 +8,12 @@ import {
   Edit3,
   Layers,
   ListChecks,
+  Pause,
+  Play,
   Plus,
   Search,
   Share2,
+  Timer,
   Trash2,
   X,
 } from 'lucide-react';
@@ -27,6 +30,7 @@ import {
   makeId,
 } from '../lib/workspaceStore';
 import {
+  StopwatchState,
   StudySubject,
   StudyTopic,
   WorkspaceData,
@@ -36,6 +40,13 @@ import {
 interface SubjectsViewProps {
   workspace: WorkspaceData;
   initialQuickAddOpen?: boolean;
+  stopwatch?: StopwatchState;
+  onStartStopwatch?: (ctx: {
+    subjectId: string;
+    subjectName: string;
+    topicId?: string;
+    topicName?: string;
+  }) => void;
   onUpdateWorkspace: (updater: (prev: WorkspaceData) => WorkspaceData) => void;
   onOpenSubjectNotes: (subjectId: string, topicId?: string) => void;
   onOpenSubjectCards: (subjectId: string) => void;
@@ -67,6 +78,8 @@ function isHistoryName(name: string): boolean {
 export function SubjectsView({
   workspace,
   initialQuickAddOpen = false,
+  stopwatch,
+  onStartStopwatch,
   onUpdateWorkspace,
   onOpenSubjectNotes,
   onOpenSubjectCards,
@@ -487,6 +500,48 @@ export function SubjectsView({
             </button>
 
             <div className="flex flex-wrap items-center gap-2">
+              {onStartStopwatch && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onStartStopwatch({
+                      subjectId: subj.id,
+                      subjectName: subj.name,
+                    })
+                  }
+                  title={
+                    stopwatch?.subjectId === subj.id && !stopwatch?.topicId
+                      ? stopwatch.running
+                        ? `Pause stopwatch (${stopwatch.text})`
+                        : `Resume stopwatch (${stopwatch.text})`
+                      : `Start study stopwatch for ${subj.name}`
+                  }
+                  className={`sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap shrink-0 ${
+                    stopwatch?.subjectId === subj.id && !stopwatch?.topicId
+                      ? 'border-[var(--e3)] text-[var(--e3)]'
+                      : ''
+                  }`}
+                >
+                  {stopwatch?.subjectId === subj.id && !stopwatch?.topicId ? (
+                    stopwatch.running ? (
+                      <>
+                        <Pause className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span className="font-mono-num tabular-nums">Pause · {stopwatch.text}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span className="font-mono-num tabular-nums">Resume · {stopwatch.text}</span>
+                      </>
+                    )
+                  ) : (
+                    <>
+                      <Timer className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                      <span>Stopwatch</span>
+                    </>
+                  )}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onOpenSubjectNotes(subj.id)}
@@ -870,6 +925,51 @@ export function SubjectsView({
                           </button>
                         ))}
                       </div>
+
+                      {onStartStopwatch && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onStartStopwatch({
+                              subjectId: subj.id,
+                              subjectName: subj.name,
+                              topicId: tp.id,
+                              topicName: tp.name,
+                            })
+                          }
+                          title={
+                            stopwatch?.topicId === tp.id
+                              ? stopwatch.running
+                                ? `Pause stopwatch for ${tp.name}`
+                                : `Resume stopwatch for ${tp.name}`
+                              : `Start study stopwatch for ${tp.name}`
+                          }
+                          className={`sd-btn px-2.5 py-1 text-xs whitespace-nowrap shrink-0 ${
+                            stopwatch?.topicId === tp.id
+                              ? 'border-[var(--e3)] text-[var(--e3)]'
+                              : ''
+                          }`}
+                        >
+                          {stopwatch?.topicId === tp.id ? (
+                            stopwatch.running ? (
+                              <>
+                                <Pause className="h-3 w-3" aria-hidden="true" />
+                                <span className="font-mono-num tabular-nums">{stopwatch.text}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="h-3 w-3" aria-hidden="true" />
+                                <span className="font-mono-num tabular-nums">{stopwatch.text}</span>
+                              </>
+                            )
+                          ) : (
+                            <>
+                              <Timer className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                              <span>Stopwatch</span>
+                            </>
+                          )}
+                        </button>
+                      )}
 
                       <button
                         type="button"
@@ -1456,6 +1556,32 @@ export function SubjectsView({
                         <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Topics ({topics.length})</span>
                       </button>
+                      {onStartStopwatch && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onStartStopwatch({
+                              subjectId: subj.id,
+                              subjectName: subj.name,
+                            })
+                          }
+                          title={`Start study stopwatch for ${subj.name}`}
+                          className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap ${
+                            stopwatch?.subjectId === subj.id && !stopwatch?.topicId
+                              ? 'border-[var(--e3)] text-[var(--e3)]'
+                              : ''
+                          }`}
+                        >
+                          <Timer className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                          <span>
+                            {stopwatch?.subjectId === subj.id && !stopwatch?.topicId
+                              ? stopwatch.running
+                                ? `Pause · ${stopwatch.text}`
+                                : `Resume · ${stopwatch.text}`
+                              : 'Stopwatch'}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 );

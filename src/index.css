@@ -748,9 +748,74 @@
   word-break: break-word;
 }
 
-/* Keep pastel inline highlights legible in Dark mode */
-[data-theme="dark"] .sd-doc-sheet [style*="background-color"] {
-  color: #17202e;
+/* Keep inline highlights legible in Dark mode */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sd-doc-sheet [style*="background-color"],
+  :root:not([data-theme="light"]) .sd-doc-sheet mark {
+    color: #111827;
+  }
+}
+
+:root.dark .sd-doc-sheet [style*="background-color"],
+[data-theme="dark"] .sd-doc-sheet [style*="background-color"],
+:root.dark .sd-doc-sheet mark,
+[data-theme="dark"] .sd-doc-sheet mark {
+  color: #111827;
+}
+
+/* Make bold & highlighted study terms stand out clearly */
+.sd-bold-term,
+.sd-doc-sheet strong,
+.sd-doc-sheet b {
+  font-weight: 800;
+  color: color-mix(in srgb, var(--note-accent, var(--e3)) 30%, var(--ink));
+  background: color-mix(in srgb, var(--note-accent, var(--e3)) 11%, transparent);
+  padding: 0.02em 0.24em;
+  border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sd-bold-term,
+  :root:not([data-theme="light"]) .sd-doc-sheet strong,
+  :root:not([data-theme="light"]) .sd-doc-sheet b {
+    color: #ffffff;
+    background: color-mix(in srgb, var(--note-accent, var(--e3)) 22%, transparent);
+  }
+}
+
+:root.dark .sd-bold-term,
+[data-theme="dark"] .sd-bold-term,
+:root.dark .sd-doc-sheet strong,
+[data-theme="dark"] .sd-doc-sheet strong,
+:root.dark .sd-doc-sheet b,
+[data-theme="dark"] .sd-doc-sheet b {
+  color: #ffffff;
+  background: color-mix(in srgb, var(--note-accent, var(--e3)) 22%, transparent);
+}
+
+h1 .sd-bold-term,
+h2 .sd-bold-term,
+h3 .sd-bold-term,
+h4 .sd-bold-term,
+th .sd-bold-term,
+mark .sd-bold-term,
+.sd-doc-sheet h1 strong,
+.sd-doc-sheet h2 strong,
+.sd-doc-sheet h3 strong,
+.sd-doc-sheet th strong,
+.sd-doc-sheet mark strong {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.sd-mark-term,
+.sd-doc-sheet mark {
+  font-weight: 700;
+  padding: 0.06em 0.34em;
+  border-radius: 5px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .sd-doc-sheet h1 {

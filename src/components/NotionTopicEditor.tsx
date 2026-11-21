@@ -2161,15 +2161,15 @@ export function NotionTopicEditor({
                     })()}
 
                     {block.type === 'flow' && (
-                      <div className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent,var(--e3))_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_4%,var(--card))] p-4">
-                        <div className="mb-2.5 flex items-center justify-between gap-2">
+                      <div className="my-3 rounded-2xl bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_5%,var(--bg))] px-5 py-4.5">
+                        <div className="mb-3 flex items-center justify-between gap-2">
                           <input
                             type="text"
                             value={block.extra || ''}
                             onFocus={() => setFocusedBlockId(block.id)}
                             onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
                             placeholder="Process / Causal Flow Label (optional)"
-                            className="flex-1 border-0 bg-transparent text-xs font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))] outline-none placeholder:text-[var(--mute)]/60"
+                            className="flex-1 border-0 bg-transparent text-sm font-bold text-[var(--note-accent,var(--e3))] outline-none placeholder:text-[var(--mute)]/60"
                           />
                           <div className="flex items-center gap-2">
                             <button
@@ -2191,16 +2191,16 @@ export function NotionTopicEditor({
                             </button>
                           </div>
                         </div>
-                        <div className="flex flex-wrap items-stretch gap-2">
+                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-3">
                           {(block.steps || ['', '']).map((stepVal, sIdx, arr) => (
-                            <div key={sIdx} className="flex items-center gap-2">
-                              <div className="flex items-start gap-2 rounded-xl border border-[var(--line)] bg-[var(--card)] px-3.5 py-2.5">
-                                <span className="font-mono-num mt-0.5 text-xs font-bold text-[var(--note-accent,var(--e3))]">
-                                  {sIdx + 1}.
+                            <div key={sIdx} className="flex items-center gap-2.5">
+                              <div className="flex items-start gap-2.5 rounded-[18px] bg-[var(--card)] px-4 py-3 ring-1 ring-[color-mix(in_srgb,var(--note-accent,var(--e3))_18%,transparent)] shadow-[0_1px_4px_rgba(0,0,0,0.06)]">
+                                <span className="font-mono-num mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--note-accent,var(--e3))_14%,transparent)] text-xs font-extrabold text-[var(--note-accent,var(--e3))]">
+                                  {sIdx + 1}
                                 </span>
                                 <AutoGrowTextarea
                                   value={stepVal}
-                                  minHeight={24}
+                                  minHeight={28}
                                   onFocus={() => setFocusedBlockId(block.id)}
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter' && !e.shiftKey) {
@@ -2217,7 +2217,7 @@ export function NotionTopicEditor({
                                     updateBlock(block.id, { steps: nextSteps });
                                   }}
                                   placeholder={`Step ${sIdx + 1}`}
-                                  className="min-w-[140px] max-w-[240px] text-sm font-medium leading-snug text-[var(--ink)]"
+                                  className="min-w-[160px] max-w-[340px] text-[16.5px] font-medium leading-snug text-[var(--ink)] sm:text-[17px]"
                                 />
                                 {arr.length > 2 && (
                                   <button
@@ -2236,7 +2236,7 @@ export function NotionTopicEditor({
                               </div>
                               {sIdx < arr.length - 1 && (
                                 <ArrowRight
-                                  className="h-4 w-4 shrink-0 text-[var(--note-accent,var(--e3))]"
+                                  className="h-4.5 w-4.5 shrink-0 text-[var(--note-accent,var(--e3))]"
                                   aria-hidden="true"
                                 />
                               )}

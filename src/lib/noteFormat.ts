@@ -273,9 +273,35 @@ export function assessExistingFormattingQuality(rawInput: string): FormattingQua
   };
 }
 
+const ARROW_ONLY_CELL_RE =
+  /^(?:[→⇒⟶⟹➜➔➝➞➟➠➡➤➥➦↦⇢⇥⇾►▶▸▹▻▷➣➢]|--->|-->|->|===>|==>|=>)$/;
+
+function tryConvertArrowCellsToFlow(cells: string[]): string | null {
+  if (cells.length < 3) return null;
+  const arrowCount = cells.filter((c) => ARROW_ONLY_CELL_RE.test(c.trim())).length;
+  if (arrowCount === 0) return null;
+  const steps = cells.filter((c) => c.trim() && !ARROW_ONLY_CELL_RE.test(c.trim()));
+  if (steps.length >= 2 && arrowCount >= Math.max(1, steps.length - 1)) {
+    return `⇒ ${steps.map((s) => s.trim()).join(' → ')}`;
+  }
+  return null;
+}
+
+function splitAlignedColumns(line: string): string[] | null {
+  if (line.includes('\t')) {
+    const tabCols = line.split(/\t+/).map((c) => c.trim()).filter(Boolean);
+    if (tabCols.length >= 2 && tabCols.length <= 7) return tabCols;
+  }
+  if (/\S\s{2,}\S/.test(line)) {
+    const spaceCols = line.split(/\s{2,}/).map((c) => c.trim()).filter(Boolean);
+    if (spaceCols.length >= 2 && spaceCols.length <= 7) return spaceCols;
+  }
+  return null;
+}
+
 /**
- * Normalizes Setext headings, strips web/PDF boilerplate, detects multi-space tables,
- * preserves bullet hierarchy, and splits dense walls of text safely.
+ * Normalizes Setext headings, strips web/PDF boilerplate, detects tab & multi-space tables,
+ * converts arrow-separator rows into flowchains, preserves blank-line section cues, and splits dense prose walls safely.
  */
 function preprocessPlainStudyText(
   rawInput: string,
@@ -304,7 +330,12 @@ function preprocessPlainStudyText(
       continue;
     }
 
-    if (!trimmed) continue;
+    if (!trimmed) {
+      if (outLines.length > 0 && outLines[outLines.length - 1] !== '') {
+        outLines.push('');
+      }
+      continue;
+    }
     if (isBoilerplateNoiseLine(trimmed)) continue;
 
     // Preserve indentation before bullet markers so sub-bullets keep hierarchy
@@ -314,13 +345,25 @@ function preprocessPlainStudyText(
       continue;
     }
 
-    // Convert multi-row or 3+ column tab-separated rows AND multi-space column lines into pipe tables
+    // Detect tab/multi-space arrow flows (e.g. `Israel attacks \t ► \t Britain & France invade \t ► \t Goal`)
+    if (opts.detectFlowDiagrams !== false && !/^(?:[-*•#|]|\d+[.)]\s+)/.test(trimmed)) {
+      const aligned = splitAlignedColumns(trimmed);
+      if (aligned) {
+        const flow = tryConvertArrowCellsToFlow(aligned);
+        if (flow) {
+          outLines.push(flow);
+          continue;
+        }
+      }
+    }
+
+    // Convert tab-separated rows AND multi-space aligned column lines into pipe tables
     if (
       opts.autoTables !== false &&
-      !/^(?:[-*•#|]|\d+[.)]\s+)/.test(trimmed)
+      !/^(?:[-*•#|⇒]|\d+[.)]\s+)/.test(trimmed)
     ) {
       if (trimmed.includes('\t')) {
-        const tabCols = trimmed.split('\t').map((c) => c.trim()).filter(Boolean);
+        const tabCols = trimmed.split(/\t+/).map((c) => c.trim()).filter(Boolean);
         const prevHasTab = i > 0 && rawLines[i - 1].trim().includes('\t');
         const nextHasTab = i + 1 < rawLines.length && rawLines[i + 1].trim().includes('\t');
         if (
@@ -331,9 +374,15 @@ function preprocessPlainStudyText(
           continue;
         }
       }
-      if (/\S\s{3,}\S/.test(trimmed)) {
-        const cols = trimmed.split(/\s{3,}/).map((c) => c.trim()).filter(Boolean);
-        if (cols.length >= 2 && cols.length <= 6) {
+      if (/\S\s{2,}\S/.test(trimmed)) {
+        const cols = trimmed.split(/\s{2,}/).map((c) => c.trim()).filter(Boolean);
+        const has3Spaces = /\S\s{3,}\S/.test(trimmed);
+        const prevCols = i > 0 ? splitAlignedColumns(rawLines[i - 1].trim()) : null;
+        const nextCols = i + 1 < rawLines.length ? splitAlignedColumns(rawLines[i + 1].trim()) : null;
+        const matchesNeighborCols =
+          (prevCols && prevCols.length === cols.length) ||
+          (nextCols && nextCols.length === cols.length);
+        if (cols.length >= 2 && cols.length <= 6 && (has3Spaces || matchesNeighborCols)) {
           outLines.push(`| ${cols.map((c) => c.replace(/\|/g, '/')).join(' | ')} |`);
           continue;
         }
@@ -367,7 +416,7 @@ function tryBuildSequentialFlow(line: string): string | null {
   // Explicit arrows (A -> B -> C or A => B => C or A → B → C or A ► B ► C)
   const arrowParts = splitRightArrowSteps(clean);
   const minParts = hasExplicitFlowLead ? 2 : 3;
-  if (arrowParts.length >= minParts && arrowParts.every((p) => p.length <= 220)) {
+  if (arrowParts.length >= minParts && arrowParts.every((p) => p.length <= 240)) {
     return `⇒ ${arrowParts.join(' → ')}`;
   }
 
@@ -389,19 +438,29 @@ function tryBuildSequentialFlow(line: string): string | null {
   return null;
 }
 
-function convertBalancedProsConsToTables(sections: NoteSectionBlock[]): void {
+const DATE_ROW_RE =
+  /^(?:\*\*)?((?:c\.\s*)?(?:\d{1,2}\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)?\.?\s*\d{3,4}(?:\s*[–—-]\s*(?:\d{2,4}|present|today))?(?:\s*(?:BC|BCE|AD))?)(?:\*\*)?\s*(?:[:–—-]|\s-\s)\s*(.{6,})$/i;
+
+function upgradeStructuredRunsToTables(sections: NoteSectionBlock[]): void {
   const pairHeads: Array<[RegExp, RegExp, [string, string]]> = [
-    [/^advantages|pros|strengths|benefits/i, /^disadvantages|cons|weaknesses|limitations|drawbacks/i, ['Advantages / Strengths', 'Disadvantages / Limitations']],
-    [/^causes|reasons/i, /^effects|consequences|impacts/i, ['Causes', 'Effects / Consequences']],
+    [
+      /^(?:advantages|pros|strengths|benefits|arguments\s+for)/i,
+      /^(?:disadvantages|cons|weaknesses|limitations|drawbacks|arguments\s+against)/i,
+      ['Advantages / Strengths', 'Disadvantages / Limitations'],
+    ],
+    [/^(?:causes|reasons|factors)/i, /^(?:effects|consequences|impacts|outcomes|results)/i, ['Causes', 'Effects / Consequences']],
+    [/^short[- ]term/i, /^long[- ]term/i, ['Short-Term', 'Long-Term']],
+    [/^before/i, /^after/i, ['Before', 'After']],
+    [/^similarities/i, /^differences/i, ['Similarities', 'Differences']],
   ];
 
+  // 1. Convert paired contrasting ### subheadings inside sections (Pros/Cons, Causes/Effects, etc.)
   for (const sec of sections) {
     const pts = sec.points;
     for (let i = 0; i < pts.length; i++) {
       if (!pts[i].startsWith('### ')) continue;
       const h1 = pts[i].slice(4).trim();
 
-      // Find end of block 1 and start of next ### heading
       let nextSubIdx = -1;
       for (let j = i + 1; j < pts.length; j++) {
         if (pts[j].startsWith('### ')) {
@@ -412,7 +471,6 @@ function convertBalancedProsConsToTables(sections: NoteSectionBlock[]): void {
       if (nextSubIdx === -1) continue;
       const h2 = pts[nextSubIdx].slice(4).trim();
       const matchedPair = pairHeads.find(([r1, r2]) => r1.test(h1) && r2.test(h2));
-      if (!matchedPair) continue;
 
       let endBlock2 = pts.length;
       for (let j = nextSubIdx + 1; j < pts.length; j++) {
@@ -422,24 +480,113 @@ function convertBalancedProsConsToTables(sections: NoteSectionBlock[]): void {
         }
       }
 
-      const list1 = pts
-        .slice(i + 1, nextSubIdx)
-        .map((p) => p.replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim())
-        .filter(Boolean);
-      const list2 = pts
-        .slice(nextSubIdx + 1, endBlock2)
-        .map((p) => p.replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim())
-        .filter(Boolean);
+      if (matchedPair) {
+        const list1 = pts
+          .slice(i + 1, nextSubIdx)
+          .map((p) => p.replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim())
+          .filter(Boolean);
+        const list2 = pts
+          .slice(nextSubIdx + 1, endBlock2)
+          .map((p) => p.replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim())
+          .filter(Boolean);
 
-      if (list1.length >= 2 && list2.length >= 2 && list1.length <= 7 && list2.length <= 7) {
-        const rowsCount = Math.max(list1.length, list2.length);
-        const tableLines: string[] = [`| ${matchedPair[2][0]} | ${matchedPair[2][1]} |`];
-        for (let r = 0; r < rowsCount; r++) {
-          tableLines.push(`| ${list1[r] || '—'} | ${list2[r] || '—'} |`);
+        if (list1.length >= 2 && list2.length >= 2 && list1.length <= 8 && list2.length <= 8) {
+          const rowsCount = Math.max(list1.length, list2.length);
+          const tableLines: string[] = [`| ${matchedPair[2][0]} | ${matchedPair[2][1]} |`];
+          for (let r = 0; r < rowsCount; r++) {
+            tableLines.push(`| ${list1[r] || '—'} | ${list2[r] || '—'} |`);
+          }
+          pts.splice(i, endBlock2 - i, ...tableLines);
+          i += tableLines.length - 1;
+          continue;
         }
-        pts.splice(i, endBlock2 - i, ...tableLines);
+      }
+
+      // 2. Pivot 2 consecutive ### entity subheadings that share >= 2 **Attribute**: Value keys into comparison table
+      const extractKvMap = (slice: string[]) => {
+        const map = new Map<string, string>();
+        for (const item of slice) {
+          const m = item.replace(/^↳\s*/, '').match(/^\*\*(.+?)\*\*:\s*(.+)$/);
+          if (m && m[1].length <= 36) {
+            map.set(m[1].trim(), m[2].replace(/\|/g, '/').trim());
+          }
+        }
+        return map;
+      };
+      const slice1 = pts.slice(i + 1, nextSubIdx);
+      const slice2 = pts.slice(nextSubIdx + 1, endBlock2);
+      if (slice1.length >= 2 && slice2.length >= 2 && slice1.length <= 6 && slice2.length <= 6) {
+        const map1 = extractKvMap(slice1);
+        const map2 = extractKvMap(slice2);
+        const map2Lower = new Map<string, string>();
+        map2.forEach((v, k) => map2Lower.set(k.toLowerCase(), v));
+        const sharedKeys = Array.from(map1.keys()).filter((k) => map2Lower.has(k.toLowerCase()));
+        if (sharedKeys.length >= 2 && sharedKeys.length >= Math.min(slice1.length, slice2.length) - 1) {
+          const allKeys = Array.from(new Set([...map1.keys(), ...map2.keys()]));
+          const tableLines: string[] = [
+            `| Feature | ${h1.replace(/\|/g, '/')} | ${h2.replace(/\|/g, '/')} |`,
+          ];
+          for (const key of allKeys) {
+            const v1 = map1.get(key) || '—';
+            const v2 = map2Lower.get(key.toLowerCase()) || '—';
+            tableLines.push(`| **${key}** | ${v1} | ${v2} |`);
+          }
+          pts.splice(i, endBlock2 - i, ...tableLines);
+          i += tableLines.length - 1;
+        }
+      }
+    }
+
+    // 3. Convert runs of 3+ consecutive `Date: Event` items into a crisp timeline table
+    for (let i = 0; i < pts.length; i++) {
+      const runDates: Array<{ date: string; event: string }> = [];
+      let j = i;
+      while (j < pts.length) {
+        const p = pts[j].trim();
+        if (!p || p.startsWith('### ') || p.startsWith('|') || p.startsWith('⇒ ') || p.startsWith('📌 ')) {
+          break;
+        }
+        const m = p.replace(/^↳\s*/, '').replace(/^¶\s*/, '').match(DATE_ROW_RE);
+        if (!m || m[1].trim().length > 26) break;
+        runDates.push({
+          date: m[1].replace(/\*\*/g, '').trim(),
+          event: m[2].replace(/\|/g, '/').trim(),
+        });
+        j++;
+      }
+      if (runDates.length >= 3) {
+        const tableLines = [
+          '| Date | Event / Key Detail |',
+          ...runDates.map((d) => `| ${d.date} | ${d.event} |`),
+        ];
+        pts.splice(i, j - i, ...tableLines);
         i += tableLines.length - 1;
       }
+    }
+  }
+
+  // 4. Merge consecutive contrasting top-level sections (e.g. `Advantages` + `Disadvantages`) into a comparison table
+  for (let sIdx = 0; sIdx + 1 < sections.length; sIdx++) {
+    const a = sections[sIdx];
+    const b = sections[sIdx + 1];
+    const matchedPair = pairHeads.find(([r1, r2]) => r1.test(a.heading) && r2.test(b.heading));
+    if (!matchedPair) continue;
+    const hasExistingTable =
+      a.points.some((p) => p.startsWith('|')) || b.points.some((p) => p.startsWith('|'));
+    if (hasExistingTable) continue;
+    if (a.points.length >= 2 && b.points.length >= 2 && a.points.length <= 8 && b.points.length <= 8) {
+      const rowsCount = Math.max(a.points.length, b.points.length);
+      const tableLines: string[] = [`| ${matchedPair[2][0]} | ${matchedPair[2][1]} |`];
+      for (let r = 0; r < rowsCount; r++) {
+        const left = (a.points[r] || '—').replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim();
+        const right = (b.points[r] || '—').replace(/^↳\s*/, '').replace(/^¶\s*/, '').replace(/\|/g, '/').trim();
+        tableLines.push(`| ${left} | ${right} |`);
+      }
+      sections.splice(sIdx, 2, {
+        id: a.id,
+        heading: `${matchedPair[2][0]} vs ${matchedPair[2][1]}`,
+        points: tableLines,
+      });
     }
   }
 }
@@ -487,14 +634,28 @@ export function parseTextIntoStructuredNote(
   };
 
   const SUBHEADING_CUES =
-    /^(?:causes|effects|consequences|impacts|advantages|disadvantages|pros|cons|strengths|weaknesses|limitations|benefits|drawbacks|key features|evaluation|evidence|methods|factors|solutions|significance|outcomes)$/i;
+    /^(?:causes|effects|consequences|impacts|advantages|disadvantages|pros|cons|strengths|weaknesses|limitations|benefits|drawbacks|key features|evaluation|evidence|methods|factors|solutions|significance|outcomes|short[- ]term|long[- ]term|similarities|differences|arguments\s+for|arguments\s+against)$/i;
 
   const lines = text.split('\n');
+  const getNextNonEmptyLine = (startIdx: number): string => {
+    for (let k = startIdx + 1; k < lines.length; k++) {
+      const t = lines[k].trim();
+      if (t) return t;
+    }
+    return '';
+  };
+
+  let prevWasBlank = true;
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i];
     const isNestedBullet = /^\s{2,}(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]|\d+[.)])\s+/.test(rawLine);
     let line = rawLine.trim();
-    if (!line) continue;
+    if (!line) {
+      prevWasBlank = true;
+      continue;
+    }
+    const precededByBlank = prevWasBlank;
+    prevWasBlank = false;
 
     // Extract Gizmo / revision cloze deletions `{{answer}}` or `==answer==` into flashcards
     if (/\{\{[^}]+\}\}|==[^=]+==/.test(line)) {
@@ -674,6 +835,24 @@ export function parseTextIntoStructuredNote(
         continue;
       }
 
+      // Roman numeral section headings ("I. Causes", "II. Developments") & lettered sub-headings ("A. Economic impact")
+      const romanSec = line.match(/^(I{1,3}|IV|VI{0,3}|IX|X)\.\s+(.{3,75})$/);
+      if (romanSec && !/[.;]$/.test(line) && line.split(/\s+/).length <= 12) {
+        pushCurrentSection();
+        currentSec = {
+          id: makeNoteId('sec'),
+          heading: romanSec[2].replace(/:$/, '').trim(),
+          points: [],
+        };
+        continue;
+      }
+
+      const letterSub = line.match(/^[A-Z]\.\s+([A-Z][^.;]{2,65})$/);
+      if (letterSub && line.split(/\s+/).length <= 10 && currentSec.points.length > 0) {
+        currentSec.points.push(`### ${letterSub[1].replace(/:$/, '').trim()}`);
+        continue;
+      }
+
       // Short standalone ALL-CAPS heading
       if (
         line.length >= 4 &&
@@ -689,6 +868,40 @@ export function parseTextIntoStructuredNote(
             .replace(/\b\w/g, (ch) => ch.toUpperCase()),
           points: [],
         };
+        continue;
+      }
+
+      // Standalone short unpunctuated title or topic question preceded by a blank line or at top of raw text
+      const nextLine = getNextNonEmptyLine(i);
+      const wordCount = line.split(/\s+/).filter(Boolean).length;
+      const looksLikePlainHeading =
+        precededByBlank &&
+        Boolean(nextLine) &&
+        line.length >= 3 &&
+        line.length <= 74 &&
+        wordCount <= 10 &&
+        /^[A-Z0-9"'(]/.test(line) &&
+        !/^(?:[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣↳⇒📌¶|]|[☐☑✓✔✅]|<|\d+[.)]\s)/.test(line) &&
+        !/[.;,!]$/.test(line) &&
+        (!line.includes(':') || /^[^:]{2,40}:\s+\S.{0,35}$/.test(line)) &&
+        !DATE_ROW_RE.test(line) &&
+        countRightArrows(line) < 2 &&
+        !/\b(?:was|were|are|is|had|have|became|caused|led to|resulting)\b/i.test(
+          line.endsWith('?') ? '' : line
+        );
+
+      if (looksLikePlainHeading) {
+        const cleanHead = line.replace(/\*\*/g, '').replace(/:$/, '').trim();
+        if (SUBHEADING_CUES.test(cleanHead) || (line.endsWith('?') && currentSec.points.length > 0)) {
+          currentSec.points.push(`### ${cleanHead}`);
+        } else {
+          pushCurrentSection();
+          currentSec = {
+            id: makeNoteId('sec'),
+            heading: cleanHead,
+            points: [],
+          };
+        }
         continue;
       }
     }
@@ -798,12 +1011,14 @@ export function parseTextIntoStructuredNote(
     }
 
     // Natural lecture prose definitions: "X is defined as Y" / "X refers to Y" / "X means Y" / "X is the process..."
+    let boldedProsePoint: string | null = null;
     const proseDef = cleanBullet.match(
-      /^(?:\*\*)?([A-Za-z][A-Za-z0-9 ()/'’&-]{1,50}?)(?:\*\*)?\s+(?:is defined as|refers to|is the process (?:by|in) which|means|describes)\s+(.{12,})$/i
+      /^(?:\*\*)?([A-Za-z][A-Za-z0-9 ()/'’&-]{1,50}?)(?:\*\*)?\s+(is defined as|refers to|is the process (?:by|in) which|means|describes)\s+(.{12,})$/i
     );
     if (proseDef) {
       const term = proseDef[1].replace(/\*\*/g, '').trim();
-      const def = proseDef[2].trim();
+      const verb = proseDef[2];
+      const def = proseDef[3].trim();
       if (term.split(/\s+/).length <= 6) {
         addTermAndCard(
           keyTerms,
@@ -814,6 +1029,9 @@ export function parseTextIntoStructuredNote(
           currentSec.heading,
           allowKeyTerms
         );
+        if (!/\*\*/.test(cleanBullet) && !/<(?:strong|b|mark|span)\b/i.test(cleanBullet)) {
+          boldedProsePoint = `**${term}** ${verb} ${def}`;
+        }
       }
     } else {
       // Bolded key concept in sentence: "**The Dawes Plan** was a 1924 agreement..."
@@ -835,13 +1053,14 @@ export function parseTextIntoStructuredNote(
     }
 
     // Highlight historical dates in timeline-causal preset
+    const basePoint = boldedProsePoint || cleanBullet;
     const formattedPoint =
       preset === 'timeline-causal'
-        ? cleanBullet.replace(
+        ? basePoint.replace(
             /\b((?:\d{1,2}\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)?\s*(?:1\d{3}|20\d{2})(?:\s*[–-]\s*\d{2,4})?)\b/g,
-            (m) => (cleanBullet.includes(`**${m}`) ? m : `**${m.trim()}**`)
+            (m) => (basePoint.includes(`**${m}`) ? m : `**${m.trim()}**`)
           )
-        : cleanBullet;
+        : basePoint;
 
     // First clean prose sentence becomes Topic Overview if none specified yet
     if (
@@ -914,7 +1133,7 @@ export function parseTextIntoStructuredNote(
   }
 
   if (buildAutoTables) {
-    convertBalancedProsConsToTables(cleanedSections);
+    upgradeStructuredRunsToTables(cleanedSections);
   }
 
   if (cleanedSections.length === 0) {
@@ -1328,17 +1547,72 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
         i++;
       }
       if (tableRows.length > 0) {
+        // If a single-row table has alternating arrow cells (`[Step 1, '►', Step 2, '►', Step 3]`), render as a flow diagram
+        if (tableRows.length === 1) {
+          const flowConverted = tryConvertArrowCellsToFlow(tableRows[0]);
+          if (flowConverted) {
+            const parsedFlow = parseFlowLine(flowConverted);
+            if (parsedFlow) {
+              blocks.push({ kind: 'flow', label: parsedFlow.label, steps: parsedFlow.steps });
+              continue;
+            }
+          }
+        }
+
         const maxCols = tableRows.reduce((m, r) => Math.max(m, r.length), 1);
         const padRow = (r: string[]) =>
           Array.from({ length: maxCols }, (_, idx) => r[idx] || '');
-        const headers = padRow(tableRows[0]);
-        const rows = tableRows.slice(1).map(padRow);
-        blocks.push({
-          kind: 'table',
-          headers,
-          rows,
-          ...(tableColor && tableColor !== 'default' ? { color: tableColor } : {}),
-        });
+
+        const row0 = padRow(tableRows[0]);
+        const row1 = tableRows.length >= 2 ? padRow(tableRows[1]) : null;
+        const looksLikeDateCell = (s: string) =>
+          /^(?:c\.\s*)?(?:\d{1,2}\s+)?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\.?\s*\d{3,4}(?:\s*[–—-]\s*(?:\d{2,4}|present|today))?(?:\s*(?:BC|BCE|AD))?$/i.test(
+            s.replace(/\*\*/g, '').trim()
+          );
+        const row0Col0IsDate = looksLikeDateCell(row0[0]);
+        const row1Col0IsDate = Boolean(row1 && looksLikeDateCell(row1[0]));
+        const row0LooksLikeLongData =
+          Boolean(row1) &&
+          row0.some((c) => c.length > 48 && /[.;]/.test(c)) &&
+          !/^(?:date|year|period|term|concept|topic|feature|item|factor|cause|effect|stage|step|advantage|disadvantage)/i.test(
+            row0[0].replace(/\*\*/g, '').trim()
+          );
+
+        if (row0Col0IsDate && row1Col0IsDate) {
+          const inferredHeaders =
+            maxCols === 2
+              ? ['Date', 'Event / Key Detail']
+              : maxCols === 3
+              ? ['Date', 'Event', 'Significance / Details']
+              : Array.from({ length: maxCols }, (_, idx) =>
+                  idx === 0 ? 'Date' : `Detail ${idx}`
+                );
+          blocks.push({
+            kind: 'table',
+            headers: inferredHeaders,
+            rows: tableRows.map(padRow),
+            ...(tableColor && tableColor !== 'default' ? { color: tableColor } : {}),
+          });
+        } else if (row0LooksLikeLongData && row1) {
+          const inferredHeaders = Array.from({ length: maxCols }, (_, idx) =>
+            idx === 0 ? 'Item' : maxCols === 2 ? 'Details' : `Column ${idx + 1}`
+          );
+          blocks.push({
+            kind: 'table',
+            headers: inferredHeaders,
+            rows: tableRows.map(padRow),
+            ...(tableColor && tableColor !== 'default' ? { color: tableColor } : {}),
+          });
+        } else {
+          const headers = row0;
+          const rows = tableRows.slice(1).map(padRow);
+          blocks.push({
+            kind: 'table',
+            headers,
+            rows,
+            ...(tableColor && tableColor !== 'default' ? { color: tableColor } : {}),
+          });
+        }
       }
       continue;
     }
@@ -1494,7 +1768,25 @@ export function extractTimelineEventsFromNote(
 
   const scanLine = (rawLine: string, era?: string) => {
     const line = rawLine.replace(/^(?:↳|¶)\s*/, '').trim();
-    if (!line || line.startsWith('### ') || line.startsWith('|')) return;
+    if (!line || line.startsWith('### ') || line.startsWith('@table-color:')) return;
+
+    if (line.startsWith('|')) {
+      if (/^\|\s*[-:]+(?:\s*\|\s*[-:]+)+\s*\|$/.test(line)) return;
+      const cells = splitPipeRow(line);
+      if (cells.length >= 2) {
+        const dateCell = cells[0].replace(/\*\*/g, '').trim();
+        const rest = cells.slice(1).filter(Boolean).join(' — ');
+        if (
+          rest &&
+          /^(?:c\.\s*)?(?:\d{1,2}\s+)?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\.?\s*\d{3,4}(?:\s*[–—-]\s*\d{2,4})?(?:\s*(?:BC|BCE|AD))?$/i.test(
+            dateCell
+          )
+        ) {
+          pushCandidate(dateCell, rest, era, /\*\*/.test(line));
+        }
+      }
+      return;
+    }
 
     const boldInLine = /\*\*/.test(line);
 

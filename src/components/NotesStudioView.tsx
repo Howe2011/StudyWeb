@@ -74,6 +74,7 @@ import {
   legacyHtmlToStructuredNote,
 } from '../lib/noteFormat';
 import { parseBulkTimelineNodes } from '../lib/smartImporter';
+import { FlowchartBlock } from './FlowchartBlock';
 import {
   buildTopicTreeList,
   deleteTopicPromotingChildren,
@@ -2571,37 +2572,11 @@ export function NotesStudioView({
 
                                   if (blk.kind === 'flow') {
                                     return (
-                                      <div
+                                      <FlowchartBlock
                                         key={i}
-                                        className="my-5 rounded-2xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))] p-5"
-                                      >
-                                        {blk.label && (
-                                          <div className="mb-3 text-sm font-bold text-[var(--note-accent)]">
-                                            {blk.label}
-                                          </div>
-                                        )}
-                                        <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-stretch">
-                                          {blk.steps.map((step, sIdx) => (
-                                            <div
-                                              key={sIdx}
-                                              className="flex flex-1 min-w-[200px] items-center gap-2.5"
-                                            >
-                                              <div className="flex-1 rounded-xl border border-[var(--line)] bg-[var(--card)] px-4 py-3 text-[15px] leading-snug text-[var(--ink)]">
-                                                <span className="font-mono-num mr-2 font-bold text-[var(--note-accent)]">
-                                                  {sIdx + 1}.
-                                                </span>
-                                                {renderRichInline(step)}
-                                              </div>
-                                              {sIdx < blk.steps.length - 1 && (
-                                                <ArrowRight
-                                                  className="hidden h-4 w-4 shrink-0 text-[var(--note-accent)] sm:block"
-                                                  aria-hidden="true"
-                                                />
-                                              )}
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
+                                        label={blk.label}
+                                        steps={blk.steps}
+                                      />
                                     );
                                   }
 

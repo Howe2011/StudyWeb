@@ -99,7 +99,7 @@ export async function gradeAnswerViaVercelOrLocal(
   question: string,
   officialAnswer: string,
   studentAnswer: string
-): Promise<{ correct: boolean; source: 'local' | 'ai' | 'fallback' }> {
+): Promise<{ correct: boolean; source: 'local' | 'ai' | 'fallback'; reason?: string }> {
   const trimmed = String(studentAnswer || '').trim();
   if (!trimmed) {
     return { correct: false, source: 'local' };
@@ -109,7 +109,7 @@ export async function gradeAnswerViaVercelOrLocal(
   }
 
   const controller = new AbortController();
-  const abortTimer = window.setTimeout(() => controller.abort(), 5500);
+  const abortTimer = window.setTimeout(() => controller.abort(), 8500);
   try {
     const byok = getByokConfig();
     const res = await fetch('/api/quiz/grade', {
@@ -133,10 +133,12 @@ export async function gradeAnswerViaVercelOrLocal(
     const data = (await res.json()) as {
       correct?: boolean;
       source?: 'local' | 'ai' | 'fallback';
+      reason?: string;
     };
     return {
       correct: Boolean(data.correct),
       source: data.source || 'ai',
+      reason: typeof data.reason === 'string' ? data.reason : undefined,
     };
   } catch {
     return {

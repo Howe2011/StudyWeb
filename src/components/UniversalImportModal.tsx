@@ -35,7 +35,7 @@ import {
   X,
 } from 'lucide-react';
 import { isRichFormattedHtml, sanitizeDocumentHtml } from '../lib/documentRenderer';
-import { useByokConfig } from '../lib/byokStore';
+import { saveByokConfig, useByokConfig } from '../lib/byokStore';
 import {
   downloadFlashcardsCsvTemplate,
   downloadNotesMarkdownTemplate,
@@ -66,12 +66,8 @@ import {
   NoteFormatPreset,
 } from '../lib/noteFormat';
 import { parsePdfFile } from '../lib/pdfImporter';
-import {
-  parseBackupJsonToWorkspace,
-  parseDocxFile,
-  parseUniversalStudyImport,
-  QuizletDelimiterMode,
-} from '../lib/smartImporter';
+import { parseBackupJsonToWorkspace, parseDocxFile, parseUniversalStudyImport, QuizletDelimiterMode } from '../lib/smartImporter';
+import { FlowchartBlock } from './FlowchartBlock';
 import { SUBJECT_COLOR_SWATCHES } from '../lib/subjectCatalog';
 import {
   buildTopicTreeList,
@@ -956,7 +952,7 @@ export function UniversalImportModal({
     }
   };
 
-  const handleAiAutoformat = async (forceRewrite = false) => {
+  const handleAiAutoformat = async (forceRewrite = true) => {
     if (!byokConfig) {
       setErrorMsg(
         'AI Autoformat requires your own API key. Add one in Account & Data (the website key is strictly for Live Quiz marking).'
@@ -964,23 +960,6 @@ export function UniversalImportModal({
       return;
     }
     if (!rawText.trim()) return;
-
-    // If notes are already cleanly formatted, preserve them cleanly with 0 tokens unless forced
-    if (!forceRewrite && existingFormatQuality.isGood) {
-      setKeptGoodFormatNotice(true);
-      setPreviewNotesMode(originalHtml && preferOriginalFormat ? 'original' : 'visual');
-      if (colorCodeParts) {
-        setDraftSections((prev) => applyVerifiedPartColors(prev, true));
-      } else {
-        setDraftSections((prev) => stripSectionPartColors(prev));
-      }
-      setStatusNote(
-        `${existingFormatQuality.reason} — kept existing layout${
-          colorCodeParts ? ' & colour-coded parts' : ''
-        } (0 AI tokens used).`
-      );
-      return;
-    }
 
     aiAbortRef.current?.abort();
     const controller = new AbortController();
@@ -1186,12 +1165,26 @@ export function UniversalImportModal({
       setPreviewNotesMode('visual');
       const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
       const u = usageResult;
+      let switchedModelNotice = '';
+      if (!keptExisting && u?.model && u.model !== 'kept-existing' && byokConfig) {
+        const prevCustom = (byokConfig.model || '').trim();
+        const prevVerified = (byokConfig.verifiedModel || '').trim();
+        if (prevCustom && prevCustom !== u.model) {
+          saveByokConfig({ ...byokConfig, model: u.model, verifiedModel: u.model });
+          switchedModelNotice = `Auto-switched from ${prevCustom} to ${u.model} · `;
+        } else if (prevVerified !== u.model) {
+          saveByokConfig({ ...byokConfig, verifiedModel: u.model });
+          if (prevVerified) {
+            switchedModelNotice = `Auto-switched from ${prevVerified} to ${u.model} · `;
+          }
+        }
+      }
       const cacheNote = u?.cachedTokens ? ` · ${u.cachedTokens} cached` : '';
       setStatusNote(
         keptExisting
           ? 'Format is already good — kept existing layout (0 AI tokens used).'
           : u
-          ? `AI Autoformatted in ${elapsedSec}s (${u.model}${u.totalTokens ? ` · ${u.totalTokens} tokens` : ''}${cacheNote}).`
+          ? `${switchedModelNotice}AI Autoformatted in ${elapsedSec}s (${u.model}${u.totalTokens ? ` · ${u.totalTokens} tokens` : ''}${cacheNote}).`
           : `AI Autoformatted in ${elapsedSec}s using your personal API key.`
       );
     } catch (err) {
@@ -2187,7 +2180,7 @@ export function UniversalImportModal({
                           <button
                             type="button"
                             disabled={aiFormatting}
-                            onClick={() => void handleAiAutoformat(false)}
+                            onClick={() => void handleAiAutoformat(true)}
                             className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
                           >
                             {aiFormatting ? (
@@ -2198,22 +2191,13 @@ export function UniversalImportModal({
                             <span className="font-mono-num">
                               {aiFormatting
                                 ? `Formatting… ${(aiElapsedMs / 1000).toFixed(1)}s`
-                                : existingFormatQuality.isGood && !aiFormattedApplied
-                                ? 'Format Already Good (Keep)'
                                 : aiFormattedApplied
                                 ? 'Re-run AI Autoformat'
+                                : existingFormatQuality.isGood
+                                ? 'Enhance Formatting (Your Key)'
                                 : 'AI Autoformat (Your Key)'}
                             </span>
                           </button>
-                          {(keptGoodFormatNotice || (existingFormatQuality.isGood && !aiFormattedApplied)) && !aiFormatting && (
-                            <button
-                              type="button"
-                              onClick={() => void handleAiAutoformat(true)}
-                              className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
-                            >
-                              Rewrite Anyway
-                            </button>
-                          )}
                           {aiFormatting && (
                             <button
                               type="button"
@@ -2509,31 +2493,12 @@ export function UniversalImportModal({
                                     }
                                     if (blk.kind === 'flow') {
                                       return (
-                                        <div
+                                        <FlowchartBlock
                                           key={bi}
-                                          className="my-2 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))] p-3.5"
-                                        >
-                                          {blk.label && (
-                                            <div className="mb-2 text-xs font-bold text-[var(--note-accent)]">
-                                              {blk.label}
-                                            </div>
-                                          )}
-                                          <div className="flex flex-wrap items-center gap-2 text-sm">
-                                            {blk.steps.map((step, stepIdx) => (
-                                              <span key={stepIdx} className="inline-flex items-center gap-1.5">
-                                                <span className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-2.5 py-1">
-                                                  <strong className="font-mono-num text-[var(--note-accent)]">
-                                                    {stepIdx + 1}.
-                                                  </strong>{' '}
-                                                  {renderRichInline(step)}
-                                                </span>
-                                                {stepIdx < blk.steps.length - 1 && (
-                                                  <span className="text-[var(--note-accent)]">→</span>
-                                                )}
-                                              </span>
-                                            ))}
-                                          </div>
-                                        </div>
+                                          compact
+                                          label={blk.label}
+                                          steps={blk.steps}
+                                        />
                                       );
                                     }
                                     if (blk.kind === 'paragraph') {

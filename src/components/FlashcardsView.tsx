@@ -25,6 +25,8 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+import { getByokConfig } from '../lib/byokStore';
+import { gradeAnswerViaVercelOrLocal } from '../lib/liveQuizCloud';
 import { smartSemanticFallbackCheck } from '../lib/quizGrader';
 import { applyFlashcardReview, makeId } from '../lib/workspaceStore';
 import { StudyFlashcard, WorkspaceData, WorkspaceTab } from '../types';
@@ -204,6 +206,9 @@ export function FlashcardsView({
   const [typedAnswer, setTypedAnswer] = useState<string>('');
   const [writtenSnapshot, setWrittenSnapshot] = useState<string>('');
   const [typedCorrect, setTypedCorrect] = useState<boolean | null>(null);
+  const [typedChecking, setTypedChecking] = useState<boolean>(false);
+  const [typedReason, setTypedReason] = useState<string | null>(null);
+  const gradeSeqRef = useRef<number>(0);
   const [animPhase, setAnimPhase] = useState<'in' | 'out-l' | 'out-r' | 'idle'>('in');
   const [busy, setBusy] = useState<boolean>(false);
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
@@ -478,12 +483,15 @@ export function FlashcardsView({
   }, [menuOpen]);
 
   const resetCardFaceForCurrent = useCallback(() => {
+    gradeSeqRef.current += 1;
     setFlipped(false);
     setSeenAnswer(false);
     setShowHint(false);
     setTypedAnswer('');
     setWrittenSnapshot('');
     setTypedCorrect(null);
+    setTypedChecking(false);
+    setTypedReason(null);
   }, []);
 
   const launchSession = useCallback(
@@ -522,11 +530,37 @@ export function FlashcardsView({
         setSeenAnswer(true);
         const trimmed = typedAnswer.trim();
         setWrittenSnapshot(trimmed);
+        setTypedReason(null);
         if (optTypeFirst && trimmed) {
           const targetAns = optReverse ? currentCard.q : currentCard.a;
-          setTypedCorrect(smartSemanticFallbackCheck(trimmed, targetAns));
+          const promptQ = optReverse ? currentCard.a : currentCard.q;
+          const localHit = smartSemanticFallbackCheck(trimmed, targetAns);
+          if (localHit) {
+            setTypedCorrect(true);
+            setTypedChecking(false);
+          } else if (getByokConfig()?.apiKey) {
+            const seq = ++gradeSeqRef.current;
+            setTypedCorrect(null);
+            setTypedChecking(true);
+            void gradeAnswerViaVercelOrLocal(promptQ, targetAns, trimmed)
+              .then((outcome) => {
+                if (gradeSeqRef.current !== seq) return;
+                setTypedCorrect(outcome.correct);
+                setTypedReason(outcome.reason || null);
+                setTypedChecking(false);
+              })
+              .catch(() => {
+                if (gradeSeqRef.current !== seq) return;
+                setTypedCorrect(false);
+                setTypedChecking(false);
+              });
+          } else {
+            setTypedCorrect(false);
+            setTypedChecking(false);
+          }
         } else {
           setTypedCorrect(null);
+          setTypedChecking(false);
         }
       }
       return next;
@@ -1950,21 +1984,34 @@ export function FlashcardsView({
                     )}
 
                     {writtenSnapshot && (
-                      <div
-                        className={`mt-3 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold ${
-                          typedCorrect === true
-                            ? 'border-[var(--ok)] text-[var(--ok)]'
-                            : typedCorrect === false
-                            ? 'border-[var(--bad)] text-[var(--bad)]'
-                            : 'border-[var(--line)] text-[var(--mute)]'
-                        }`}
-                      >
-                        {typedCorrect === true ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                        ) : typedCorrect === false ? (
-                          <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                        ) : null}
-                        <span>You wrote: {writtenSnapshot}</span>
+                      <div className="mt-3 flex flex-col items-center gap-1">
+                        <div
+                          className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                            typedChecking
+                              ? 'border-[var(--e3)] text-[var(--e3)]'
+                              : typedCorrect === true
+                              ? 'border-[var(--ok)] text-[var(--ok)]'
+                              : typedCorrect === false
+                              ? 'border-[var(--bad)] text-[var(--bad)]'
+                              : 'border-[var(--line)] text-[var(--mute)]'
+                          }`}
+                        >
+                          {typedCorrect === true ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                          ) : typedCorrect === false ? (
+                            <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                          ) : null}
+                          <span>
+                            {typedChecking
+                              ? `Checking answer: ${writtenSnapshot}…`
+                              : `You wrote: ${writtenSnapshot}`}
+                          </span>
+                        </div>
+                        {typedReason && !typedChecking && (
+                          <p className="max-w-md text-center text-[11px] text-[var(--mute)]">
+                            {typedReason}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

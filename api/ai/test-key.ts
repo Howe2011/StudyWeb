@@ -18,6 +18,7 @@ interface UserAiConfig {
   apiKey: string;
   baseUrl?: string;
   model?: string;
+  verifiedModel?: string;
 }
 
 const DEFAULT_GEMINI_FORMAT_MODEL = 'gemini-3.1-flash-lite';
@@ -29,8 +30,22 @@ const BYOK_GEMINI_CANDIDATES = [
 ] as const;
 const DEFAULT_GROK_BASE_URL = 'https://api.x.ai/v1';
 const DEFAULT_GROK_MODEL = 'grok-3-mini';
+const BYOK_GROK_CANDIDATES = [
+  'grok-3-mini',
+  'grok-3-fast',
+  'grok-3',
+  'grok-2-latest',
+  'grok-2',
+] as const;
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const BYOK_OPENAI_CANDIDATES = [
+  'gpt-4o-mini',
+  'gpt-4.1-mini',
+  'gpt-4.1-nano',
+  'gpt-4o',
+  'gpt-3.5-turbo',
+] as const;
 
 function readHeader(
   headers: VercelRequest['headers'],
@@ -69,6 +84,8 @@ function parseUserAiConfig(
     baseUrl:
       (typeof obj.baseUrl === 'string' ? obj.baseUrl.trim() : '') || hdrBaseUrl || undefined,
     model: (typeof obj.model === 'string' ? obj.model.trim() : '') || hdrModel || undefined,
+    verifiedModel:
+      typeof obj.verifiedModel === 'string' ? obj.verifiedModel.trim() || undefined : undefined,
   };
 }
 
@@ -79,10 +96,73 @@ function sanitizeAllowedModel(model: string | undefined, fallback: string): stri
   return m;
 }
 
+function buildGeminiCandidateList(config: UserAiConfig): string[] {
+  const ordered: string[] = [];
+  const pushUnique = (m?: string) => {
+    const trimmed = (m || '').trim();
+    if (!trimmed || /^gemini-(?:1\.5|2\.0|pro\b)/i.test(trimmed)) return;
+    if (!ordered.includes(trimmed)) ordered.push(trimmed);
+  };
+  if (config.model?.trim()) {
+    pushUnique(sanitizeAllowedModel(config.model, DEFAULT_GEMINI_FORMAT_MODEL));
+  }
+  if (config.verifiedModel?.trim()) {
+    pushUnique(config.verifiedModel);
+  }
+  for (const m of BYOK_GEMINI_CANDIDATES) pushUnique(m);
+  return ordered;
+}
+
 function normalizeOpenAiBaseUrl(baseUrl?: string): string {
   const clean = (baseUrl || DEFAULT_OPENAI_BASE_URL).trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(clean)) return DEFAULT_OPENAI_BASE_URL;
   return clean;
+}
+
+function buildOpenAiCandidateList(config: UserAiConfig): string[] {
+  const isGrok = config.provider === 'grok';
+  const ordered: string[] = [];
+  const pushUnique = (m?: string) => {
+    const trimmed = (m || '').trim();
+    if (trimmed && !ordered.includes(trimmed)) ordered.push(trimmed);
+  };
+  if (config.model?.trim()) pushUnique(config.model);
+  if (config.verifiedModel?.trim()) pushUnique(config.verifiedModel);
+  const defaults = isGrok ? BYOK_GROK_CANDIDATES : BYOK_OPENAI_CANDIDATES;
+  for (const m of defaults) pushUnique(m);
+  return ordered;
+}
+
+async function discoverOpenAiModels(
+  baseUrl: string,
+  apiKey: string,
+  alreadyTried: Set<string>
+): Promise<string[]> {
+  try {
+    const res = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { data?: Array<{ id?: string }> };
+    if (!Array.isArray(data?.data)) return [];
+    return data.data
+      .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
+      .filter(
+        (id) =>
+          Boolean(id) &&
+          !alreadyTried.has(id) &&
+          !/embed|whisper|tts|dall-e|moderation|realtime|transcribe|audio|image|sora|flux|rerank/i.test(
+            id
+          )
+      )
+      .slice(0, 4);
+  } catch {
+    return [];
+  }
 }
 
 function getGeminiThinkingConfig(model: string): {
@@ -141,13 +221,26 @@ function detectKeyProviderMismatch(config: UserAiConfig): string | null {
   return null;
 }
 
-function isModelNotFoundError(err: unknown): boolean {
+function shouldFallbackToNextModel(err: unknown, config: UserAiConfig): boolean {
+  if (detectKeyProviderMismatch(config)) return false;
   const msg = err instanceof Error ? err.message : String(err || '');
-  return (
-    /404|NOT_FOUND|not found|is not supported for generateContent|does not exist|unknown model/i.test(
+  if (err instanceof Error && err.name === 'AbortError' && !/timed out/i.test(msg)) {
+    return false;
+  }
+  if (
+    /API_KEY_INVALID|API key not valid|Incorrect API key|invalid x-api-key|invalid_api_key|AuthenticationError|\b401\b|Unauthorized/i.test(
       msg
-    ) && !/API_KEY_INVALID|API key not valid|invalid api key/i.test(msg)
-  );
+    )
+  ) {
+    return false;
+  }
+  if (/ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ERR_INVALID_URL/i.test(msg)) {
+    return false;
+  }
+  if (/insufficient_quota|exceeded your current quota|billing.*not active|account.*deactivated/i.test(msg)) {
+    return false;
+  }
+  return true;
 }
 
 function extractReadableErrorMessage(err: unknown, config: UserAiConfig): string {
@@ -240,10 +333,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           headers: { 'User-Agent': 'aistudio-build' },
         },
       });
-      const customModel = config.model?.trim()
-        ? sanitizeAllowedModel(config.model, DEFAULT_GEMINI_FORMAT_MODEL)
-        : '';
-      const candidates = customModel ? [customModel] : [...BYOK_GEMINI_CANDIDATES];
+      const candidates = buildGeminiCandidateList(config);
 
       let lastErr: unknown = null;
       for (let i = 0; i < candidates.length; i++) {
@@ -267,7 +357,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return;
         } catch (err) {
           lastErr = err;
-          if (i < candidates.length - 1 && isModelNotFoundError(err)) {
+          if (i < candidates.length - 1 && shouldFallbackToNextModel(err, config)) {
             continue;
           }
           throw err;
@@ -278,30 +368,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const isGrok = config.provider === 'grok';
     const baseUrl = isGrok ? DEFAULT_GROK_BASE_URL : normalizeOpenAiBaseUrl(config.baseUrl);
-    const model =
-      (config.model || (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL)).trim() ||
-      (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL);
+    const candidates = buildOpenAiCandidateList(config);
+    const triedSet = new Set(candidates);
+    let discoveredExtra = false;
 
-    const apiRes = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      signal: AbortSignal.timeout(15000),
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: isGrok ? 256 : 64,
-        messages: [{ role: 'user', content: 'Reply OK' }],
-      }),
-    });
+    let lastErr: unknown = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const model = candidates[i];
+      try {
+        const apiRes = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(12000),
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${config.apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: isGrok ? 256 : 64,
+            messages: [{ role: 'user', content: 'Reply OK' }],
+          }),
+        });
 
-    if (!apiRes.ok) {
-      const errText = await apiRes.text().catch(() => '');
-      throw new Error(`HTTP ${apiRes.status}: ${errText}`);
+        if (!apiRes.ok) {
+          const errText = await apiRes.text().catch(() => '');
+          throw new Error(`HTTP ${apiRes.status}: ${errText}`);
+        }
+
+        res.status(200).json({ ok: true, provider: config.provider, model });
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (!shouldFallbackToNextModel(err, config)) {
+          throw err;
+        }
+        if (i === candidates.length - 1 && !discoveredExtra && !isGrok) {
+          discoveredExtra = true;
+          const extraModels = await discoverOpenAiModels(baseUrl, config.apiKey, triedSet);
+          for (const em of extraModels) {
+            triedSet.add(em);
+            candidates.push(em);
+          }
+        }
+        if (i < candidates.length - 1) {
+          continue;
+        }
+        throw err;
+      }
     }
-
-    res.status(200).json({ ok: true, provider: config.provider, model });
+    throw lastErr;
   } catch (err) {
     res.status(400).json({ ok: false, error: extractReadableErrorMessage(err, config) });
   }

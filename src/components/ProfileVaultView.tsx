@@ -618,13 +618,22 @@ export function ProfileVaultView({
       if (!res.ok || !data.ok) {
         throw new Error(data.error || `Key verification failed (HTTP ${res.status}).`);
       }
+      const switchedFromCustom =
+        Boolean(payload.model && data.model && payload.model !== data.model);
+      const savedModel = switchedFromCustom ? data.model : payload.model;
+      if (switchedFromCustom && data.model) {
+        setByokModelInput(data.model);
+      }
       saveByokConfig({
         ...payload,
+        model: savedModel,
         verifiedModel: data.model || undefined,
       });
       setByokStatus({
         ok: true,
-        msg: `Verified and saved (${data.model || DEFAULT_GEMINI_FORMAT_MODEL}). Ready for AI Autoformat & Live Quiz marking.`,
+        msg: switchedFromCustom
+          ? `Model "${payload.model}" didn't work for this API — auto-switched to "${data.model}" and saved.`
+          : `Verified and saved (${data.model || DEFAULT_GEMINI_FORMAT_MODEL}). Auto-switches models automatically if one is unavailable.`,
       });
     } catch (err) {
       setByokStatus({
@@ -910,10 +919,10 @@ export function ProfileVaultView({
                       onChange={(e) => setByokModelInput(e.target.value)}
                       placeholder={
                         byokProvider === 'gemini'
-                          ? `Auto (${DEFAULT_GEMINI_FORMAT_MODEL} / gemini-2.5-flash)`
+                          ? `Auto-switch (${DEFAULT_GEMINI_FORMAT_MODEL} → fallbacks)`
                           : byokProvider === 'grok'
-                          ? `Default: ${DEFAULT_GROK_MODEL}`
-                          : `Default: ${DEFAULT_OPENAI_MODEL}`
+                          ? `Auto-switch (${DEFAULT_GROK_MODEL} → fallbacks)`
+                          : `Auto-switch (${DEFAULT_OPENAI_MODEL} → fallbacks)`
                       }
                       className="sd-input font-mono-num mt-1 text-xs"
                     />

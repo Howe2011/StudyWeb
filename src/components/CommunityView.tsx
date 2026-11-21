@@ -28,6 +28,7 @@ import {
 import { getTableSurfaceStyles, renderRichInline } from '../lib/inlineRichText';
 import { NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints } from '../lib/noteFormat';
+import { FlowchartBlock } from './FlowchartBlock';
 import {
   SharedItemType,
   SharedStudyItem,
@@ -206,33 +207,11 @@ function StructuredNoteReader({
                   }
                   if (blk.kind === 'flow') {
                     return (
-                      <div
+                      <FlowchartBlock
                         key={i}
-                        className="my-3 rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_24%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_4%,var(--card))] p-4"
-                      >
-                        {blk.label && (
-                          <div className="mb-2.5 text-sm font-bold text-[var(--note-accent)]">
-                            {blk.label}
-                          </div>
-                        )}
-                        <div className="flex flex-wrap items-center gap-2 text-[14.5px]">
-                          {blk.steps.map((step, sIdx) => (
-                            <span key={sIdx} className="inline-flex items-center gap-2">
-                              <span className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5">
-                                <strong className="font-mono-num text-[var(--note-accent)]">
-                                  {sIdx + 1}.
-                                </strong>{' '}
-                                {renderRichInline(step)}
-                              </span>
-                              {sIdx < blk.steps.length - 1 && (
-                                <span className="text-[var(--note-accent)]" aria-hidden="true">
-                                  →
-                                </span>
-                              )}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
+                        label={blk.label}
+                        steps={blk.steps}
+                      />
                     );
                   }
                   if (blk.kind === 'paragraph') {

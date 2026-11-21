@@ -6,6 +6,7 @@ import { CalendarView } from './components/CalendarView';
 import { CommunityTypeFilter, CommunityView } from './components/CommunityView';
 import { CustomizeModal } from './components/CustomizeModal';
 import { FlashcardsView } from './components/FlashcardsView';
+import { FloatingStopwatchTab } from './components/FloatingStopwatchTab';
 import { HomeDashboardView } from './components/HomeDashboardView';
 import { LiveQuizView } from './components/LiveQuizView';
 import { NotesStudioView } from './components/NotesStudioView';
@@ -66,6 +67,7 @@ import {
   DecryptedProfile,
   LiveTimerState,
   PlannerSubTab,
+  StopwatchState,
   StudyTopic,
   UserAccountDoc,
   UserActivityDoc,
@@ -272,6 +274,64 @@ export default function App() {
   const [timerRunning, setTimerRunning] = useState<boolean>(false);
   const [timerSubject, setTimerSubject] = useState<string>('General Study');
 
+  // Global persistent Stopwatch (follows user across all tabs)
+  const [swState, setSwState] = useState<{
+    running: boolean;
+    accumulatedMs: number;
+    startedAtMs: number | null;
+    subjectId?: string;
+    subjectName: string;
+    topicId?: string;
+    topicName?: string;
+    laps: number[];
+    dismissed: boolean;
+  }>(() => {
+    try {
+      const raw = localStorage.getItem('studydeck_stopwatch_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<{
+          running: boolean;
+          accumulatedMs: number;
+          startedAtMs: number | null;
+          subjectId?: string;
+          subjectName: string;
+          topicId?: string;
+          topicName?: string;
+          laps: number[];
+          dismissed: boolean;
+        }>;
+        return {
+          running: Boolean(parsed.running && typeof parsed.startedAtMs === 'number'),
+          accumulatedMs: Number(parsed.accumulatedMs) || 0,
+          startedAtMs:
+            parsed.running && typeof parsed.startedAtMs === 'number' ? parsed.startedAtMs : null,
+          subjectId: typeof parsed.subjectId === 'string' ? parsed.subjectId : undefined,
+          subjectName:
+            typeof parsed.subjectName === 'string' && parsed.subjectName.trim()
+              ? parsed.subjectName
+              : 'General Study',
+          topicId: typeof parsed.topicId === 'string' ? parsed.topicId : undefined,
+          topicName: typeof parsed.topicName === 'string' ? parsed.topicName : undefined,
+          laps: Array.isArray(parsed.laps) ? parsed.laps.map(Number).filter(Number.isFinite) : [],
+          dismissed: Boolean(parsed.dismissed),
+        };
+      }
+    } catch {
+      // ignore storage read error
+    }
+    return {
+      running: false,
+      accumulatedMs: 0,
+      startedAtMs: null,
+      subjectName: 'General Study',
+      laps: [],
+      dismissed: false,
+    };
+  });
+  const [swNowMs, setSwNowMs] = useState<number>(() => Date.now());
+  const [swToast, setSwToast] = useState<string | null>(null);
+  const [plannerTimerMode, setPlannerTimerMode] = useState<'timer' | 'pomo' | 'stopwatch'>('timer');
+
   const cloudHydratedRef = useRef<boolean>(false);
   const syncTimerRef = useRef<number | null>(null);
   const latestWorkspaceRef = useRef<WorkspaceData>(workspace);
@@ -459,6 +519,204 @@ export default function App() {
     },
     [timerDurationMins]
   );
+
+  // Global Stopwatch tick & persistence
+  useEffect(() => {
+    try {
+      localStorage.setItem('studydeck_stopwatch_v1', JSON.stringify(swState));
+    } catch {
+      // ignore
+    }
+  }, [swState]);
+
+  useEffect(() => {
+    if (!swState.running) return;
+    setSwNowMs(Date.now());
+    const id = window.setInterval(() => {
+      setSwNowMs(Date.now());
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [swState.running]);
+
+  const stopwatch: StopwatchState = useMemo(() => {
+    const activeMs =
+      swState.running && swState.startedAtMs
+        ? Math.max(0, swNowMs - swState.startedAtMs)
+        : 0;
+    const elapsedSec = Math.max(0, Math.floor((swState.accumulatedMs + activeMs) / 1000));
+    const hrs = Math.floor(elapsedSec / 3600);
+    const mins = Math.floor((elapsedSec % 3600) / 60);
+    const secs = elapsedSec % 60;
+    const text =
+      hrs > 0
+        ? `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+        : `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return {
+      running: swState.running,
+      elapsedSec,
+      text,
+      subjectId: swState.subjectId,
+      subjectName: swState.subjectName,
+      topicId: swState.topicId,
+      topicName: swState.topicName,
+      laps: swState.laps,
+      dismissed: swState.dismissed,
+    };
+  }, [swState, swNowMs]);
+
+  const handleToggleStopwatch = useCallback(() => {
+    const now = Date.now();
+    setSwNowMs(now);
+    setSwState((prev) => {
+      if (prev.running) {
+        const delta = prev.startedAtMs ? Math.max(0, now - prev.startedAtMs) : 0;
+        return {
+          ...prev,
+          running: false,
+          accumulatedMs: prev.accumulatedMs + delta,
+          startedAtMs: null,
+          dismissed: false,
+        };
+      }
+      return {
+        ...prev,
+        running: true,
+        startedAtMs: now,
+        dismissed: false,
+      };
+    });
+  }, []);
+
+  const handleStartStopwatch = useCallback(
+    (ctx: { subjectId?: string; subjectName?: string; topicId?: string; topicName?: string }) => {
+      const now = Date.now();
+      setSwNowMs(now);
+      setSwState((prev) => {
+        const nextSubjName = (ctx.subjectName || 'General Study').trim() || 'General Study';
+        const sameContext =
+          (ctx.subjectId || '') === (prev.subjectId || '') &&
+          (ctx.topicId || '') === (prev.topicId || '');
+
+        if (sameContext) {
+          if (prev.running) {
+            const delta = prev.startedAtMs ? Math.max(0, now - prev.startedAtMs) : 0;
+            return {
+              ...prev,
+              running: false,
+              accumulatedMs: prev.accumulatedMs + delta,
+              startedAtMs: null,
+              dismissed: false,
+            };
+          }
+          return {
+            ...prev,
+            running: true,
+            startedAtMs: now,
+            dismissed: false,
+          };
+        }
+
+        // If stopwatch is already running for the same subject without a specific topic, attach the chosen topic seamlessly
+        if (
+          prev.running &&
+          ctx.topicId &&
+          !prev.topicId &&
+          ctx.subjectId &&
+          ctx.subjectId === prev.subjectId
+        ) {
+          return {
+            ...prev,
+            topicId: ctx.topicId,
+            topicName: ctx.topicName,
+            dismissed: false,
+          };
+        }
+
+        return {
+          running: true,
+          accumulatedMs: 0,
+          startedAtMs: now,
+          subjectId: ctx.subjectId,
+          subjectName: nextSubjName,
+          topicId: ctx.topicId,
+          topicName: ctx.topicName,
+          laps: [],
+          dismissed: false,
+        };
+      });
+    },
+    []
+  );
+
+  const handleLapStopwatch = useCallback(() => {
+    const now = Date.now();
+    setSwState((prev) => {
+      const activeMs = prev.running && prev.startedAtMs ? Math.max(0, now - prev.startedAtMs) : 0;
+      const sec = Math.floor((prev.accumulatedMs + activeMs) / 1000);
+      if (!prev.running && sec === 0) return prev;
+      return { ...prev, laps: [sec, ...prev.laps] };
+    });
+  }, []);
+
+  const handleResetStopwatch = useCallback(() => {
+    setSwState((prev) => ({
+      ...prev,
+      running: false,
+      accumulatedMs: 0,
+      startedAtMs: null,
+      laps: [],
+      dismissed: false,
+    }));
+  }, []);
+
+  const handleStopAndLogStopwatch = useCallback((): number => {
+    const now = Date.now();
+    const activeMs =
+      swState.running && swState.startedAtMs ? Math.max(0, now - swState.startedAtMs) : 0;
+    const totalSec = Math.floor((swState.accumulatedMs + activeMs) / 1000);
+    const loggedMins = totalSec >= 30 ? Math.max(1, Math.round(totalSec / 60)) : 0;
+    if (loggedMins > 0) {
+      updateWorkspace((ws) => addLoggedStudyMinutes(ws, loggedMins));
+      setSwToast(`Logged +${loggedMins}m to your study streak!`);
+      window.setTimeout(() => setSwToast(null), 2800);
+    }
+    setSwState((prev) => ({
+      ...prev,
+      running: false,
+      accumulatedMs: 0,
+      startedAtMs: null,
+      laps: [],
+      dismissed: false,
+    }));
+    return loggedMins;
+  }, [swState.running, swState.startedAtMs, swState.accumulatedMs, updateWorkspace]);
+
+  const handleDismissStopwatch = useCallback(() => {
+    const now = Date.now();
+    setSwState((prev) => {
+      const delta = prev.running && prev.startedAtMs ? Math.max(0, now - prev.startedAtMs) : 0;
+      return {
+        ...prev,
+        running: false,
+        accumulatedMs: prev.accumulatedMs + delta,
+        startedAtMs: null,
+        dismissed: true,
+      };
+    });
+  }, []);
+
+  const handleChangeStopwatchSubject = useCallback((subjectName: string, subjectId?: string) => {
+    setSwState((prev) => {
+      const cleanName = subjectName.trim() || 'General Study';
+      const subjectChanged = cleanName !== prev.subjectName || subjectId !== prev.subjectId;
+      return {
+        ...prev,
+        subjectName: cleanName,
+        subjectId,
+        ...(subjectChanged ? { topicId: undefined, topicName: undefined } : {}),
+      };
+    });
+  }, []);
 
   const formatAccountLoadError = useCallback((err: unknown): string => {
     const raw = err instanceof Error ? err.message : String(err || '');
@@ -1145,6 +1403,8 @@ export default function App() {
             <SubjectsView
               workspace={workspace}
               initialQuickAddOpen={openQuickAddSignal}
+              stopwatch={stopwatch}
+              onStartStopwatch={handleStartStopwatch}
               onUpdateWorkspace={updateWorkspace}
               onOpenSubjectNotes={(subjectId, topicId) =>
                 handleNavigate('notes', { subjectId, topicId })
@@ -1209,6 +1469,13 @@ export default function App() {
               onChangeTimerSubject={setTimerSubject}
               onToggleTimer={handleToggleTimer}
               onResetTimer={handleResetTimer}
+              stopwatch={stopwatch}
+              onToggleStopwatch={handleToggleStopwatch}
+              onLapStopwatch={handleLapStopwatch}
+              onResetStopwatch={handleResetStopwatch}
+              onStopAndLogStopwatch={handleStopAndLogStopwatch}
+              onChangeStopwatchSubject={handleChangeStopwatchSubject}
+              onTimerModeChange={setPlannerTimerMode}
             />
           )}
 
@@ -1341,6 +1608,22 @@ export default function App() {
         onCreateVault={handleCreateVault}
         onUnlockWithPassphrase={handleUnlockWithPassphrase}
         onUnlockWithRecovery={handleUnlockWithRecovery}
+      />
+
+      <FloatingStopwatchTab
+        stopwatch={stopwatch}
+        hidden={
+          activeTab === 'planner' &&
+          plannerSubTab === 'timer' &&
+          plannerTimerMode === 'stopwatch'
+        }
+        toastMessage={swToast}
+        onToggle={handleToggleStopwatch}
+        onLap={handleLapStopwatch}
+        onReset={handleResetStopwatch}
+        onStopAndLog={handleStopAndLogStopwatch}
+        onDismiss={handleDismissStopwatch}
+        onOpenPlannerTimer={() => handleNavigate('planner', { plannerTab: 'timer' })}
       />
 
       <OfflineIndicator />

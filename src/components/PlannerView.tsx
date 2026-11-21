@@ -17,6 +17,7 @@ import { addLoggedStudyMinutes, makeId } from '../lib/workspaceStore';
 import {
   LiveTimerState,
   PlannerSubTab,
+  StopwatchState,
   StudySubject,
   TodoTaskItem,
   WorkspaceData,
@@ -34,6 +35,13 @@ interface PlannerViewProps {
   onChangeTimerSubject: (s: string) => void;
   onToggleTimer: () => void;
   onResetTimer: (mins?: number) => void;
+  stopwatch: StopwatchState;
+  onToggleStopwatch: () => void;
+  onLapStopwatch: () => void;
+  onResetStopwatch: () => void;
+  onStopAndLogStopwatch: () => number;
+  onChangeStopwatchSubject: (subjectName: string, subjectId?: string) => void;
+  onTimerModeChange?: (mode: 'timer' | 'pomo' | 'stopwatch') => void;
 }
 
 type TodoCategory = 'exam' | 'hw' | 'oth';
@@ -201,9 +209,10 @@ function parseSmartTodo(
 
 function formatClock(totalSec: number): string {
   const s = Math.max(0, Math.floor(totalSec));
-  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const hrs = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
   const ss = String(s % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
+  return hrs > 0 ? `${hrs}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 export function PlannerView({
@@ -218,6 +227,13 @@ export function PlannerView({
   onChangeTimerSubject,
   onToggleTimer,
   onResetTimer,
+  stopwatch,
+  onToggleStopwatch,
+  onLapStopwatch,
+  onResetStopwatch,
+  onStopAndLogStopwatch,
+  onChangeStopwatchSubject,
+  onTimerModeChange,
 }: PlannerViewProps) {
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const effectiveSubTab: 'todo' | 'timer' = subTab === 'timer' ? 'timer' : 'todo';
@@ -241,23 +257,18 @@ export function PlannerView({
   );
 
   // Extended Focus Timer modes (Timer / Pomodoro / Stopwatch)
-  const [timerMode, setTimerMode] = useState<TimerEngineMode>('timer');
+  const [timerMode, setTimerMode] = useState<TimerEngineMode>(() =>
+    stopwatch.running || stopwatch.elapsedSec > 0 ? 'stopwatch' : 'timer'
+  );
   const [pomoFocusMins, setPomoFocusMins] = useState(25);
   const [pomoBreakMins, setPomoBreakMins] = useState(5);
   const [pomoPhase, setPomoPhase] = useState<'focus' | 'break'>('focus');
   const [pomoRound, setPomoRound] = useState(1);
-  const [swSeconds, setSwSeconds] = useState(0);
-  const [swRunning, setSwRunning] = useState(false);
-  const [swLaps, setSwLaps] = useState<number[]>([]);
   const [timerBanner, setTimerBanner] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!swRunning) return;
-    const id = window.setInterval(() => {
-      setSwSeconds((s) => s + 1);
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [swRunning]);
+    onTimerModeChange?.(timerMode);
+  }, [timerMode, onTimerModeChange]);
 
   const subjById = useMemo(
     () => new Map(workspace.subjects.map((s) => [s.id, s])),
@@ -504,13 +515,11 @@ export function PlannerView({
 
   const handleStopAndLog = () => {
     if (timerMode === 'stopwatch') {
-      const mins = Math.max(1, Math.round(swSeconds / 60));
-      setSwRunning(false);
-      if (swSeconds >= 30) {
-        handleLogFocusMinutes(mins);
+      const loggedMins = onStopAndLogStopwatch();
+      if (loggedMins > 0) {
+        setTimerBanner(`Logged +${loggedMins} minutes to your study streak!`);
+        window.setTimeout(() => setTimerBanner(null), 2800);
       }
-      setSwSeconds(0);
-      setSwLaps([]);
     } else {
       const elapsedSec = timerDurationMins * 60 - timerRemainingSec;
       const mins = Math.max(1, Math.round(elapsedSec / 60));
@@ -522,7 +531,7 @@ export function PlannerView({
   };
 
   const mmssMain =
-    timerMode === 'stopwatch' ? formatClock(swSeconds) : formatClock(timerRemainingSec);
+    timerMode === 'stopwatch' ? stopwatch.text : formatClock(timerRemainingSec);
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--bg)]">
@@ -1268,7 +1277,9 @@ export function PlannerView({
                 <Timer className="h-4 w-4" aria-hidden="true" />
                 <span>
                   {timerMode === 'stopwatch'
-                    ? 'Stopwatch'
+                    ? stopwatch.topicName
+                      ? `Stopwatch · ${stopwatch.topicName}`
+                      : 'Stopwatch'
                     : timerMode === 'pomo'
                     ? `${pomoPhase === 'focus' ? 'Focus' : 'Break'} · Round ${pomoRound}`
                     : 'Countdown Timer'}
@@ -1283,8 +1294,13 @@ export function PlannerView({
                 <label className="block text-left text-xs font-semibold text-[var(--mute)]">
                   Focus Subject
                   <select
-                    value={timerSubject}
-                    onChange={(e) => onChangeTimerSubject(e.target.value)}
+                    value={timerMode === 'stopwatch' ? stopwatch.subjectName : timerSubject}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      onChangeTimerSubject(val);
+                      const matched = workspace.subjects.find((s) => s.name === val);
+                      onChangeStopwatchSubject(val, matched?.id);
+                    }}
                     className="sd-input mt-1 text-sm"
                   >
                     <option value="General Study">General Study</option>
@@ -1356,10 +1372,10 @@ export function PlannerView({
                   <>
                     <button
                       type="button"
-                      onClick={() => setSwRunning((r) => !r)}
+                      onClick={onToggleStopwatch}
                       className="sd-btn-pri px-5 py-2.5 text-sm"
                     >
-                      {swRunning ? (
+                      {stopwatch.running ? (
                         <>
                           <Pause className="h-4 w-4" aria-hidden="true" />
                           <span>Pause</span>
@@ -1367,14 +1383,14 @@ export function PlannerView({
                       ) : (
                         <>
                           <Play className="h-4 w-4" aria-hidden="true" />
-                          <span>Start</span>
+                          <span>{stopwatch.elapsedSec > 0 ? 'Resume' : 'Start'}</span>
                         </>
                       )}
                     </button>
                     <button
                       type="button"
-                      disabled={!swRunning && swSeconds === 0}
-                      onClick={() => setSwLaps((prev) => [swSeconds, ...prev])}
+                      disabled={!stopwatch.running && stopwatch.elapsedSec === 0}
+                      onClick={onLapStopwatch}
                       className="sd-btn px-4 py-2.5 text-sm"
                     >
                       Lap
@@ -1385,6 +1401,15 @@ export function PlannerView({
                       className="sd-btn px-4 py-2.5 text-sm"
                     >
                       Stop &amp; Log
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!stopwatch.running && stopwatch.elapsedSec === 0}
+                      onClick={onResetStopwatch}
+                      className="sd-btn px-3.5 py-2.5 text-sm"
+                    >
+                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                      <span>Reset</span>
                     </button>
                   </>
                 ) : (
@@ -1452,11 +1477,11 @@ export function PlannerView({
                 </button>
               </div>
 
-              {timerMode === 'stopwatch' && swLaps.length > 0 && (
+              {timerMode === 'stopwatch' && stopwatch.laps.length > 0 && (
                 <div className="mx-auto max-w-xs space-y-1 border-t border-[var(--line)] pt-3 text-xs text-[var(--mute)]">
-                  {swLaps.map((sec, idx) => (
+                  {stopwatch.laps.map((sec, idx) => (
                     <div key={idx} className="font-mono-num flex justify-between">
-                      <span>Lap {swLaps.length - idx}</span>
+                      <span>Lap {stopwatch.laps.length - idx}</span>
                       <span className="font-bold text-[var(--ink)]">{formatClock(sec)}</span>
                     </div>
                   ))}

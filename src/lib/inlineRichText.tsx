@@ -23,12 +23,12 @@ export const NOTE_TEXT_COLORS: ColorSwatchOption[] = [
 
 export const NOTE_HIGHLIGHT_COLORS: ColorSwatchOption[] = [
   { id: 'none', label: 'No Highlight', value: '', preview: 'transparent' },
-  { id: 'yellow', label: 'Sun Yellow', value: 'rgba(250, 204, 21, 0.34)', preview: '#FDE047' },
-  { id: 'green', label: 'Mint Green', value: 'rgba(74, 222, 128, 0.28)', preview: '#86EFAC' },
-  { id: 'blue', label: 'Ice Blue', value: 'rgba(56, 189, 248, 0.28)', preview: '#7DD3FC' },
-  { id: 'purple', label: 'Soft Lavender', value: 'rgba(192, 132, 252, 0.28)', preview: '#D8B4FE' },
-  { id: 'rose', label: 'Warm Rose', value: 'rgba(251, 113, 133, 0.28)', preview: '#FDA4AF' },
-  { id: 'orange', label: 'Apricot', value: 'rgba(251, 146, 60, 0.28)', preview: '#FDBA74' },
+  { id: 'yellow', label: 'Sun Yellow', value: 'rgba(253, 224, 71, 0.78)', preview: '#FDE047' },
+  { id: 'green', label: 'Mint Green', value: 'rgba(134, 239, 172, 0.74)', preview: '#86EFAC' },
+  { id: 'blue', label: 'Ice Blue', value: 'rgba(125, 211, 252, 0.74)', preview: '#7DD3FC' },
+  { id: 'purple', label: 'Soft Lavender', value: 'rgba(216, 180, 254, 0.74)', preview: '#D8B4FE' },
+  { id: 'rose', label: 'Warm Rose', value: 'rgba(253, 164, 175, 0.76)', preview: '#FDA4AF' },
+  { id: 'orange', label: 'Apricot', value: 'rgba(253, 186, 116, 0.76)', preview: '#FDBA74' },
 ];
 
 export const NOTE_SURFACE_COLORS: Array<{
@@ -114,14 +114,26 @@ export function getTableSurfaceStyles(color?: string): {
 }
 
 function isOpaqueLightColor(color: string): boolean {
-  const hex = color.match(/^#([0-9a-f]{6})$/i);
-  if (!hex) return false;
-  const n = parseInt(hex[1], 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return lum > 0.65;
+  const trimmed = color.trim();
+  const hex = trimmed.match(/^#([0-9a-f]{6})$/i);
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return lum > 0.55;
+  }
+  const rgba = trimmed.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([0-9.]+))?\s*\)$/i);
+  if (rgba) {
+    const r = Number(rgba[1]);
+    const g = Number(rgba[2]);
+    const b = Number(rgba[3]);
+    const a = rgba[4] !== undefined ? Number(rgba[4]) : 1;
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return lum > 0.58 && a >= 0.45;
+  }
+  return false;
 }
 
 const INLINE_TOKEN_RE =
@@ -170,10 +182,10 @@ function parseInlineNodes(input: string, keyPrefix: string, depth = 0): ReactNod
         safeBg ? (
           <mark
             key={tokenKey}
-            className="rounded px-1 py-0.5"
+            className="sd-mark-term rounded-[5px] px-1.5 py-0.5 font-bold"
             style={{
               backgroundColor: safeBg,
-              color: isOpaqueLightColor(safeBg) ? '#17202E' : 'inherit',
+              color: isOpaqueLightColor(safeBg) ? '#111827' : 'inherit',
             }}
           >
             {inner}
@@ -190,7 +202,7 @@ function parseInlineNodes(input: string, keyPrefix: string, depth = 0): ReactNod
       );
     } else if (match[7] !== undefined) {
       out.push(
-        <strong key={tokenKey} className="font-semibold text-[var(--ink)]">
+        <strong key={tokenKey} className="sd-bold-term font-extrabold">
           {parseInlineNodes(match[7], tokenKey, depth + 1)}
         </strong>
       );

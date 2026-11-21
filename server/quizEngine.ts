@@ -5,16 +5,25 @@ import { fastLocalQuizCheck, smartSemanticFallbackCheck } from '../src/lib/quizG
 import { getDeckById, type StoredQuizCard } from './quizDb.ts';
 
 import {
+  buildGeminiCandidateList,
+  buildOpenAiCandidateList,
   createGeminiClient,
+  DEFAULT_GROK_BASE_URL,
+  discoverOpenAiModels,
+  normalizeOpenAiBaseUrl,
   parseUserAiConfig,
+  shouldFallbackToNextModel,
   type UserAiConfig,
 } from './aiRouter.ts';
 
 const GRADING_MODEL_CANDIDATES = [
   'gemini-3.1-flash-lite',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
   'gemini-4-hydrogen',
 ] as const;
 let cachedWorkingModel: string | null = null;
+const cachedWorkingOpenAiModelByKey = new Map<string, string>();
 let genAiModulePromise: Promise<typeof import('@google/genai')> | null = null;
 
 function loadGenAiModule(): Promise<typeof import('@google/genai')> {
@@ -34,46 +43,94 @@ async function gradeViaOpenAiCompatible(
   config: UserAiConfig,
   systemInstruction: string,
   userContent: string
-): Promise<string> {
+): Promise<{ text: string; model: string }> {
   const isGrok = config.provider === 'grok';
-  const baseUrl = (
-    isGrok ? 'https://api.x.ai/v1' : config.baseUrl || 'https://api.openai.com/v1'
-  )
-    .trim()
-    .replace(/\/+$/, '');
-  const model =
-    (config.model || (isGrok ? 'grok-3-mini' : 'gpt-4o-mini')).trim() ||
-    (isGrok ? 'grok-3-mini' : 'gpt-4o-mini');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
-  try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        response_format: { type: 'json_object' },
-        max_tokens: isGrok ? 512 : 180,
-        messages: [
-          { role: 'system', content: systemInstruction },
-          { role: 'user', content: userContent },
-        ],
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      throw new Error(`OpenAI-compatible grading HTTP ${res.status}`);
+  const baseUrl = isGrok ? DEFAULT_GROK_BASE_URL : normalizeOpenAiBaseUrl(config.baseUrl);
+  const cacheKey = `${config.provider}|${baseUrl}|${config.apiKey.slice(-8)}`;
+  const cachedModel = cachedWorkingOpenAiModelByKey.get(cacheKey);
+  const effectiveConfig: UserAiConfig =
+    cachedModel && !config.model ? { ...config, verifiedModel: cachedModel } : config;
+  const candidates = buildOpenAiCandidateList(effectiveConfig);
+  const triedSet = new Set(candidates);
+  let discoveredExtra = false;
+
+  let lastErr: unknown = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const model = candidates[i];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      let res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          response_format: { type: 'json_object' },
+          max_tokens: isGrok ? 512 : 180,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            { role: 'user', content: userContent },
+          ],
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok && res.status === 400) {
+        const errText = await res.text().catch(() => '');
+        if (/response_format|json_object/i.test(errText) && !/model/i.test(errText)) {
+          res = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: isGrok ? 512 : 180,
+              messages: [
+                { role: 'system', content: systemInstruction },
+                { role: 'user', content: userContent },
+              ],
+            }),
+            signal: controller.signal,
+          });
+        } else {
+          throw new Error(`HTTP ${res.status}: ${errText}`);
+        }
+      }
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}: ${errText}`);
+      }
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const text = (data.choices?.[0]?.message?.content || '').trim();
+      if (!text) {
+        throw new Error(`Empty response from ${model}`);
+      }
+      cachedWorkingOpenAiModelByKey.set(cacheKey, model);
+      return { text, model };
+    } catch (err) {
+      lastErr = err;
+      if (!shouldFallbackToNextModel(err, config)) {
+        throw err;
+      }
+      if (i === candidates.length - 1 && !discoveredExtra && !isGrok) {
+        discoveredExtra = true;
+        const extra = await discoverOpenAiModels(baseUrl, config.apiKey, triedSet);
+        for (const em of extra) {
+          triedSet.add(em);
+          candidates.push(em);
+        }
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    const data = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    return (data.choices?.[0]?.message?.content || '').trim();
-  } finally {
-    clearTimeout(timer);
   }
+  throw lastErr;
 }
 
 async function generateGradingContent(
@@ -83,14 +140,11 @@ async function generateGradingContent(
     systemInstruction: string;
     maxOutputTokens?: number;
     responseSchema: Record<string, unknown>;
-    preferredModel?: string;
+    byokConfig?: UserAiConfig | null;
   }
 ) {
-  const baseList: string[] = params.preferredModel
-    ? [
-        params.preferredModel,
-        ...GRADING_MODEL_CANDIDATES.filter((m) => m !== params.preferredModel),
-      ]
+  const baseList: string[] = params.byokConfig
+    ? buildGeminiCandidateList(params.byokConfig)
     : cachedWorkingModel
     ? [cachedWorkingModel, ...GRADING_MODEL_CANDIDATES.filter((m) => m !== cachedWorkingModel)]
     : [...GRADING_MODEL_CANDIDATES];
@@ -98,7 +152,13 @@ async function generateGradingContent(
   const { ThinkingLevel } = await loadGenAiModule();
   let lastErr: unknown = null;
   for (const model of baseList) {
-    const thinkingLevel = model === 'gemini-4-hydrogen' ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL;
+    const thinkingConfig = /^gemini-4-/i.test(model)
+      ? { thinkingLevel: ThinkingLevel.LOW }
+      : /^gemini-3\./i.test(model)
+      ? { thinkingLevel: ThinkingLevel.MINIMAL }
+      : /^gemini-2\.5-/i.test(model)
+      ? { thinkingBudget: 0 }
+      : undefined;
     try {
       const response = await Promise.race([
         ai.models.generateContent({
@@ -106,25 +166,28 @@ async function generateGradingContent(
           contents: params.contents,
           config: {
             systemInstruction: params.systemInstruction,
-            thinkingConfig: { thinkingLevel },
+            ...(thinkingConfig ? { thinkingConfig } : {}),
             ...(params.maxOutputTokens ? { maxOutputTokens: params.maxOutputTokens } : {}),
             responseMimeType: 'application/json',
             responseSchema: params.responseSchema,
           },
         }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Timeout from ${model}`)), 5000)
+          setTimeout(() => reject(new Error(`Timeout from ${model}`)), 6500)
         ),
       ]);
       if (!response.text || !response.text.trim()) {
         throw new Error(`Empty response from ${model}`);
       }
-      if (!params.preferredModel) {
+      if (!params.byokConfig) {
         cachedWorkingModel = model;
       }
       return { response, model };
     } catch (err) {
       lastErr = err;
+      if (params.byokConfig && !shouldFallbackToNextModel(err, params.byokConfig)) {
+        throw err;
+      }
     }
   }
   throw lastErr;
@@ -136,11 +199,34 @@ export interface GradeOutcome {
   latencyMs: number;
   model?: string;
   usedByok?: boolean;
+  reason?: string;
   error?: string;
 }
 
 const GRADING_SYSTEM_INSTRUCTION =
-  'You are grading a fast-paced classroom flashcard quiz. Grade generously by core factual meaning against the Official Answer. Rules: (1) Abbreviations, month+year dates omitting the exact day (e.g. "Nov 1918" for "9 November 1918"), synonyms, short phrasings, unit variations, and minor spelling typos ARE CORRECT. (2) Only mark false if the answer is factually wrong, refers to a different event/date/entity, or misses the core fact. Output ONLY strict JSON {"correct": true} or {"correct": false}.';
+  'You are a fair, experienced teacher grading a quick recall flashcard/quiz answer. Judge by core factual understanding against the Question and Official Answer — NEVER penalize valid wording differences.\n' +
+  'Mark correct=true when:\n' +
+  '- The student paraphrases, uses everyday/plain-English wording, active/passive voice, or reordered clauses that express the same meaning.\n' +
+  '- The Official Answer contains extra elaboration, parenthetical notes, or secondary details, and the student accurately captures the essential core answer.\n' +
+  '- The student gives a valid synonym, acronym/expanded form (e.g. USA/America/US, ATP, CO2/carbon dioxide), chemical formula/name, UK/US spelling, singular/plural, different tense, minor typo, or equivalent unit/number format.\n' +
+  '- Dates omit the exact day (e.g. "Nov 1918" or "1918" for "9 November 1918") unless the day itself is the explicit point of contradiction.\n' +
+  '- Both answers are factually equivalent in context of the Question.\n' +
+  'Mark correct=false ONLY if the student answer is factually wrong, names a different person/event/term/year/value, is too vague to show knowledge, or misses the main concept.\n' +
+  'Output strict JSON with a brief 1-sentence comparison "reason" BEFORE "correct": {"reason":"...", "correct": true/false}.';
+
+function parseGradeJson(rawText: string): { correct: boolean; reason?: string } {
+  try {
+    const parsed = JSON.parse(rawText) as { correct?: boolean; reason?: string };
+    return {
+      correct: Boolean(parsed?.correct),
+      reason: typeof parsed?.reason === 'string' ? parsed.reason.trim() : undefined,
+    };
+  } catch {
+    return {
+      correct: /"correct"\s*:\s*true/i.test(rawText),
+    };
+  }
+}
 
 export async function gradeSingleAnswer(
   question: string,
@@ -164,25 +250,18 @@ export async function gradeSingleAnswer(
   if (userAiConfig?.apiKey) {
     try {
       if (userAiConfig.provider === 'grok' || userAiConfig.provider === 'openai-compatible') {
-        const rawText = await gradeViaOpenAiCompatible(
+        const { text: rawText, model } = await gradeViaOpenAiCompatible(
           userAiConfig,
           GRADING_SYSTEM_INSTRUCTION,
           promptContent
         );
-        let isCorrect = false;
-        try {
-          const parsed = JSON.parse(rawText) as { correct?: boolean };
-          isCorrect = Boolean(parsed?.correct);
-        } catch {
-          isCorrect = /"correct"\s*:\s*true/i.test(rawText);
-        }
+        const parsed = parseGradeJson(rawText);
         return {
-          correct: isCorrect,
+          correct: parsed.correct,
+          reason: parsed.reason,
           source: 'ai',
           latencyMs: Date.now() - started,
-          model:
-            userAiConfig.model ||
-            (userAiConfig.provider === 'grok' ? 'grok-3-mini' : 'gpt-4o-mini'),
+          model,
           usedByok: true,
         };
       }
@@ -192,26 +271,22 @@ export async function gradeSingleAnswer(
       const { response, model } = await generateGradingContent(byokAi, {
         contents: promptContent,
         systemInstruction: GRADING_SYSTEM_INSTRUCTION,
-        maxOutputTokens: 24,
-        preferredModel: userAiConfig.model,
+        maxOutputTokens: 160,
+        byokConfig: userAiConfig,
         responseSchema: {
           type: Type.OBJECT,
           properties: {
+            reason: { type: Type.STRING },
             correct: { type: Type.BOOLEAN },
           },
-          required: ['correct'],
+          required: ['reason', 'correct'],
         },
       });
       const rawText = (response.text || '').trim();
-      let isCorrect = false;
-      try {
-        const parsed = JSON.parse(rawText) as { correct?: boolean };
-        isCorrect = Boolean(parsed?.correct);
-      } catch {
-        isCorrect = /"correct"\s*:\s*true/i.test(rawText);
-      }
+      const parsed = parseGradeJson(rawText);
       return {
-        correct: isCorrect,
+        correct: parsed.correct,
+        reason: parsed.reason,
         source: 'ai',
         latencyMs: Date.now() - started,
         model,
@@ -246,27 +321,23 @@ export async function gradeSingleAnswer(
     const { response, model } = await generateGradingContent(ai, {
       contents: promptContent,
       systemInstruction: GRADING_SYSTEM_INSTRUCTION,
-      maxOutputTokens: 24,
+      maxOutputTokens: 160,
       responseSchema: {
         type: Type.OBJECT,
         properties: {
+          reason: { type: Type.STRING },
           correct: { type: Type.BOOLEAN },
         },
-        required: ['correct'],
+        required: ['reason', 'correct'],
       },
     });
 
     const rawText = (response.text || '').trim();
-    let isCorrect = false;
-    try {
-      const parsed = JSON.parse(rawText) as { correct?: boolean };
-      isCorrect = Boolean(parsed?.correct);
-    } catch {
-      isCorrect = /"correct"\s*:\s*true/i.test(rawText);
-    }
+    const parsed = parseGradeJson(rawText);
 
     return {
-      correct: isCorrect,
+      correct: parsed.correct,
+      reason: parsed.reason,
       source: 'ai',
       latencyMs: Date.now() - started,
       model,
@@ -329,7 +400,7 @@ export async function gradeBatchAnswers(
       (userAiConfig.provider === 'grok' || userAiConfig.provider === 'openai-compatible')
     ) {
       try {
-        const rawText = await gradeViaOpenAiCompatible(
+        const { text: rawText } = await gradeViaOpenAiCompatible(
           userAiConfig,
           'Return strict JSON {"results":[{"id":"...","correct":true}]}. Grade each numbered student flashcard answer generously by core factual meaning against the official answer.',
           promptLines
@@ -384,17 +455,18 @@ export async function gradeBatchAnswers(
           const { response } = await generateGradingContent(ai, {
             contents: promptLines,
             systemInstruction:
-              'Grade each numbered student flashcard answer generously by core factual meaning against the official answer (accepting abbreviations and month+year dates like "Nov 1918" for "9 November 1918"). Return strict JSON array of {id, correct}.',
-            preferredModel: userAiConfig?.model,
+              'You are a fair teacher grading numbered flashcard answers by core factual meaning against the Official Answer. Accept paraphrases, plain-English wording, passive/active flips, core points when official answers have extra detail/parentheticals, acronyms/abbreviations, UK/US spelling, unit equivalents, minor typos, and month+year dates. Only mark false if factually wrong or missing the core point. Return strict JSON array of {id, reason, correct}.',
+            byokConfig: userAiConfig || null,
             responseSchema: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
                 properties: {
                   id: { type: Type.STRING },
+                  reason: { type: Type.STRING },
                   correct: { type: Type.BOOLEAN },
                 },
-                required: ['id', 'correct'],
+                required: ['id', 'reason', 'correct'],
               },
             },
           });

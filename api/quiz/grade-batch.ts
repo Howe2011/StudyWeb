@@ -12,20 +12,80 @@ interface VercelResponse {
 
 const GRADING_MODEL_CANDIDATES = [
   'gemini-3.1-flash-lite',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
   'gemini-4-hydrogen',
 ] as const;
 
 const STOP_WORDS = new Set([
   'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'and', 'or', 'by', 'is',
   'are', 'was', 'were', 'be', 'being', 'been', 'it', 'its', 'with', 'from', 'that',
-  'this', 'as', 'into', 'between', 'which', 'who', 'what', 'when', 'where', 'their',
+  'this', 'these', 'those', 'as', 'into', 'between', 'which', 'who', 'whom', 'whose',
+  'what', 'when', 'where', 'why', 'how', 'their', 'they', 'them', 'there', 'here',
+  'then', 'than', 'also', 'very', 'much', 'many', 'more', 'most', 'some', 'such',
+  'because', 'due', 'so', 'thus', 'therefore', 'called', 'known', 'means', 'mean',
+  'meaning', 'refers', 'refer', 'used', 'using', 'use', 'made', 'make', 'makes',
+  'having', 'have', 'has', 'had', 'do', 'does', 'did', 'can', 'could', 'would',
+  'should', 'will', 'may', 'might', 'about', 'around', 'roughly', 'approx',
+  'approximately', 'etc', 'eg', 'ie',
 ]);
+
+const GENERIC_NOUNS = new Set([
+  'party', 'republic', 'empire', 'kingdom', 'state', 'nation', 'country',
+  'treaty', 'act', 'law', 'bill', 'policy', 'plan', 'system', 'method',
+  'process', 'effect', 'cause', 'theory', 'model', 'principle', 'rule',
+  'group', 'movement', 'period', 'era', 'war', 'battle', 'crisis',
+  'cell', 'molecule', 'reaction', 'rate', 'level', 'energy', 'force',
+  'person', 'leader', 'people', 'event', 'year', 'date', 'factor',
+]);
+
+const NUMBER_WORDS: Record<string, string> = {
+  zero: '0', one: '1', first: '1', two: '2', second: '2',
+  three: '3', third: '3', four: '4', fourth: '4', five: '5', fifth: '5',
+  six: '6', sixth: '6', seven: '7', seventh: '7', eight: '8', eighth: '8',
+  nine: '9', ninth: '9', ten: '10', tenth: '10', eleven: '11', twelve: '12',
+  thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
+  seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20',
+  thirty: '30', forty: '40', fifty: '50', sixty: '60', seventy: '70',
+  eighty: '80', ninety: '90', hundred: '100', thousand: '1000',
+  half: '50 percent', quarter: '25 percent', double: '2x', triple: '3x',
+};
+
+const WORD_EQUIV: Record<string, string> = {
+  usa: 'united states', us: 'united states', america: 'united states',
+  uk: 'united kingdom', gb: 'united kingdom', britain: 'united kingdom',
+  ussr: 'soviet union', russia: 'soviet union',
+  ww1: 'world war 1', wwi: 'world war 1', ww2: 'world war 2', wwii: 'world war 2',
+  pm: 'prime minister', govt: 'government', econ: 'economy',
+  dna: 'deoxyribonucleic acid', rna: 'ribonucleic acid', atp: 'adenosine triphosphate',
+  co2: 'carbon dioxide', o2: 'oxygen', h2o: 'water', nacl: 'sodium chloride',
+  gdp: 'gross domestic product', cpu: 'central processing unit',
+  ram: 'random access memory', rom: 'read only memory',
+  semi: 'partially', semipermeable: 'partially permeable',
+};
+
+function stemToken(raw: string): string {
+  let w = raw
+    .toLowerCase()
+    .replace(/ise([sd]?)$/i, 'ize$1')
+    .replace(/isation$/i, 'ization')
+    .replace(/our$/i, 'or');
+  if (w.length <= 3) return w;
+  if (w.endsWith('ies') && w.length > 4) w = `${w.slice(0, -3)}y`;
+  else if (w.endsWith('s') && !w.endsWith('ss') && !w.endsWith('us') && w.length > 3) w = w.slice(0, -1);
+  if (w.endsWith('tion') && w.length > 5) w = w.slice(0, -4);
+  else if (w.endsWith('ing') && w.length > 5) w = w.slice(0, -3);
+  else if (w.endsWith('ed') && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith('ly') && w.length > 4) w = w.slice(0, -2);
+  return w;
+}
 
 function normalizeForFastCheck(raw: string): string {
   let cleaned = String(raw || '')
     .toLowerCase()
-    .replace(/['’]/g, '')
+    .replace(/['’`]/g, '')
     .replace(/(\d),(?=\d{3}\b)/g, '$1')
+    .replace(/(\d)(?:st|nd|rd|th)\b/gi, '$1')
     .replace(/[^\p{L}\p{N}\s.%+-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -35,6 +95,11 @@ function normalizeForFastCheck(raw: string): string {
   );
   cleaned = cleaned.replace(/\b(\d+)%/g, '$1 percent');
   cleaned = cleaned.replace(/[.%+-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  cleaned = cleaned
+    .split(/\s+/)
+    .map((w) => NUMBER_WORDS[w] ?? w)
+    .join(' ')
+    .trim();
 
   let prev = '';
   while (cleaned !== prev) {
@@ -42,6 +107,17 @@ function normalizeForFastCheck(raw: string): string {
     cleaned = cleaned.replace(/^(?:the|a|an)\s+/i, '').trim();
   }
   return cleaned;
+}
+
+function tokenizeNormalized(raw: string): string[] {
+  return normalizeForFastCheck(raw)
+    .split(/\s+/)
+    .map((w) => WORD_EQUIV[w] || w)
+    .join(' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 1 && !STOP_WORDS.has(w))
+    .filter((w) => w.length >= 2 || /^\d+$/.test(w))
+    .map((w) => (/^\d+$/.test(w) ? w : stemToken(w)));
 }
 
 function fastLocalCheck(studentAnswer: string, officialAnswer: string): boolean {
@@ -55,7 +131,7 @@ function fastLocalCheck(studentAnswer: string, officialAnswer: string): boolean 
   if (noParen && noParen === studentNorm) return true;
 
   const parts = officialAnswer
-    .split(/\s*[;/]\s*/)
+    .split(/\s*(?:;|\/|\bor\b|\s+[-–—]\s+|:\s+)\s*/i)
     .map((p) => normalizeForFastCheck(p))
     .filter((p) => p.length >= 2);
   return parts.length > 1 && parts.some((p) => p === studentNorm);
@@ -63,18 +139,39 @@ function fastLocalCheck(studentAnswer: string, officialAnswer: string): boolean 
 
 function smartSemanticFallbackCheck(studentAnswer: string, officialAnswer: string): boolean {
   if (fastLocalCheck(studentAnswer, officialAnswer)) return true;
-  const sTokens = normalizeForFastCheck(studentAnswer)
-    .split(/\s+/)
-    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
-  const oTokens = normalizeForFastCheck(officialAnswer)
-    .split(/\s+/)
-    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
+  const sTokens = tokenizeNormalized(studentAnswer);
+  const oTokens = tokenizeNormalized(officialAnswer);
   if (!sTokens.length || !oTokens.length) return false;
 
+  const oNums = oTokens.filter((t) => /^\d+$/.test(t));
+  const sNums = sTokens.filter((t) => /^\d+$/.test(t));
+  if (oNums.length > 0 && sNums.length > 0 && !oNums.some((n) => sNums.includes(n))) {
+    return false;
+  }
+
   const matched = oTokens.filter((ot) =>
-    sTokens.some((st) => st === ot || (st.length >= 5 && ot.length >= 5 && st.startsWith(ot.slice(0, 5))))
+    sTokens.some(
+      (st) =>
+        st === ot ||
+        (st.length >= 4 && ot.length >= 4 && (st.startsWith(ot) || ot.startsWith(st)))
+    )
   ).length;
-  return matched / oTokens.length >= 0.65 && matched / sTokens.length >= 0.45;
+  const matchedStudent = sTokens.filter((st) =>
+    oTokens.some(
+      (ot) =>
+        st === ot ||
+        (st.length >= 4 && ot.length >= 4 && (st.startsWith(ot) || ot.startsWith(st)))
+    )
+  ).length;
+
+  const precision = matchedStudent / sTokens.length;
+  if (oTokens.length === 1) return matched === 1 && precision >= 0.5;
+  if (oTokens.length === 2) {
+    if (matched === 2 && precision >= 0.5) return true;
+    const distinctive = oTokens.filter((t) => !GENERIC_NOUNS.has(t));
+    return distinctive.length === 1 && sTokens.includes(distinctive[0]) && precision >= 0.5;
+  }
+  return matched / oTokens.length >= 0.58 && precision >= 0.4;
 }
 
 interface BatchItem {
@@ -181,15 +278,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           type: Type.OBJECT,
           properties: {
             id: { type: Type.STRING },
+            reason: { type: Type.STRING },
             correct: { type: Type.BOOLEAN },
           },
-          required: ['id', 'correct'],
+          required: ['id', 'reason', 'correct'],
         },
       };
 
       let graded = false;
       for (const model of GRADING_MODEL_CANDIDATES) {
-        const thinkingLevel = model === 'gemini-4-hydrogen' ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL;
+        const thinkingConfig = /^gemini-4-/i.test(model)
+          ? { thinkingLevel: ThinkingLevel.LOW }
+          : /^gemini-3\./i.test(model)
+          ? { thinkingLevel: ThinkingLevel.MINIMAL }
+          : /^gemini-2\.5-/i.test(model)
+          ? { thinkingBudget: 0 }
+          : undefined;
         try {
           const response = await Promise.race([
             ai.models.generateContent({
@@ -197,14 +301,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               contents: promptLines,
               config: {
                 systemInstruction:
-                  'Grade each numbered student flashcard answer generously by core factual meaning against the official answer (accepting abbreviations, synonyms, unit formats, and month+year dates like "Nov 1918" for "9 November 1918"). Return strict JSON array of {id, correct}.',
-                thinkingConfig: { thinkingLevel },
+                  'You are a fair teacher grading numbered flashcard answers by core factual meaning against the Official Answer. Accept paraphrases, plain-English wording, passive/active flips, core points when official answers have extra detail/parentheticals, acronyms/abbreviations, UK/US spelling, unit equivalents, minor typos, and month+year dates. Only mark false if factually wrong or missing the core point. Return strict JSON array of {id, reason, correct}.',
+                ...(thinkingConfig ? { thinkingConfig } : {}),
                 responseMimeType: 'application/json',
                 responseSchema,
               },
             }),
             new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Gemini batch timeout')), 5000)
+              setTimeout(() => reject(new Error('Gemini batch timeout')), 6500)
             ),
           ]);
 

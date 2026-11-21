@@ -680,7 +680,18 @@ export async function parseDocxFile(
 
       if (tableCells.length > 0) {
         const colCount = tableCells.reduce((m, r) => Math.max(m, r.length), 1);
-        if (colCount >= 2) {
+        const arrowCellRe = /^(?:[→⇒⟶⟹➜➔➝➞➟➠➡➤►▶▸▹▻▷]|->|-->|=>|==>)$/;
+        const isSingleArrowRow =
+          tableCells.length === 1 &&
+          colCount >= 3 &&
+          tableCells[0].some((c) => arrowCellRe.test(c.trim()));
+
+        if (isSingleArrowRow) {
+          const steps = tableCells[0].filter((c) => c.trim() && !arrowCellRe.test(c.trim()));
+          if (steps.length >= 2) {
+            textLines.push(`⇒ ${steps.join(' → ')}`);
+          }
+        } else if (colCount >= 2) {
           const pad = (r: string[]) =>
             `| ${Array.from({ length: colCount }, (_, i) => r[i] || '').join(' | ')} |`;
           textLines.push(pad(tableCells[0]));

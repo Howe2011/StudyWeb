@@ -157,22 +157,38 @@ const BYOK_GEMINI_CANDIDATES = [
 ] as const;
 const DEFAULT_GROK_BASE_URL = 'https://api.x.ai/v1';
 const DEFAULT_GROK_MODEL = 'grok-3-mini';
+const BYOK_GROK_CANDIDATES = [
+  'grok-3-mini',
+  'grok-3-fast',
+  'grok-3',
+  'grok-2-latest',
+  'grok-2',
+] as const;
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const BYOK_OPENAI_CANDIDATES = [
+  'gpt-4o-mini',
+  'gpt-4.1-mini',
+  'gpt-4.1-nano',
+  'gpt-4o',
+  'gpt-3.5-turbo',
+] as const;
 
 /**
  * 100% invariant ultra-lean system prompt prefix — maximizes Gemini/OpenAI prefix cache hits
  * while enforcing real synthesis, minimal output tokens, and balanced visual structure.
  */
 const STATIC_GEMINI_SYSTEM_INSTRUCTION = [
-  'StudyDeck AI: distill raw notes/webpages into high-yield, naturally structured revision JSON.',
-  'PROCESS, DO NOT DUMP: Strip site nav, intros, author bios, ads & fluff. Condense wordy prose into sharp exam concepts, mechanisms, data & causes.',
-  'COMPLETENESS (CRITICAL): Cover ALL distinct topics and sections from start to the very end of [SOURCE]. Never stop early or omit trailing sections—keep bullets concise (<=16w) rather than dropping later topics.',
-  'NATURAL HIERARCHY (never split rigidly into 01/02 mini-sections or filler boxes):',
-  '- Keep coherent ideas under natural headings h (keep meaningful numbering like "1. Topic", do NOT invent 01./02. prefixes).',
-  '- Lead with a clean "| Date/Key | Event/Point |" table when covering multiple dates, stats, or terms.',
-  '- Use "⇒ Step 1 → Step 2 → Step 3" for 2–5 parallel causes, agreements, or sequential steps (convert arrow variants ->, =>, ➜ to "→"; reversible arrows to "⇌" or "↔"); "### Sub-question" for sub-groups; "**Term**: fact" + "↳ detail" for bullets; "| A | B |" for comparisons.',
-  '- Leave u="" unless an intro summary genuinely adds value.',
+  'StudyDeck AI: distill raw notes, semi-formatted text, or webpages into high-yield, naturally structured revision JSON.',
+  'LOWEST STANDARD RULE (CRITICAL): If [SOURCE] already contains headings, subheadings, Markdown/HTML tables, bold/highlighted key terms, chronological lists, or arrows, treat that existing formatting as your MINIMUM baseline. NEVER downgrade tables into bullets, flatten sub-hierarchy, or drop key terms—preserve existing structure as the floor and UPGRADE weak raw parts.',
+  'PROCESS & COMPLETENESS: Strip site nav, bios, ads & fluff. Cover ALL distinct topics from start to the very end of [SOURCE] without stopping early.',
+  'STRONG SECTION & HIERARCHY IDENTIFICATION:',
+  '- Organize ideas into logical macro-sections under natural headings h (keep meaningful numbering like "1. Topic", do NOT invent 01./02. prefixes). Never dump raw text into one giant section.',
+  '- Use "### Subheading" inside sections to separate causes/effects, features, mechanisms, or phases cleanly.',
+  'TABLES, FLOWS & BOLD EMPHASIS:',
+  '- When Tables=ON, turn multi-row dates ("| Date | Event / Key Detail |"), comparisons ("| Feature | A | B |"), pros/cons, causes/effects, and multi-attribute specs into Markdown tables ("| H1 | H2 |") with a real descriptive header row.',
+  '- When Flows=ON, convert 2–5 sequential/causal steps (->, =>, ➜, ►, ▶) into "⇒ Step 1 → Step 2 → Step 3" (never make tiny arrow columns in a table).',
+  '- Bold (**Term**) key concepts, dates, names, and figures across bullets ("**Term**: crisp fact", "↳ sub-detail"), leave u="" unless helpful.',
   'Use source facts only.',
 ].join('\n');
 
@@ -337,23 +353,75 @@ function sanitizeAllowedModel(model: string | undefined, fallback: string): stri
 }
 
 function buildGeminiCandidateList(config: UserAiConfig): string[] {
-  const customModel = config.model?.trim()
-    ? sanitizeAllowedModel(config.model, DEFAULT_GEMINI_FORMAT_MODEL)
-    : '';
-  if (customModel) return [customModel];
+  const ordered: string[] = [];
+  const pushUnique = (m?: string) => {
+    const trimmed = (m || '').trim();
+    if (!trimmed || /^gemini-(?:1\.5|2\.0|pro\b)/i.test(trimmed)) return;
+    if (!ordered.includes(trimmed)) ordered.push(trimmed);
+  };
 
-  const list: string[] = [...BYOK_GEMINI_CANDIDATES];
-  const verified = config.verifiedModel?.trim();
-  if (verified && !/^gemini-(?:1\.5|2\.0|pro\b)/i.test(verified) && verified !== 'gemini-4-hydrogen') {
-    return [verified, ...list.filter((m) => m !== verified)];
+  if (config.model?.trim()) {
+    pushUnique(sanitizeAllowedModel(config.model, DEFAULT_GEMINI_FORMAT_MODEL));
   }
-  return list;
+  if (config.verifiedModel?.trim()) {
+    pushUnique(config.verifiedModel);
+  }
+  for (const m of BYOK_GEMINI_CANDIDATES) {
+    pushUnique(m);
+  }
+  return ordered;
 }
 
 function normalizeOpenAiBaseUrl(baseUrl?: string): string {
   const clean = (baseUrl || DEFAULT_OPENAI_BASE_URL).trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(clean)) return DEFAULT_OPENAI_BASE_URL;
   return clean;
+}
+
+function buildOpenAiCandidateList(config: UserAiConfig): string[] {
+  const isGrok = config.provider === 'grok';
+  const ordered: string[] = [];
+  const pushUnique = (m?: string) => {
+    const trimmed = (m || '').trim();
+    if (trimmed && !ordered.includes(trimmed)) ordered.push(trimmed);
+  };
+  if (config.model?.trim()) pushUnique(config.model);
+  if (config.verifiedModel?.trim()) pushUnique(config.verifiedModel);
+  const defaults = isGrok ? BYOK_GROK_CANDIDATES : BYOK_OPENAI_CANDIDATES;
+  for (const m of defaults) pushUnique(m);
+  return ordered;
+}
+
+async function discoverOpenAiModels(
+  baseUrl: string,
+  apiKey: string,
+  alreadyTried: Set<string>
+): Promise<string[]> {
+  try {
+    const res = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { data?: Array<{ id?: string }> };
+    if (!Array.isArray(data?.data)) return [];
+    return data.data
+      .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
+      .filter(
+        (id) =>
+          Boolean(id) &&
+          !alreadyTried.has(id) &&
+          !/embed|whisper|tts|dall-e|moderation|realtime|transcribe|audio|image|sora|flux|rerank/i.test(
+            id
+          )
+      )
+      .slice(0, 4);
+  } catch {
+    return [];
+  }
 }
 
 function getGeminiModelTuning(model: string): {
@@ -505,13 +573,26 @@ function detectKeyProviderMismatch(config: UserAiConfig): string | null {
   return null;
 }
 
-function isModelNotFoundError(err: unknown): boolean {
+function shouldFallbackToNextModel(err: unknown, config: UserAiConfig): boolean {
+  if (detectKeyProviderMismatch(config)) return false;
   const msg = err instanceof Error ? err.message : String(err || '');
-  return (
-    /404|NOT_FOUND|not found|is not supported for generateContent|does not exist|unknown model/i.test(
+  if (err instanceof Error && err.name === 'AbortError' && !/timed out/i.test(msg)) {
+    return false;
+  }
+  if (
+    /API_KEY_INVALID|API key not valid|Incorrect API key|invalid x-api-key|invalid_api_key|AuthenticationError|\b401\b|Unauthorized/i.test(
       msg
-    ) && !/API_KEY_INVALID|API key not valid|invalid api key/i.test(msg)
-  );
+    )
+  ) {
+    return false;
+  }
+  if (/ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ERR_INVALID_URL/i.test(msg)) {
+    return false;
+  }
+  if (/insufficient_quota|exceeded your current quota|billing.*not active|account.*deactivated/i.test(msg)) {
+    return false;
+  }
+  return true;
 }
 
 function extractReadableErrorMessage(err: unknown, config: UserAiConfig): string {
@@ -669,7 +750,10 @@ function compactInputForAi(rawText: string, maxChars = 60000): string {
 
   const kept: string[] = [];
   for (let i = 0; i < rawLines.length; i++) {
-    const cleanedLine = rawLines[i].replace(/[ \t]{2,}/g, ' ').trimEnd();
+    const cleanedLine = rawLines[i]
+      .replace(/(?<=\S)(?:\t+| {3,})(?=\S)/g, ' | ')
+      .replace(/ {2,}/g, ' ')
+      .trimEnd();
     const t = cleanedLine.trim();
     if (!t) {
       if (kept.length > 0 && kept[kept.length - 1] !== '') kept.push('');
@@ -955,14 +1039,14 @@ function buildCompactOptionsLine(params: {
 }): string {
   return [
     `[OPT] ${getPresetDirective(params.preset)}`,
-    params.detectFlowDiagrams ? 'Flows=ON.' : 'Flows=OFF.',
-    params.autoTables ? 'Tables=ON.' : 'Tables=OFF.',
+    params.detectFlowDiagrams ? 'Flows=ON("⇒ A → B → C").' : 'Flows=OFF.',
+    params.autoTables ? 'Tables=ON("| H1 | H2 |" with real header row; convert dates/contrasts/matrices).' : 'Tables=OFF.',
     params.includeTimeline ? 'Dates=ON.' : 'Dates=OFF.',
     params.includeCards ? 'Cards=4-6.' : 'Cards=OFF.',
     params.colorCodeParts
       ? 'ColorParts=ON(classify s[].r strictly: core|process|compare|example|risk; core=theory/definitions, process=steps/mechanisms/solutions, compare=tables/types/eval, example=case-studies/dates/examples, risk=limits/disadvantages/risks).'
       : 'ColorParts=OFF.',
-    'Natural sections, <=16w/bullet, concise terms.',
+    'Treat any existing formatting in [SOURCE] as minimum baseline to preserve & upgrade; clear macro sections + ### subheads and **bold** key terms.',
   ].join(' ');
 }
 
@@ -1234,7 +1318,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const detectFlowDiagrams = body.detectFlowDiagrams !== false;
   const autoTables = body.autoTables !== false;
   const colorCodeParts = Boolean(body.colorCodeParts);
-  const forceRewrite = Boolean(body.forceRewrite);
+  const keepExistingOnly = Boolean(body.keepExistingOnly);
   const wantsStream =
     Boolean(body.stream) || readHeader(req.headers, 'accept').includes('text/event-stream');
 
@@ -1258,7 +1342,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.flushHeaders?.();
   }
 
-  if (!forceRewrite && detectAlreadyGoodFormatting(compacted)) {
+  if (keepExistingOnly && detectAlreadyGoodFormatting(compacted)) {
     const preserved = preserveWellFormattedText(compacted, includeCards, colorCodeParts);
     const usage = {
       provider: config.provider,
@@ -1269,7 +1353,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       cachedTokens: 0,
     };
     if (wantsStream) {
-      sendSse({ type: 'status', message: 'Format is already good — keeping existing layout (0 tokens)…' });
+      sendSse({ type: 'status', message: 'Keeping existing layout (0 tokens)…' });
       sendSse({ type: 'done', formatted: preserved, usage, keptExistingFormat: true });
       res.end();
       return;
@@ -1285,7 +1369,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const formatSingleChunk = async (
     chunkText: string,
     chunkLabel?: string,
-    depth = 0
+    depth = 0,
+    activeConfig: UserAiConfig = config
   ): Promise<{
     formatted: ExpandedPayload;
     model: string;
@@ -1311,8 +1396,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (wantsStream) {
             sendSse({ type: 'status', message: 'Output limit reached — splitting section for full coverage…' });
           }
-          const left = await formatSingleChunk(halves[0], chunkLabel ? `${chunkLabel} (a)` : 'part 1 of 2', depth + 1);
-          const right = await formatSingleChunk(halves[1], chunkLabel ? `${chunkLabel} (b)` : 'part 2 of 2', depth + 1);
+          const nextCfg = { ...activeConfig, verifiedModel: fallbackModel };
+          const left = await formatSingleChunk(halves[0], chunkLabel ? `${chunkLabel} (a)` : 'part 1 of 2', depth + 1, nextCfg);
+          const right = await formatSingleChunk(
+            halves[1],
+            chunkLabel ? `${chunkLabel} (b)` : 'part 2 of 2',
+            depth + 1,
+            { ...nextCfg, verifiedModel: left.model }
+          );
           return {
             formatted: mergeExpandedPayloads([left.formatted, right.formatted]),
             model: right.model,
@@ -1343,14 +1434,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return null;
     };
 
-    if (config.provider === 'gemini') {
+    if (activeConfig.provider === 'gemini') {
       const ai = new GoogleGenAI({
-        apiKey: config.apiKey.trim(),
+        apiKey: activeConfig.apiKey.trim(),
         httpOptions: {
           headers: { 'User-Agent': 'aistudio-build' },
         },
       });
-      const candidates = buildGeminiCandidateList(config);
+      const candidates = buildGeminiCandidateList(activeConfig);
       const responseSchema = buildAutoformatSchema({
         includeTimeline,
         includeCards,
@@ -1364,7 +1455,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         try {
           const cachedContent = await resolveExplicitGeminiCache(
             ai,
-            config.apiKey.trim(),
+            activeConfig.apiKey.trim(),
             model,
             chunkText
           );
@@ -1386,9 +1477,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             sendSse({
               type: 'status',
               model,
-              message: cachedContent
-                ? `Formatting with ${model}${partPrefix} (cached context)…`
-                : `Formatting with ${model}${partPrefix}…`,
+              message:
+                i > 0
+                  ? `Switched to ${model}${partPrefix} (${candidates[i - 1]} unavailable)…`
+                  : cachedContent
+                  ? `Formatting with ${model}${partPrefix} (cached context)…`
+                  : `Formatting with ${model}${partPrefix}…`,
             });
             const stream = await ai.models.generateContentStream({
               model,
@@ -1429,7 +1523,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               if (recovered) {
                 return {
                   formatted: recovered.formatted,
-                  model,
+                  model: recovered.model || model,
                   inputTokens: recovered.inputTokens || inputTokens,
                   outputTokens: recovered.outputTokens || outputTokens,
                   totalTokens: recovered.totalTokens || totalTokens,
@@ -1488,7 +1582,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           };
         } catch (err) {
           lastErr = err;
-          if (i < candidates.length - 1 && isModelNotFoundError(err)) {
+          if (i < candidates.length - 1 && shouldFallbackToNextModel(err, activeConfig)) {
             continue;
           }
           throw err;
@@ -1497,209 +1591,244 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       throw lastErr;
     }
 
-    const isGrok = config.provider === 'grok';
-    const baseUrl = isGrok ? DEFAULT_GROK_BASE_URL : normalizeOpenAiBaseUrl(config.baseUrl);
-    const model =
-      (config.model || (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL)).trim() ||
-      (isGrok ? DEFAULT_GROK_MODEL : DEFAULT_OPENAI_MODEL);
-    const tuning = getOpenAiModelTuning(config.provider, model);
+    const isGrok = activeConfig.provider === 'grok';
+    const baseUrl = isGrok ? DEFAULT_GROK_BASE_URL : normalizeOpenAiBaseUrl(activeConfig.baseUrl);
+    const candidates = buildOpenAiCandidateList(activeConfig);
+    const triedSet = new Set(candidates);
+    let discoveredExtra = false;
     const userMsg = `${optionsLine}\n\n[SOURCE]\n${chunkText}`;
 
-    const sendChatCompletion = async (opts: {
-      stream: boolean;
-      withJsonFormat: boolean;
-      withReasoningEffort: boolean;
-      maxTokens: number;
-    }) => {
-      const bodyObj: Record<string, unknown> = {
-        model,
-        stream: opts.stream,
-        temperature: tuning.temperature,
-        max_tokens: opts.maxTokens,
-        messages: [
-          { role: 'system', content: STATIC_OPENAI_SYSTEM_INSTRUCTION },
-          { role: 'user', content: userMsg },
-        ],
+    let lastErr: unknown = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const model = candidates[i];
+      const tuning = getOpenAiModelTuning(activeConfig.provider, model);
+
+      const sendChatCompletion = async (opts: {
+        stream: boolean;
+        withJsonFormat: boolean;
+        withReasoningEffort: boolean;
+        maxTokens: number;
+      }) => {
+        const bodyObj: Record<string, unknown> = {
+          model,
+          stream: opts.stream,
+          temperature: tuning.temperature,
+          max_tokens: opts.maxTokens,
+          messages: [
+            { role: 'system', content: STATIC_OPENAI_SYSTEM_INSTRUCTION },
+            { role: 'user', content: userMsg },
+          ],
+        };
+        if (opts.withJsonFormat) bodyObj.response_format = { type: 'json_object' };
+        if (opts.withReasoningEffort && tuning.reasoning_effort) bodyObj.reasoning_effort = tuning.reasoning_effort;
+        if (opts.stream) bodyObj.stream_options = { include_usage: true };
+        return fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(45000),
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${activeConfig.apiKey}`,
+          },
+          body: JSON.stringify(bodyObj),
+        });
       };
-      if (opts.withJsonFormat) bodyObj.response_format = { type: 'json_object' };
-      if (opts.withReasoningEffort && tuning.reasoning_effort) bodyObj.reasoning_effort = tuning.reasoning_effort;
-      if (opts.stream) bodyObj.stream_options = { include_usage: true };
-      return fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(45000),
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.apiKey}`,
-        },
-        body: JSON.stringify(bodyObj),
-      });
-    };
 
-    const callWithCompatFallback = async (stream: boolean) => {
-      let useJson = true;
-      let useReasoning = Boolean(tuning.reasoning_effort);
-      let maxTokens = tuning.max_tokens;
-      let apiRes = await sendChatCompletion({
-        stream,
-        withJsonFormat: useJson,
-        withReasoningEffort: useReasoning,
-        maxTokens,
-      });
-      if (!apiRes.ok && apiRes.status === 400) {
-        const errText = await apiRes.text().catch(() => '');
-        if (/response_format|json_object|stream_options|reasoning_effort|max_tokens|unsupported|unknown/i.test(errText)) {
-          if (/response_format|json_object/i.test(errText)) useJson = false;
-          if (/reasoning_effort/i.test(errText)) useReasoning = false;
-          if (/max_tokens/i.test(errText)) maxTokens = 4096;
-          apiRes = await sendChatCompletion({
-            stream,
-            withJsonFormat: useJson,
-            withReasoningEffort: useReasoning,
-            maxTokens,
-          });
-        } else {
-          throw new Error(`HTTP ${apiRes.status}: ${errText}`);
-        }
-      }
-      return apiRes;
-    };
-
-    if (wantsStream) {
-      const partPrefix = chunkLabel ? ` (${chunkLabel})` : '';
-      sendSse({ type: 'status', model, message: `Formatting with ${model}${partPrefix}…` });
-      const apiRes = await callWithCompatFallback(true);
-      if (!apiRes.ok || !apiRes.body) {
-        const errText = await apiRes.text().catch(() => '');
-        throw new Error(`HTTP ${apiRes.status}: ${errText}`);
-      }
-
-      const reader = apiRes.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      let fullContent = '';
-      let lastEmit = 0;
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let totalTokens = 0;
-      let cachedTokens = 0;
-      let lastFinishReason = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line.startsWith('data:')) continue;
-          const payload = line.slice(5).trim();
-          if (!payload || payload === '[DONE]') continue;
-          try {
-            const parsedChunk = JSON.parse(payload) as {
-              choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
-              usage?: {
-                prompt_tokens?: number;
-                completion_tokens?: number;
-                total_tokens?: number;
-                prompt_tokens_details?: { cached_tokens?: number };
-              };
-            };
-            const piece = parsedChunk.choices?.[0]?.delta?.content || '';
-            if (parsedChunk.choices?.[0]?.finish_reason) {
-              lastFinishReason = String(parsedChunk.choices[0].finish_reason);
-            }
-            if (piece) {
-              fullContent += piece;
-              const now = Date.now();
-              if (now - lastEmit >= 180) {
-                lastEmit = now;
-                sendSse({ type: 'progress', model, chars: fullContent.length });
-              }
-            }
-            if (parsedChunk.usage) {
-              inputTokens = Number(parsedChunk.usage.prompt_tokens || inputTokens);
-              outputTokens = Number(parsedChunk.usage.completion_tokens || outputTokens);
-              totalTokens = Number(parsedChunk.usage.total_tokens || totalTokens);
-              cachedTokens = Number(parsedChunk.usage.prompt_tokens_details?.cached_tokens || cachedTokens);
-            }
-          } catch {
-            // ignore partial SSE line
+      const callWithCompatFallback = async (stream: boolean) => {
+        let useJson = true;
+        let useReasoning = Boolean(tuning.reasoning_effort);
+        let maxTokens = tuning.max_tokens;
+        let apiRes = await sendChatCompletion({
+          stream,
+          withJsonFormat: useJson,
+          withReasoningEffort: useReasoning,
+          maxTokens,
+        });
+        if (!apiRes.ok && apiRes.status === 400) {
+          const errText = await apiRes.text().catch(() => '');
+          if (
+            /response_format|json_object|stream_options|reasoning_effort|max_tokens/i.test(errText) &&
+            !/model/i.test(errText)
+          ) {
+            if (/response_format|json_object/i.test(errText)) useJson = false;
+            if (/reasoning_effort/i.test(errText)) useReasoning = false;
+            if (/max_tokens/i.test(errText)) maxTokens = 4096;
+            apiRes = await sendChatCompletion({
+              stream,
+              withJsonFormat: useJson,
+              withReasoningEffort: useReasoning,
+              maxTokens,
+            });
+          } else {
+            throw new Error(`HTTP ${apiRes.status}: ${errText}`);
           }
         }
-      }
+        return apiRes;
+      };
 
-      if (lastFinishReason === 'length') {
-        const recovered = await recoverFromTruncation(fullContent, model);
-        if (recovered) {
-          return {
-            formatted: recovered.formatted,
+      try {
+        if (wantsStream) {
+          const partPrefix = chunkLabel ? ` (${chunkLabel})` : '';
+          sendSse({
+            type: 'status',
             model,
-            inputTokens: recovered.inputTokens || inputTokens,
-            outputTokens: recovered.outputTokens || outputTokens,
-            totalTokens: recovered.totalTokens || totalTokens,
-            cachedTokens: recovered.cachedTokens || cachedTokens,
+            message:
+              i > 0
+                ? `Switched to ${model}${partPrefix} (${candidates[i - 1]} unavailable)…`
+                : `Formatting with ${model}${partPrefix}…`,
+          });
+          const apiRes = await callWithCompatFallback(true);
+          if (!apiRes.ok || !apiRes.body) {
+            const errText = await apiRes.text().catch(() => '');
+            throw new Error(`HTTP ${apiRes.status}: ${errText}`);
+          }
+
+          const reader = apiRes.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = '';
+          let fullContent = '';
+          let lastEmit = 0;
+          let inputTokens = 0;
+          let outputTokens = 0;
+          let totalTokens = 0;
+          let cachedTokens = 0;
+          let lastFinishReason = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() || '';
+            for (const rawLine of lines) {
+              const line = rawLine.trim();
+              if (!line.startsWith('data:')) continue;
+              const payload = line.slice(5).trim();
+              if (!payload || payload === '[DONE]') continue;
+              try {
+                const parsedChunk = JSON.parse(payload) as {
+                  choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
+                  usage?: {
+                    prompt_tokens?: number;
+                    completion_tokens?: number;
+                    total_tokens?: number;
+                    prompt_tokens_details?: { cached_tokens?: number };
+                  };
+                };
+                const piece = parsedChunk.choices?.[0]?.delta?.content || '';
+                if (parsedChunk.choices?.[0]?.finish_reason) {
+                  lastFinishReason = String(parsedChunk.choices[0].finish_reason);
+                }
+                if (piece) {
+                  fullContent += piece;
+                  const now = Date.now();
+                  if (now - lastEmit >= 180) {
+                    lastEmit = now;
+                    sendSse({ type: 'progress', model, chars: fullContent.length });
+                  }
+                }
+                if (parsedChunk.usage) {
+                  inputTokens = Number(parsedChunk.usage.prompt_tokens || inputTokens);
+                  outputTokens = Number(parsedChunk.usage.completion_tokens || outputTokens);
+                  totalTokens = Number(parsedChunk.usage.total_tokens || totalTokens);
+                  cachedTokens = Number(parsedChunk.usage.prompt_tokens_details?.cached_tokens || cachedTokens);
+                }
+              } catch {
+                // ignore partial SSE line
+              }
+            }
+          }
+
+          if (lastFinishReason === 'length') {
+            const recovered = await recoverFromTruncation(fullContent, model);
+            if (recovered) {
+              return {
+                formatted: recovered.formatted,
+                model: recovered.model || model,
+                inputTokens: recovered.inputTokens || inputTokens,
+                outputTokens: recovered.outputTokens || outputTokens,
+                totalTokens: recovered.totalTokens || totalTokens,
+                cachedTokens: recovered.cachedTokens || cachedTokens,
+              };
+            }
+          }
+
+          let parsed: RawCompactSchemaPayload;
+          try {
+            parsed = extractJsonPayload(fullContent);
+          } catch (parseErr) {
+            const recovered = await recoverFromTruncation(fullContent, model);
+            if (recovered) return recovered;
+            throw parseErr;
+          }
+
+          return {
+            formatted: expandCompactPayload(parsed, colorCodeParts),
+            model,
+            inputTokens,
+            outputTokens,
+            totalTokens,
+            cachedTokens,
           };
         }
+
+        const apiRes = await callWithCompatFallback(false);
+        if (!apiRes.ok) {
+          const errText = await apiRes.text().catch(() => '');
+          throw new Error(`HTTP ${apiRes.status}: ${errText}`);
+        }
+
+        const data = (await apiRes.json()) as {
+          choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
+          usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            total_tokens?: number;
+            prompt_tokens_details?: { cached_tokens?: number };
+          };
+        };
+        const content = (data.choices?.[0]?.message?.content || '').trim();
+        if (data.choices?.[0]?.finish_reason === 'length') {
+          const recovered = await recoverFromTruncation(content, model);
+          if (recovered) return recovered;
+        }
+
+        let parsed: RawCompactSchemaPayload;
+        try {
+          parsed = extractJsonPayload(content);
+        } catch (parseErr) {
+          const recovered = await recoverFromTruncation(content, model);
+          if (recovered) return recovered;
+          throw parseErr;
+        }
+
+        return {
+          formatted: expandCompactPayload(parsed, colorCodeParts),
+          model,
+          inputTokens: Number(data.usage?.prompt_tokens || 0),
+          outputTokens: Number(data.usage?.completion_tokens || 0),
+          totalTokens: Number(data.usage?.total_tokens || 0),
+          cachedTokens: Number(data.usage?.prompt_tokens_details?.cached_tokens || 0),
+        };
+      } catch (err) {
+        lastErr = err;
+        if (!shouldFallbackToNextModel(err, activeConfig)) {
+          throw err;
+        }
+        if (i === candidates.length - 1 && !discoveredExtra && !isGrok) {
+          discoveredExtra = true;
+          const extraModels = await discoverOpenAiModels(baseUrl, activeConfig.apiKey, triedSet);
+          for (const em of extraModels) {
+            triedSet.add(em);
+            candidates.push(em);
+          }
+        }
+        if (i < candidates.length - 1) {
+          continue;
+        }
+        throw err;
       }
-
-      let parsed: RawCompactSchemaPayload;
-      try {
-        parsed = extractJsonPayload(fullContent);
-      } catch (parseErr) {
-        const recovered = await recoverFromTruncation(fullContent, model);
-        if (recovered) return recovered;
-        throw parseErr;
-      }
-
-      return {
-        formatted: expandCompactPayload(parsed, colorCodeParts),
-        model,
-        inputTokens,
-        outputTokens,
-        totalTokens,
-        cachedTokens,
-      };
     }
-
-    const apiRes = await callWithCompatFallback(false);
-    if (!apiRes.ok) {
-      const errText = await apiRes.text().catch(() => '');
-      throw new Error(`HTTP ${apiRes.status}: ${errText}`);
-    }
-
-    const data = (await apiRes.json()) as {
-      choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
-      usage?: {
-        prompt_tokens?: number;
-        completion_tokens?: number;
-        total_tokens?: number;
-        prompt_tokens_details?: { cached_tokens?: number };
-      };
-    };
-    const content = (data.choices?.[0]?.message?.content || '').trim();
-    if (data.choices?.[0]?.finish_reason === 'length') {
-      const recovered = await recoverFromTruncation(content, model);
-      if (recovered) return recovered;
-    }
-
-    let parsed: RawCompactSchemaPayload;
-    try {
-      parsed = extractJsonPayload(content);
-    } catch (parseErr) {
-      const recovered = await recoverFromTruncation(content, model);
-      if (recovered) return recovered;
-      throw parseErr;
-    }
-
-    return {
-      formatted: expandCompactPayload(parsed, colorCodeParts),
-      model,
-      inputTokens: Number(data.usage?.prompt_tokens || 0),
-      outputTokens: Number(data.usage?.completion_tokens || 0),
-      totalTokens: Number(data.usage?.total_tokens || 0),
-      cachedTokens: Number(data.usage?.prompt_tokens_details?.cached_tokens || 0),
-    };
+    throw lastErr;
   };
 
   try {
@@ -1714,16 +1843,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let totalTokens = 0;
     let totalCached = 0;
     let lastModel = config.model || DEFAULT_GEMINI_FORMAT_MODEL;
+    let workingConfig: UserAiConfig = { ...config };
 
     for (let idx = 0; idx < chunks.length; idx++) {
       const label = chunks.length > 1 ? `part ${idx + 1} of ${chunks.length}` : undefined;
-      const chunkRes = await formatSingleChunk(chunks[idx], label, 0);
+      const chunkRes = await formatSingleChunk(chunks[idx], label, 0, workingConfig);
       formattedParts.push(chunkRes.formatted);
       totalInput += chunkRes.inputTokens;
       totalOutput += chunkRes.outputTokens;
       totalTokens += chunkRes.totalTokens;
       totalCached += chunkRes.cachedTokens;
       lastModel = chunkRes.model;
+      workingConfig = { ...workingConfig, verifiedModel: lastModel };
     }
 
     const finalFormatted = mergeExpandedPayloads(formattedParts);
