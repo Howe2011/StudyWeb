@@ -129,6 +129,7 @@ export function createEmptyWorkspace(): WorkspaceData {
     subjects: [],
     topics: [],
     flashcards: [],
+    deckGroups: [],
     todos: [],
     calendarBlocks: [],
     plannerPrefs: {
@@ -371,6 +372,15 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
             topicId: cleanTopicId,
           };
         })
+      : [],
+    deckGroups: Array.isArray(r.deckGroups)
+      ? r.deckGroups.map((g: any) => ({
+          id: String(g.id || makeId('dg')),
+          name: String(g.name || 'Untitled Group'),
+          subjectId: String(g.subjectId || ''),
+          sectionNames: Array.isArray(g.sectionNames) ? g.sectionNames.map(String) : [],
+          createdAt: String(g.createdAt || new Date().toISOString()),
+        }))
       : [],
     todos: Array.isArray(r.todos) ? r.todos : [],
     calendarBlocks: Array.isArray(r.calendarBlocks) ? r.calendarBlocks : [],
@@ -1233,6 +1243,7 @@ export function buildDeckSnapshot(ws: WorkspaceData): DeckSnapshot {
     topics,
     sections: Array.from(secMap.values()),
     cards,
+    deckGroups: ws.deckGroups || [],
   };
 }
 

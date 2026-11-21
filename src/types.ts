@@ -351,11 +351,20 @@ export interface DailyStudyTaskItem {
   done: number; // 0=pending, 1=weak, 2=alright, 3=mastered, 4=done
 }
 
+export interface DeckGroup {
+  id: string;
+  name: string;
+  subjectId: string;
+  sectionNames: string[];
+  createdAt: string;
+}
+
 export interface WorkspaceData {
   version: 2;
   subjects: StudySubject[];
   topics: StudyTopic[];
   flashcards: StudyFlashcard[];
+  deckGroups?: DeckGroup[];
   todos: TodoTaskItem[];
   calendarBlocks: CalendarStudyBlock[];
   plannerPrefs?: PlannerSchedulePrefs;
@@ -500,6 +509,7 @@ export interface DeckSnapshot {
   topics: DeckTopic[];
   sections: DeckSection[];
   cards: DeckFlashcard[];
+  deckGroups?: DeckGroup[];
 }
 
 export interface QuizSectionInfo {

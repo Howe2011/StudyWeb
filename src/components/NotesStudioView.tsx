@@ -274,6 +274,9 @@ export function NotesStudioView({
   const [cardsFeedback, setCardsFeedback] = useState<string | null>(null);
   const [glossaryExpanded, setGlossaryExpanded] = useState(false);
   const [glossaryFilter, setGlossaryFilter] = useState('');
+  const [linkedCardsExpanded, setLinkedCardsExpanded] = useState(true);
+  const [newLinkedCardQ, setNewLinkedCardQ] = useState('');
+  const [newLinkedCardA, setNewLinkedCardA] = useState('');
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
   const [docTextColorOpen, setDocTextColorOpen] = useState(false);
   const [docHighlightOpen, setDocHighlightOpen] = useState(false);
@@ -821,6 +824,40 @@ export function NotesStudioView({
         ? `Added ${createdCount} new flashcard${createdCount === 1 ? '' : 's'} to ${activeTopic.name}.`
         : 'All key terms are already saved in your flashcards.'
     );
+  };
+
+  const handleAddLinkedCardToTopic = (e: FormEvent) => {
+    e.preventDefault();
+    if (!activeSubject || !activeTopic || !newLinkedCardQ.trim() || !newLinkedCardA.trim()) return;
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: [
+        {
+          id: makeId('fc'),
+          subjectId: activeSubject.id,
+          topicId: activeTopic.id,
+          sectionName: activeTopic.name,
+          q: newLinkedCardQ.trim(),
+          a: newLinkedCardA.trim(),
+          box: 1,
+          dueAt: Date.now(),
+          flagged: false,
+          createdAt: new Date().toISOString(),
+        },
+        ...prev.flashcards,
+      ],
+      updatedAt: new Date().toISOString(),
+    }));
+    setNewLinkedCardQ('');
+    setNewLinkedCardA('');
+  };
+
+  const handleUnlinkCardFromTopic = (cardId: string) => {
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: prev.flashcards.map((c) => (c.id === cardId ? { ...c, topicId: undefined } : c)),
+      updatedAt: new Date().toISOString(),
+    }));
   };
 
   const handleAddTimelineEvent = (e: FormEvent) => {
@@ -2912,6 +2949,81 @@ export function NotesStudioView({
                               )}
                             </tbody>
                           </table>
+                        </div>
+                      )}
+                    </section>
+                  )}
+
+                  {/* Linked Flashcards Section */}
+                  {activeTopic && (
+                    <section className="sd-card space-y-4 p-6">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-3">
+                        <div className="flex items-center gap-2.5">
+                          <Layers className="h-5 w-5 text-[var(--note-accent)]" aria-hidden="true" />
+                          <h2 className="font-display text-lg font-bold text-[var(--ink)]">
+                            Linked Flashcards ({workspace.flashcards.filter((c) => c.topicId === activeTopic.id).length})
+                          </h2>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setLinkedCardsExpanded((v) => !v)}
+                          className="sd-btn px-3 py-1 text-xs"
+                        >
+                          {linkedCardsExpanded ? 'Hide' : 'Show Cards'}
+                        </button>
+                      </div>
+
+                      {linkedCardsExpanded && (
+                        <div className="space-y-4">
+                          <form onSubmit={handleAddLinkedCardToTopic} className="grid gap-2.5 sm:grid-cols-2">
+                            <input
+                              type="text"
+                              required
+                              value={newLinkedCardQ}
+                              onChange={(e) => setNewLinkedCardQ(e.target.value)}
+                              placeholder="Flashcard question / front…"
+                              className="sd-input text-xs"
+                            />
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                required
+                                value={newLinkedCardA}
+                                onChange={(e) => setNewLinkedCardA(e.target.value)}
+                                placeholder="Flashcard answer / back…"
+                                className="sd-input flex-1 text-xs"
+                              />
+                              <button type="submit" className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap">
+                                Add Card
+                              </button>
+                            </div>
+                          </form>
+
+                          <div className="divide-y divide-[var(--line)]">
+                            {workspace.flashcards.filter((c) => c.topicId === activeTopic.id).length === 0 ? (
+                              <p className="py-3 text-center text-xs text-[var(--mute)]">
+                                No flashcards linked to this note yet. Add one above or make them from key terms.
+                              </p>
+                            ) : (
+                              workspace.flashcards
+                                .filter((c) => c.topicId === activeTopic.id)
+                                .map((card) => (
+                                  <div key={card.id} className="flex items-start justify-between gap-3 py-2.5 text-xs">
+                                    <div>
+                                      <div className="font-semibold text-[var(--ink)]">{card.q}</div>
+                                      <div className="text-[var(--mute)]">{card.a}</div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnlinkCardFromTopic(card.id)}
+                                      className="sd-btn px-2 py-1 text-[11px] text-[var(--bad)] whitespace-nowrap"
+                                    >
+                                      Unlink
+                                    </button>
+                                  </div>
+                                ))
+                            )}
+                          </div>
                         </div>
                       )}
                     </section>

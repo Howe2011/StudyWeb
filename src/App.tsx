@@ -26,6 +26,7 @@ import {
 } from './lib/crypto';
 import {
   clearCommunityCache,
+  updateCommunityAuthorName,
 } from './lib/communityService';
 import {
   createUserAccountWithVault,
@@ -1201,6 +1202,7 @@ export default function App() {
     if (nextProfile.fullName.trim() && nextProfile.fullName.trim() !== account.displayName) {
       await updateDisplayName(firebaseUser.uid, nextProfile.fullName.trim());
       setAccount({ ...account, displayName: nextProfile.fullName.trim() });
+      await updateCommunityAuthorName(firebaseUser.uid, nextProfile.fullName.trim());
     }
     setProfile(nextProfile);
     await recordActivity(firebaseUser.uid, 'Updated encrypted profile');

@@ -597,3 +597,14 @@ export function copySharedSubjectTopicIntoWorkspace(
     topicId: createdTopic.id,
   };
 }
+
+export async function updateCommunityAuthorName(uid: string, newAuthorName: string): Promise<void> {
+  try {
+    const q = query(collection(db, 'sharedItems'), where('ownerId', '==', uid));
+    const snap = await getDocs(q);
+    await Promise.all(snap.docs.map((d) => updateDoc(d.ref, { ownerName: newAuthorName })));
+    clearCommunityCache();
+  } catch {
+    // ignore
+  }
+}
