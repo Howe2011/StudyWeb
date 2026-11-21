@@ -218,6 +218,8 @@ export function UniversalImportModal({
     defaultSubjectId || workspace.subjects[0]?.id || '__new__'
   );
   const [targetParentTopicId, setTargetParentTopicId] = useState<string>('');
+  const [linkToTopicId, setLinkToTopicId] = useState<string>('');
+  const [linkCardsWithNoteTopic, setLinkCardsWithNoteTopic] = useState<boolean>(false);
   const [newSubjectName, setNewSubjectName] = useState('');
   const [topicNameOverride, setTopicNameOverride] = useState('');
   const [tagsInput, setTagsInput] = useState('');
@@ -382,12 +384,16 @@ export function UniversalImportModal({
       setIncludeCards(true);
       setIncludeTimeline(false);
       setPreviewTab('cards');
+      setLinkToTopicId('');
+      setLinkCardsWithNoteTopic(false);
     } else {
       setIncludeNotes(true);
       // Keep Make Flashcards user-triggered by default for notes
       setIncludeCards(false);
       setIncludeTimeline(parsedPreview.timelineEvents.length > 0 && looksLikeHistory);
       setPreviewTab('notes');
+      setLinkToTopicId('');
+      setLinkCardsWithNoteTopic(false);
     }
   }, [parsedPreview, targetSubjectId, newSubjectName, workspace.subjects]);
 
@@ -781,72 +787,83 @@ export function UniversalImportModal({
         }
         resolvedSubjId = subj.id;
 
+        const willSaveNoteTopic = includeNotes || includeTimeline;
         const nextTopics = [...prev.topics];
-        const topic = nextTopics.find(
-          (t) =>
-            t.subjectId === subj!.id &&
-            t.name.toLowerCase() === finalTopicName.toLowerCase()
-        );
 
-        if (topic) {
-          resolvedTopicId = topic.id;
-          const mergedTags = Array.from(
-            new Set([...(topic.tags || []), ...parsedTags])
+        if (willSaveNoteTopic) {
+          const topic = nextTopics.find(
+            (t) =>
+              t.subjectId === subj!.id &&
+              t.name.toLowerCase() === finalTopicName.toLowerCase()
           );
-          const mergedNote = includeNotes
-            ? {
-                ...topic.notes,
-                summary: topic.notes.summary || builtNote.summary,
-                sections: [...topic.notes.sections, ...builtNote.sections],
-                keyTerms: [...topic.notes.keyTerms, ...builtNote.keyTerms],
-                examTip: topic.notes.examTip || builtNote.examTip,
-                workedExample: topic.notes.workedExample || builtNote.workedExample,
-                legacyHtml: builtNote.legacyHtml || topic.notes.legacyHtml,
-                originalHtml: builtNote.originalHtml || topic.notes.originalHtml,
-                preferOriginalFormat: builtNote.originalHtml
-                  ? builtNote.preferOriginalFormat
-                  : topic.notes.preferOriginalFormat,
-                updatedAt: new Date().toISOString(),
-              }
-            : topic.notes;
 
-          const existingTimeline = topic.timelineEvents || [];
-          const mergedTimeline =
-            validTimeline.length > 0
-              ? [...existingTimeline, ...validTimeline]
-              : existingTimeline;
+          if (topic) {
+            resolvedTopicId = topic.id;
+            const mergedTags = Array.from(
+              new Set([...(topic.tags || []), ...parsedTags])
+            );
+            const mergedNote = includeNotes
+              ? {
+                  ...topic.notes,
+                  summary: topic.notes.summary || builtNote.summary,
+                  sections: [...topic.notes.sections, ...builtNote.sections],
+                  keyTerms: [...topic.notes.keyTerms, ...builtNote.keyTerms],
+                  examTip: topic.notes.examTip || builtNote.examTip,
+                  workedExample: topic.notes.workedExample || builtNote.workedExample,
+                  legacyHtml: builtNote.legacyHtml || topic.notes.legacyHtml,
+                  originalHtml: builtNote.originalHtml || topic.notes.originalHtml,
+                  preferOriginalFormat: builtNote.originalHtml
+                    ? builtNote.preferOriginalFormat
+                    : topic.notes.preferOriginalFormat,
+                  updatedAt: new Date().toISOString(),
+                }
+              : topic.notes;
 
-          const idx = nextTopics.findIndex((t) => t.id === topic.id);
-          nextTopics[idx] = {
-            ...topic,
-            tags: mergedTags.length ? mergedTags : topic.tags,
-            notes: mergedNote,
-            timelineEvents: mergedTimeline.length ? mergedTimeline : topic.timelineEvents,
-          };
-        } else {
-          const validParentId =
-            targetParentTopicId &&
-            nextTopics.some((t) => t.id === targetParentTopicId && t.subjectId === subj!.id)
-              ? targetParentTopicId
-              : undefined;
-          resolvedTopicId = makeId('top');
-          const createdTopic: StudyTopic = {
-            id: resolvedTopicId,
-            subjectId: subj.id,
-            ...(validParentId ? { parentTopicId: validParentId } : {}),
-            name: finalTopicName,
-            tags: parsedTags.length ? parsedTags : undefined,
-            completed: false,
-            notes: includeNotes
-              ? builtNote
-              : createEmptyStructuredNote(
-                  `Flashcard deck imported from ${parsedPreview.sourceLabel}.`
-                ),
-            timelineEvents: validTimeline.length ? validTimeline : undefined,
-            createdAt: new Date().toISOString(),
-          };
-          nextTopics.push(createdTopic);
+            const existingTimeline = topic.timelineEvents || [];
+            const mergedTimeline =
+              validTimeline.length > 0
+                ? [...existingTimeline, ...validTimeline]
+                : existingTimeline;
+
+            const idx = nextTopics.findIndex((t) => t.id === topic.id);
+            nextTopics[idx] = {
+              ...topic,
+              tags: mergedTags.length ? mergedTags : topic.tags,
+              notes: mergedNote,
+              timelineEvents: mergedTimeline.length ? mergedTimeline : topic.timelineEvents,
+            };
+          } else {
+            const validParentId =
+              targetParentTopicId &&
+              nextTopics.some((t) => t.id === targetParentTopicId && t.subjectId === subj!.id)
+                ? targetParentTopicId
+                : undefined;
+            resolvedTopicId = makeId('top');
+            const createdTopic: StudyTopic = {
+              id: resolvedTopicId,
+              subjectId: subj.id,
+              ...(validParentId ? { parentTopicId: validParentId } : {}),
+              name: finalTopicName,
+              tags: parsedTags.length ? parsedTags : undefined,
+              completed: false,
+              notes: includeNotes
+                ? builtNote
+                : createEmptyStructuredNote(''),
+              timelineEvents: validTimeline.length ? validTimeline : undefined,
+              createdAt: new Date().toISOString(),
+            };
+            nextTopics.push(createdTopic);
+          }
         }
+
+        const optionalLinkedTopicId = willSaveNoteTopic
+          ? linkCardsWithNoteTopic
+            ? resolvedTopicId
+            : undefined
+          : linkToTopicId &&
+            nextTopics.some((t) => t.id === linkToTopicId && t.subjectId === subj!.id)
+          ? linkToTopicId
+          : undefined;
 
         const nextCards = [...prev.flashcards];
         if (validCards.length > 0) {
@@ -861,7 +878,7 @@ export function UniversalImportModal({
             const fc: StudyFlashcard = {
               id: makeId('fc'),
               subjectId: subj.id,
-              topicId: resolvedTopicId,
+              ...(optionalLinkedTopicId ? { topicId: optionalLinkedTopicId } : {}),
               sectionName:
                 c.sectionName && c.sectionName !== 'Imported Deck'
                   ? c.sectionName
@@ -885,15 +902,19 @@ export function UniversalImportModal({
           updatedAt: new Date().toISOString(),
         };
       },
-      `Imported "${finalTopicName}"${validTimeline.length ? ` · ${validTimeline.length} timeline nodes` : ''}${validCards.length ? ` · ${validCards.length} flashcards` : ''}.`,
+      !includeNotes && !includeTimeline
+        ? `Imported ${validCards.length} flashcard${validCards.length === 1 ? '' : 's'} into "${finalTopicName}" (kept separate from Study Notes).`
+        : `Imported "${finalTopicName}"${validTimeline.length ? ` · ${validTimeline.length} timeline nodes` : ''}${validCards.length ? ` · ${validCards.length} flashcards` : ''}.`,
       resolvedSubjId || targetSubjectId,
-      resolvedTopicId
+      includeNotes || includeTimeline ? resolvedTopicId : ''
     );
 
     setRawText('');
     setPreExtractedCards(undefined);
     setTopicNameOverride('');
     setTargetParentTopicId('');
+    setLinkToTopicId('');
+    setLinkCardsWithNoteTopic(false);
     setTagsInput('');
     setLegacyHtml(undefined);
     setOriginalHtml(undefined);
@@ -1929,7 +1950,21 @@ export function UniversalImportModal({
           {/* Step 2: Interactive Editable Pre-Save Preview */}
           {parsedPreview && (
             <div className="space-y-4 border-t border-[var(--line)] pt-4">
-              {/* Assignment & Tags Row */}
+              {!includeNotes && !includeTimeline && includeCards && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--ok)]/40 bg-[color-mix(in_srgb,var(--ok)_7%,var(--bg))] px-4 py-2.5 text-xs">
+                  <div className="flex items-center gap-2 font-semibold text-[var(--ink)]">
+                    <Layers className="h-4 w-4 shrink-0 text-[var(--ok)]" aria-hidden="true" />
+                    <span>
+                      Flashcard deck detected ({draftCards.length} cards) — no Study Notes page will be added.
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-[var(--mute)]">
+                    Separate from Study Notes by default
+                  </span>
+                </div>
+              )}
+
+              {/* Assignment & Tags / Optional Link Row */}
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="block text-xs font-semibold text-[var(--mute)]">
                   Course / Subject
@@ -1938,6 +1973,7 @@ export function UniversalImportModal({
                     onChange={(e) => {
                       setTargetSubjectId(e.target.value);
                       setTargetParentTopicId('');
+                      setLinkToTopicId('');
                     }}
                     className="sd-input mt-1 text-sm"
                   >
@@ -1963,7 +1999,7 @@ export function UniversalImportModal({
                   </label>
                 ) : (
                   <label className="block text-xs font-semibold text-[var(--mute)]">
-                    Topic Name
+                    {!includeNotes && !includeTimeline ? 'Deck / Section Name' : 'Topic Name'}
                     <input
                       type="text"
                       value={topicNameOverride}
@@ -1974,22 +2010,62 @@ export function UniversalImportModal({
                   </label>
                 )}
 
-                <label className="block text-xs font-semibold text-[var(--mute)]">
-                  <span className="inline-flex items-center gap-1">
-                    <Tag className="h-3 w-3" aria-hidden="true" />
-                    Tags (comma-separated)
-                  </span>
-                  <input
-                    type="text"
-                    value={tagsInput}
-                    onChange={(e) => setTagsInput(e.target.value)}
-                    placeholder="e.g. Paper 1, Causes, Exam Core"
-                    className="sd-input mt-1 text-sm"
-                  />
-                </label>
+                {includeNotes || includeTimeline ? (
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    <span className="inline-flex items-center gap-1">
+                      <Tag className="h-3 w-3" aria-hidden="true" />
+                      Tags (comma-separated)
+                    </span>
+                    <input
+                      type="text"
+                      value={tagsInput}
+                      onChange={(e) => setTagsInput(e.target.value)}
+                      placeholder="e.g. Paper 1, Causes, Exam Core"
+                      className="sd-input mt-1 text-sm"
+                    />
+                  </label>
+                ) : targetSubjectId !== '__new__' ? (
+                  (() => {
+                    const subjTopics = workspace.topics.filter(
+                      (t) => t.subjectId === targetSubjectId
+                    );
+                    const tree = buildTopicTreeList(subjTopics);
+                    return (
+                      <label className="block text-xs font-semibold text-[var(--mute)]">
+                        Link to Study Notes Topic (optional)
+                        <select
+                          value={linkToTopicId}
+                          onChange={(e) => setLinkToTopicId(e.target.value)}
+                          className="sd-input mt-1 text-sm"
+                        >
+                          <option value="">None — Keep separate from Study Notes</option>
+                          {tree.map((node) => (
+                            <option key={node.topic.id} value={node.topic.id}>
+                              {'\u00A0\u00A0'.repeat(node.depth)}
+                              {node.depth > 0 ? '↳ ' : ''}
+                              {node.topic.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    );
+                  })()
+                ) : (
+                  <label className="block text-xs font-semibold text-[var(--mute)]">
+                    Deck / Section Name
+                    <input
+                      type="text"
+                      value={topicNameOverride}
+                      onChange={(e) => setTopicNameOverride(e.target.value)}
+                      placeholder={parsedPreview.suggestedTitle}
+                      className="sd-input mt-1 text-sm"
+                    />
+                  </label>
+                )}
               </div>
 
-              {targetSubjectId !== '__new__' &&
+              {(includeNotes || includeTimeline) &&
+                targetSubjectId !== '__new__' &&
                 (() => {
                   const subjTopics = workspace.topics.filter(
                     (t) => t.subjectId === targetSubjectId
@@ -2017,7 +2093,7 @@ export function UniversalImportModal({
                   );
                 })()}
 
-              {targetSubjectId === '__new__' && (
+              {(includeNotes || includeTimeline) && targetSubjectId === '__new__' && (
                 <label className="block text-xs font-semibold text-[var(--mute)]">
                   Topic Name
                   <input
@@ -2031,7 +2107,7 @@ export function UniversalImportModal({
               )}
 
               {/* Autoformatter Style & Exact Document Mode Bar */}
-              {parsedPreview.mode !== 'flashcards-only' && (
+              {(includeNotes || includeTimeline) && (
                 <div className="space-y-2.5 rounded-xl border border-[var(--line)] bg-[var(--card)] p-3.5">
                   {originalHtml && (
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
@@ -2317,10 +2393,22 @@ export function UniversalImportModal({
                     <Layers className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>
                       {includeCards
-                        ? `Make Flashcards Enabled (${draftCards.length})`
+                        ? `Import Flashcards Enabled (${draftCards.length})`
                         : `Make Flashcards (${draftCards.length})`}
                     </span>
                   </button>
+
+                  {includeCards && (includeNotes || includeTimeline) && (
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-[var(--mute)]">
+                      <input
+                        type="checkbox"
+                        checked={linkCardsWithNoteTopic}
+                        onChange={(e) => setLinkCardsWithNoteTopic(e.target.checked)}
+                        className="accent-[var(--e3)]"
+                      />
+                      <span>Link flashcards to this Note Topic</span>
+                    </label>
+                  )}
                 </div>
 
                 {/* Preview Tab 1: Original Document OR Visual Pretty Preview OR Editable Structured Sections */}
@@ -2874,9 +2962,13 @@ export function UniversalImportModal({
                   <div className="mt-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                       <span className="text-[var(--mute)]">
-                        {includeCards
-                          ? 'These flashcards will be saved into the selected topic deck.'
-                          : 'Click "Make Flashcards" above if you want to save these cards along with your notes.'}
+                        {!includeCards
+                          ? 'Click "Make Flashcards" above if you want to save these cards too.'
+                          : !includeNotes && !includeTimeline
+                          ? `Saving into Flashcards under "${effectiveTopicName}" (no Study Notes page created${linkToTopicId ? ', linked to chosen topic' : ', kept separate from Study Notes'}).`
+                          : linkCardsWithNoteTopic
+                          ? `Saving into Flashcards and linked to "${effectiveTopicName}" in Study Notes.`
+                          : `Saving into Flashcards under "${effectiveTopicName}" (kept separate from Study Notes).`}
                       </span>
                       <button
                         type="button"
@@ -2988,7 +3080,11 @@ export function UniversalImportModal({
               className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
             >
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Import into Workspace</span>
+              <span>
+                {!includeNotes && !includeTimeline && includeCards
+                  ? `Import ${draftCards.filter((c) => c.q.trim() && c.a.trim()).length} Flashcards`
+                  : 'Import into Workspace'}
+              </span>
             </button>
           )}
         </div>

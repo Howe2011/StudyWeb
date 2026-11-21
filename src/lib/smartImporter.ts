@@ -917,6 +917,17 @@ export function parseUniversalStudyImport(
   const lines = cleanText.split('\n');
   const cards: Array<{ q: string; a: string; sectionName: string }> = [];
   let detectedPureFlashcards = 0;
+  let skippedDeckMetaLines = 0;
+  let explicitDeckHeading = '';
+
+  const firstHeading = cleanText.match(/^#{1,3}\s+(.+)$/m)?.[1]?.trim();
+  const baseFileName = (opts?.sourceLabel || '').replace(/\.[^.]+$/, '').trim();
+  const defaultDeckSection =
+    (firstHeading && lines[0]?.trim().startsWith('#') ? firstHeading : '') ||
+    (baseFileName && !/^(?:pasted|text|quizlet|gizmo|flashcard)/i.test(baseFileName)
+      ? baseFileName
+      : '') ||
+    'Imported Deck';
 
   if (opts?.preExtractedCards?.length) {
     for (const c of opts.preExtractedCards) {
@@ -929,7 +940,7 @@ export function parseUniversalStudyImport(
 
   // If explicit Quizlet/Gizmo delimiter mode chosen (alternating / blank-line / semicolon / etc.)
   if (opts?.deckDelimiter && opts.deckDelimiter !== 'auto') {
-    const deckCards = parseQuizletOrGizmoCards(cleanText, opts.deckDelimiter, 'Imported Deck');
+    const deckCards = parseQuizletOrGizmoCards(cleanText, opts.deckDelimiter, defaultDeckSection);
     const seen = new Set(cards.map((c) => c.q.toLowerCase()));
     for (const c of deckCards) {
       if (!seen.has(c.q.toLowerCase())) {
@@ -939,49 +950,111 @@ export function parseUniversalStudyImport(
       }
     }
   } else {
-    // 1. Scan explicitly for Q:/A: blocks, Quizlet tab-separated, pipe, ::, Gizmo cloze, or pure CSV flashcard rows
+    // 1. Scan explicitly for Q:/A: blocks, Quizlet tab-separated, pipe, ::, Gizmo cloze, or CSV flashcard rows
+    const looksLikeCsvFile = /\.(?:csv|tsv)$/i.test(opts?.sourceLabel || '');
+    const firstNonEmptyIdx = lines.findIndex((l) => l.trim().length > 0);
+    const csvHeaderRe =
+      /^(?:question|q|term|front|prompt|word|concept)\s*[,;\t|]\s*(?:answer|a|definition|def|back|response|meaning)(?:\s*[,;\t|]\s*(?:section|deck|topic|category|tag))?$/i;
+
+    let hasCsvHeader = false;
     let pendingQ = '';
+
     for (let idx = 0; idx < lines.length; idx++) {
       const t = lines[idx].trim();
       if (!t) continue;
+
+      // Optional Deck Title on first line (e.g. "# Biology Deck" or "Deck: Cell Biology")
+      if (idx === firstNonEmptyIdx) {
+        const deckPrefix = t.match(/^(?:deck|set|flashcards?)\s*:\s*(.+)$/i);
+        if (deckPrefix) {
+          explicitDeckHeading = deckPrefix[1].trim();
+          skippedDeckMetaLines++;
+          continue;
+        }
+        if (/^#{1,3}\s+/.test(t) && lines.slice(idx + 1).some((l) => l.trim())) {
+          skippedDeckMetaLines++;
+          continue;
+        }
+      }
 
       if (/^\|.+\|$/.test(t)) {
         continue;
       }
 
-      if (idx === 0 && /^(?:question|q|term|front)\s*[,|\t]\s*(?:answer|a|definition|back)/i.test(t)) {
+      if (csvHeaderRe.test(t)) {
+        hasCsvHeader = true;
+        skippedDeckMetaLines++;
         continue;
       }
 
-      const qaInline = t.match(/^Q:\s*(.+?)\s*(?:\||::|->|-->|=>|==>|[→⟶⟹➜➔➤➡↦])\s*A:\s*(.+)$/i);
+      // Gizmo Cloze lines ({{answer}} or ==answer==) when not inside a rich notes document
+      if (!opts?.originalHtml && /\{\{[^}]+\}\}|==[^=]+==/.test(t)) {
+        const noBullet = t.replace(/^(?:[-*•]\s*|\d+[.)]\s*)/, '').trim();
+        const clozeRe = /\{\{([^}]+)\}\}|==([^=]+)==/g;
+        let m: RegExpExecArray | null;
+        let matchedAny = false;
+        while ((m = clozeRe.exec(noBullet)) !== null) {
+          const ans = (m[1] || m[2] || '').trim();
+          const q = noBullet
+            .replace(m[0], '[____]')
+            .replace(/\{\{([^}]+)\}\}/g, '$1')
+            .replace(/==([^=]+)==/g, '$1')
+            .trim();
+          if (q && ans) {
+            cards.push({
+              q,
+              a: ans,
+              sectionName: explicitDeckHeading || defaultDeckSection,
+            });
+            matchedAny = true;
+          }
+        }
+        if (matchedAny) {
+          detectedPureFlashcards++;
+          pendingQ = '';
+          continue;
+        }
+      }
+
+      const qaInline = t.match(
+        /^(?:Q|Question)\s*:\s*(.+?)\s*(?:\||::|->|-->|=>|==>|[→⟶⟹➜➔➤➡↦]|\t)\s*(?:A|Answer)\s*:\s*(.+)$/i
+      );
       if (qaInline) {
-        cards.push({ q: qaInline[1].trim(), a: qaInline[2].trim(), sectionName: 'Imported Deck' });
+        cards.push({
+          q: qaInline[1].trim(),
+          a: qaInline[2].trim(),
+          sectionName: explicitDeckHeading || defaultDeckSection,
+        });
         detectedPureFlashcards++;
         pendingQ = '';
         continue;
       }
 
-      const qOnly = t.match(/^Q:\s*(.+)$/i);
+      const qOnly = t.match(/^(?:Q|Question)\s*:\s*(.+)$/i);
       if (qOnly) {
         pendingQ = qOnly[1].trim();
         continue;
       }
 
-      const aOnly = t.match(/^A:\s*(.+)$/i);
+      const aOnly = t.match(/^(?:A|Answer)\s*:\s*(.+)$/i);
       if (aOnly && pendingQ) {
-        cards.push({ q: pendingQ, a: aOnly[1].trim(), sectionName: 'Imported Deck' });
-        detectedPureFlashcards++;
+        cards.push({
+          q: pendingQ,
+          a: aOnly[1].trim(),
+          sectionName: explicitDeckHeading || defaultDeckSection,
+        });
+        detectedPureFlashcards += 2;
         pendingQ = '';
         continue;
       }
 
       if (t.includes('\t')) {
         const parts = t.split('\t').map((x) => x.trim()).filter(Boolean);
-        if (parts.length === 2) {
+        if (parts.length >= 2) {
           cards.push({
             q: parts[0],
             a: parts[1],
-            sectionName: 'Imported Deck',
+            sectionName: parts[2] || explicitDeckHeading || defaultDeckSection,
           });
           detectedPureFlashcards++;
           continue;
@@ -994,37 +1067,140 @@ export function parseUniversalStudyImport(
           cards.push({
             q: parts[0],
             a: parts[1],
-            sectionName: parts[2] || 'Imported Deck',
+            sectionName: parts[2] || explicitDeckHeading || defaultDeckSection,
           });
           detectedPureFlashcards++;
           continue;
         }
       }
 
-      if (/\.csv$/i.test(opts?.sourceLabel || '') || (t.startsWith('"') && t.includes('","'))) {
+      if (looksLikeCsvFile || hasCsvHeader || (t.startsWith('"') && t.includes('","'))) {
         const csvRow = parseCsvLine(t);
         if (csvRow) {
-          cards.push({ q: csvRow[0], a: csvRow[1], sectionName: csvRow[2] });
+          cards.push({
+            q: csvRow[0],
+            a: csvRow[1],
+            sectionName:
+              csvRow[2] !== 'Imported Deck'
+                ? csvRow[2]
+                : explicitDeckHeading || defaultDeckSection,
+          });
           detectedPureFlashcards++;
         }
       }
     }
 
-    // Check blank-line Quizlet copy-paste pairs if no explicit delimiter matched
-    if (cards.length === 0) {
-      const blocks = cleanText.split(/\n\s*\n+/).map((b) =>
-        b
-          .split('\n')
-          .map((l) => l.trim())
-          .filter(Boolean)
-      );
-      if (
-        blocks.length >= 2 &&
-        blocks.every((b) => b.length === 2 && !b[0].startsWith('#') && !b[0].startsWith('-'))
-      ) {
-        for (const b of blocks) {
-          cards.push({ q: b[0], a: b[1], sectionName: 'Imported Deck' });
-          detectedPureFlashcards += 2;
+    // Fallback CSV / Semicolon / Blank-line / Q?+A detection when pasted directly into Paste Text without file extension
+    if (cards.length === 0 && !opts?.originalHtml) {
+      const contentLines = lines
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .filter((l, idx) => {
+          if (idx === 0 && (/^#{1,3}\s+/.test(l) || /^(?:deck|set|flashcards?)\s*:/i.test(l))) {
+            return false;
+          }
+          if (csvHeaderRe.test(l)) return false;
+          return true;
+        });
+
+      // Check unquoted CSV rows (e.g., pasted CSV without .csv extension)
+      if (contentLines.length >= 2) {
+        const csvCandidates = contentLines.map((l) => parseCsvLine(l));
+        const validCsv = csvCandidates.filter(
+          (r): r is [string, string, string] =>
+            Boolean(
+              r &&
+                r[0].length <= 100 &&
+                r[1].length >= 2 &&
+                (!/[.!]$/.test(r[0]) || r[0].endsWith('?'))
+            )
+        );
+        if (
+          validCsv.length >= 2 &&
+          validCsv.length >= Math.ceil(contentLines.length * 0.8) &&
+          !contentLines.some((l) => /^[-*•#]|^\d+\.\s/.test(l))
+        ) {
+          for (const row of validCsv) {
+            cards.push({
+              q: row[0],
+              a: row[1],
+              sectionName:
+                row[2] !== 'Imported Deck'
+                  ? row[2]
+                  : explicitDeckHeading || defaultDeckSection,
+            });
+          }
+          detectedPureFlashcards = contentLines.length;
+        }
+      }
+
+      // Check semicolon-separated flashcards
+      if (cards.length === 0 && contentLines.length >= 2) {
+        const semiRows = contentLines
+          .map((l) => l.split(';').map((x) => x.trim()))
+          .filter((p) => p.length >= 2 && p.length <= 3 && p[0] && p[1] && p[0].length <= 110);
+        if (semiRows.length >= 2 && semiRows.length >= Math.ceil(contentLines.length * 0.8)) {
+          for (const p of semiRows) {
+            cards.push({
+              q: p[0],
+              a: p[1],
+              sectionName: p[2] || explicitDeckHeading || defaultDeckSection,
+            });
+          }
+          detectedPureFlashcards = contentLines.length;
+        }
+      }
+
+      // Check blank-line Quizlet copy-paste pairs ("Term\nDefinition\n\nTerm 2\nDefinition 2")
+      if (cards.length === 0) {
+        const rawBlocks = cleanText
+          .replace(/^(?:#{1,3}\s+.+|(?:deck|set|flashcards?)\s*:\s*.+)\n+/i, '')
+          .split(/\n\s*\n+/)
+          .map((b) =>
+            b
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+          );
+        if (
+          rawBlocks.length >= 2 &&
+          rawBlocks.every((b) => b.length === 2 && !b[0].startsWith('#') && !/^[-*•]\s/.test(b[0]))
+        ) {
+          for (const b of rawBlocks) {
+            cards.push({
+              q: b[0],
+              a: b[1],
+              sectionName: explicitDeckHeading || defaultDeckSection,
+            });
+            detectedPureFlashcards += 2;
+          }
+        }
+      }
+
+      // Check alternating "Question?\nAnswer" lines
+      if (cards.length === 0 && contentLines.length >= 4 && contentLines.length % 2 === 0) {
+        let pairHits = 0;
+        for (let i = 0; i + 1 < contentLines.length; i += 2) {
+          const qLine = contentLines[i];
+          const aLine = contentLines[i + 1];
+          if (
+            qLine.endsWith('?') &&
+            !aLine.endsWith('?') &&
+            !/^#{1,4}\s/.test(qLine) &&
+            !/^[-*•]\s/.test(qLine)
+          ) {
+            pairHits++;
+          }
+        }
+        if (pairHits >= 2 && pairHits === contentLines.length / 2) {
+          for (let i = 0; i + 1 < contentLines.length; i += 2) {
+            cards.push({
+              q: contentLines[i],
+              a: contentLines[i + 1],
+              sectionName: explicitDeckHeading || defaultDeckSection,
+            });
+          }
+          detectedPureFlashcards = contentLines.length;
         }
       }
     }
@@ -1054,18 +1230,19 @@ export function parseUniversalStudyImport(
     }
   }
 
-  const firstHeading = cleanText.match(/^#{1,3}\s+(.+)$/m)?.[1]?.trim();
-  const baseFileName = (opts?.sourceLabel || '').replace(/\.[^.]+$/, '').trim();
-  const suggestedTitle =
-    firstHeading ||
-    (baseFileName && !/pasted|text|quizlet|gizmo/i.test(baseFileName) ? baseFileName : '') ||
-    'Imported Study Topic';
-
   const nonEmptyLines = lines.filter((l) => l.trim().length > 0).length;
+  const effectiveContentLines = Math.max(1, nonEmptyLines - skippedDeckMetaLines);
   const isPureFlashcards =
     Boolean(opts?.preExtractedCards?.length) ||
     (opts?.deckDelimiter !== undefined && opts.deckDelimiter !== 'auto' && cards.length > 0) ||
-    (cards.length > 0 && detectedPureFlashcards >= Math.max(1, Math.floor(nonEmptyLines * 0.65)));
+    (cards.length > 0 &&
+      detectedPureFlashcards >= Math.max(1, Math.floor(effectiveContentLines * 0.6)));
+
+  const suggestedTitle =
+    explicitDeckHeading ||
+    firstHeading ||
+    (baseFileName && !/pasted|text|quizlet|gizmo/i.test(baseFileName) ? baseFileName : '') ||
+    (isPureFlashcards ? 'Imported Deck' : 'Imported Study Topic');
 
   const timelineEvents = isPureFlashcards
     ? []

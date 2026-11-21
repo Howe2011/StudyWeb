@@ -222,7 +222,7 @@ export function FlashcardsView({
   const [editTopicId, setEditTopicId] = useState<string>('');
   const [editSectionName, setEditSectionName] = useState<string>('');
 
-  // Manage / Add form state
+  // Manage / Add form state (standalone decks by default; Study Notes link is optional)
   const [manageSubTab, setManageSubTab] = useState<'browse' | 'add'>('browse');
   const [manageLayout, setManageLayout] = useState<'grouped' | 'flat'>('grouped');
   const [manageSort, setManageSort] = useState<'orig' | 'box-asc' | 'box-desc' | 'due' | 'az'>('orig');
@@ -232,8 +232,8 @@ export function FlashcardsView({
   const [confirmBulkDelete, setConfirmBulkDelete] = useState<boolean>(false);
   const [renamingSectionKey, setRenamingSectionKey] = useState<string | null>(null);
   const [renameSectionDraft, setRenameSectionDraft] = useState<string>('');
-  const [newTopicId, setNewTopicId] = useState<string>('');
-  const [newTopicCustomName, setNewTopicCustomName] = useState<string>('');
+  const [addSubjectId, setAddSubjectId] = useState<string>('');
+  const [newTopicId, setNewTopicId] = useState<string>(''); // '' = Separate from Study Notes (default)
   const [newQ, setNewQ] = useState('');
   const [newA, setNewA] = useState('');
   const [newSec, setNewSec] = useState('Core Deck');
@@ -241,8 +241,8 @@ export function FlashcardsView({
   const [manageSearch, setManageSearch] = useState('');
   const [manageTopicFilter, setManageTopicFilter] = useState<string>('ALL');
   const [manageFilter, setManageFilter] = useState<'all' | 'due' | 'weak' | 'mid' | 'flagged' | 'mastered'>('all');
-  const [moveTargetTopicId, setMoveTargetTopicId] = useState<string>('');
-  const [moveNewTopicName, setMoveNewTopicName] = useState<string>('');
+  const [moveTargetSubjectId, setMoveTargetSubjectId] = useState<string>('__keep__');
+  const [moveTargetTopicId, setMoveTargetTopicId] = useState<string>('__keep__');
   const [moveTargetSection, setMoveTargetSection] = useState<string>('');
   const [moveFeedback, setMoveFeedback] = useState<string | null>(null);
 
@@ -276,7 +276,30 @@ export function FlashcardsView({
     return workspace.topics.filter((t) => t.subjectId === selectedSubjectId);
   }, [workspace.topics, selectedSubjectId]);
 
-  // Reset topic filter when subject changes
+  const addSubjectTopicsList = useMemo(() => {
+    const activeAddSubj =
+      selectedSubjectId && selectedSubjectId !== 'ALL'
+        ? selectedSubjectId
+        : addSubjectId || workspace.subjects[0]?.id || '';
+    if (!activeAddSubj) return [];
+    return workspace.topics.filter((t) => t.subjectId === activeAddSubj);
+  }, [workspace.topics, workspace.subjects, selectedSubjectId, addSubjectId]);
+
+  const subjectDeckSuggestions = useMemo(() => {
+    const activeSubj =
+      selectedSubjectId && selectedSubjectId !== 'ALL'
+        ? selectedSubjectId
+        : addSubjectId || '';
+    const set = new Set<string>();
+    workspace.flashcards.forEach((c) => {
+      if (activeSubj && c.subjectId !== activeSubj) return;
+      const sec = (c.sectionName || '').trim();
+      if (sec) set.add(sec);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [workspace.flashcards, selectedSubjectId, addSubjectId]);
+
+  // Reset filters when subject changes
   useEffect(() => {
     setSelectedTopicFilter('ALL');
     setManageTopicFilter('ALL');
@@ -284,25 +307,32 @@ export function FlashcardsView({
     setSelectedManageIds(new Set());
     setConfirmBulkDelete(false);
     setMoveFeedback(null);
-  }, [selectedSubjectId]);
+    setNewTopicId('');
+    setMoveTargetTopicId('__keep__');
+    setMoveTargetSubjectId('__keep__');
+    if (selectedSubjectId && selectedSubjectId !== 'ALL') {
+      setAddSubjectId(selectedSubjectId);
+    } else if (!addSubjectId || !workspace.subjects.some((s) => s.id === addSubjectId)) {
+      setAddSubjectId(workspace.subjects[0]?.id || '');
+    }
+  }, [selectedSubjectId, workspace.subjects, addSubjectId]);
 
-  // Keep default topic selection synced for Add Card & Batch Move
+  // Ensure optional newTopicId stays valid for chosen subject, defaulting to '' (unlinked)
   useEffect(() => {
-    if (selectedTopicFilter !== 'ALL' && subjectTopicsList.some((t) => t.id === selectedTopicFilter)) {
-      setNewTopicId(selectedTopicFilter);
-    } else if (!newTopicId || (newTopicId !== '__new__' && !subjectTopicsList.some((t) => t.id === newTopicId))) {
-      setNewTopicId(subjectTopicsList[0]?.id || '__new__');
+    if (newTopicId && !addSubjectTopicsList.some((t) => t.id === newTopicId)) {
+      setNewTopicId('');
     }
-    if (!moveTargetTopicId || (moveTargetTopicId !== '__new__' && !subjectTopicsList.some((t) => t.id === moveTargetTopicId))) {
-      setMoveTargetTopicId(subjectTopicsList[0]?.id || '__new__');
-    }
-  }, [selectedTopicFilter, subjectTopicsList, newTopicId, moveTargetTopicId]);
+  }, [addSubjectTopicsList, newTopicId]);
 
-  const topicCardsSummary = useMemo(() => {
+  const linkedTopicsSummary = useMemo(() => {
     const counts = new Map<string, number>();
+    let unlinkedCount = 0;
     for (const c of subjectCards) {
-      const tid = topicById.has(c.topicId) ? c.topicId : '__unassigned__';
-      counts.set(tid, (counts.get(tid) || 0) + 1);
+      if (c.topicId && topicById.has(c.topicId)) {
+        counts.set(c.topicId, (counts.get(c.topicId) || 0) + 1);
+      } else {
+        unlinkedCount += 1;
+      }
     }
     const items = subjectTopicsList
       .map((t) => ({
@@ -313,23 +343,13 @@ export function FlashcardsView({
         count: counts.get(t.id) || 0,
       }))
       .filter((x) => x.count > 0);
-    const unassignedCount = counts.get('__unassigned__') || 0;
-    if (unassignedCount > 0) {
-      items.push({
-        topicId: '__unassigned__',
-        topicName: 'General / Unassigned',
-        subjectName: 'General',
-        color: '#6b7280',
-        count: unassignedCount,
-      });
-    }
-    return items;
+    return { items, unlinkedCount };
   }, [subjectCards, subjectTopicsList, topicById, subjById]);
 
   const topicFilteredCards = useMemo(() => {
     if (selectedTopicFilter === 'ALL') return subjectCards;
-    if (selectedTopicFilter === '__unassigned__') {
-      return subjectCards.filter((c) => !topicById.has(c.topicId));
+    if (selectedTopicFilter === '__unlinked__') {
+      return subjectCards.filter((c) => !c.topicId || !topicById.has(c.topicId));
     }
     return subjectCards.filter((c) => c.topicId === selectedTopicFilter);
   }, [subjectCards, selectedTopicFilter, topicById]);
@@ -340,49 +360,47 @@ export function FlashcardsView({
       {
         key: string;
         name: string;
-        topicId: string;
-        topicName: string;
         subjectId: string;
         subjectName: string;
         color: string;
+        linkedTopicNames: string[];
         cards: StudyFlashcard[];
       }
     >();
 
     for (const c of topicFilteredCards) {
       const s = subjById.get(c.subjectId);
-      const t = topicById.get(c.topicId);
-      const tId = t ? t.id : '__unassigned__';
-      const tName = t ? t.name : 'General / Unassigned';
+      const t = c.topicId ? topicById.get(c.topicId) : undefined;
       const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
-      const key = `${c.subjectId}:::${tId}:::${secName}`;
+      const key = `${c.subjectId}:::${secName}`;
       const existing = map.get(key);
       if (existing) {
         existing.cards.push(c);
+        if (t && !existing.linkedTopicNames.includes(t.name)) {
+          existing.linkedTopicNames.push(t.name);
+        }
       } else {
         map.set(key, {
           key,
           name: secName,
-          topicId: tId,
-          topicName: tName,
           subjectId: c.subjectId,
           subjectName: s?.name || 'General',
           color: s?.color || '#2F5F8A',
+          linkedTopicNames: t ? [t.name] : [],
           cards: [c],
         });
       }
     }
     return Array.from(map.values()).sort(
-      (a, b) => a.topicName.localeCompare(b.topicName) || a.name.localeCompare(b.name)
+      (a, b) => a.subjectName.localeCompare(b.subjectName) || a.name.localeCompare(b.name)
     );
   }, [topicFilteredCards, subjById, topicById]);
 
-  const topicGroupedBuckets = useMemo(() => {
+  const subjectGroupedBuckets = useMemo(() => {
     const groups = new Map<
       string,
       {
-        topicId: string;
-        topicName: string;
+        subjectId: string;
         subjectName: string;
         color: string;
         buckets: typeof sectionBuckets;
@@ -390,14 +408,13 @@ export function FlashcardsView({
       }
     >();
     for (const b of sectionBuckets) {
-      const g = groups.get(b.topicId);
+      const g = groups.get(b.subjectId);
       if (g) {
         g.buckets.push(b);
         g.totalCards += b.cards.length;
       } else {
-        groups.set(b.topicId, {
-          topicId: b.topicId,
-          topicName: b.topicName,
+        groups.set(b.subjectId, {
+          subjectId: b.subjectId,
           subjectName: b.subjectName,
           color: b.color,
           buckets: [b],
@@ -408,7 +425,7 @@ export function FlashcardsView({
     return Array.from(groups.values());
   }, [sectionBuckets]);
 
-  // Auto-select sections cleanly when subject or topic filter changes
+  // Auto-select sections cleanly when subject or optional note filter changes
   useEffect(() => {
     const validKeys = new Set(sectionBuckets.map((b) => b.key));
     setSelectedSections((prev) => {
@@ -418,13 +435,12 @@ export function FlashcardsView({
     });
   }, [sectionBuckets]);
 
-  // Base pool of cards matching selected topic + sections + filters
+  // Base pool of cards matching selected decks + filters
   const basePool = useMemo(() => {
     const selSet = new Set(selectedSections);
     return topicFilteredCards.filter((c) => {
-      const tId = topicById.has(c.topicId) ? c.topicId : '__unassigned__';
       const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
-      const key = `${c.subjectId}:::${tId}:::${secName}`;
+      const key = `${c.subjectId}:::${secName}`;
       if (selSet.size > 0 && !selSet.has(key)) return false;
       if (optStarredOnly && !c.flagged) return false;
       if (optWeakOnly && c.box > 2) return false;
@@ -433,7 +449,7 @@ export function FlashcardsView({
       }
       return true;
     });
-  }, [topicFilteredCards, topicById, selectedSections, optStarredOnly, optWeakOnly, selectedCategories]);
+  }, [topicFilteredCards, selectedSections, optStarredOnly, optWeakOnly, selectedCategories]);
 
   const categoryCounts = useMemo(() => {
     const selSet = new Set(selectedSections);
@@ -445,14 +461,13 @@ export function FlashcardsView({
       term: 0,
     };
     topicFilteredCards.forEach((c) => {
-      const tId = topicById.has(c.topicId) ? c.topicId : '__unassigned__';
       const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
-      const key = `${c.subjectId}:::${tId}:::${secName}`;
+      const key = `${c.subjectId}:::${secName}`;
       if (selSet.size > 0 && !selSet.has(key)) return;
       counts[detectCardCategory(c)] += 1;
     });
     return counts;
-  }, [topicFilteredCards, topicById, selectedSections]);
+  }, [topicFilteredCards, selectedSections]);
 
   const nowMs = Date.now();
   const duePool = useMemo(() => basePool.filter((c) => c.dueAt <= nowMs), [basePool, nowMs]);
@@ -696,7 +711,7 @@ export function FlashcardsView({
           ...c,
           q: editQ.trim(),
           a: editA.trim(),
-          topicId: resolvedTopic ? resolvedTopic.id : editTopicId || c.topicId,
+          topicId: resolvedTopic ? resolvedTopic.id : undefined,
           subjectId: resolvedTopic ? resolvedTopic.subjectId : c.subjectId,
           sectionName: editSectionName.trim() || c.sectionName,
         };
@@ -706,19 +721,23 @@ export function FlashcardsView({
     setEditModalCardId(null);
   };
 
-  const resolveOrCreateTargetTopic = (
+  const resolveTargetSubject = (
     prev: WorkspaceData,
-    fallbackSubjId: string,
-    chosenTopicId: string,
-    customName: string
-  ): { nextSubjs: WorkspaceData['subjects']; nextTopics: WorkspaceData['topics']; subjId: string; topicId: string; topicName: string } => {
-    let nextSubjs = prev.subjects;
-    let nextTopics = prev.topics;
-    if (!nextSubjs.some((s) => s.id === fallbackSubjId)) {
-      nextSubjs = [
-        ...nextSubjs,
+    fallbackSubjId: string
+  ): { nextSubjs: WorkspaceData['subjects']; subjId: string } => {
+    if (fallbackSubjId && prev.subjects.some((s) => s.id === fallbackSubjId)) {
+      return { nextSubjs: prev.subjects, subjId: fallbackSubjId };
+    }
+    if (prev.subjects.length > 0) {
+      return { nextSubjs: prev.subjects, subjId: prev.subjects[0].id };
+    }
+    const createdId = fallbackSubjId || makeId('subj');
+    return {
+      subjId: createdId,
+      nextSubjs: [
+        ...prev.subjects,
         {
-          id: fallbackSubjId,
+          id: createdId,
           name: 'General',
           examBoard: 'Revision',
           color: '#2F5F8A',
@@ -726,64 +745,29 @@ export function FlashcardsView({
           weight: 2,
           createdAt: new Date().toISOString(),
         },
-      ];
-    }
-    if (chosenTopicId === '__new__' && customName.trim()) {
-      const existingByName = nextTopics.find(
-        (t) => t.subjectId === fallbackSubjId && t.name.toLowerCase() === customName.trim().toLowerCase()
-      );
-      if (existingByName) {
-        return { nextSubjs, nextTopics, subjId: existingByName.subjectId, topicId: existingByName.id, topicName: existingByName.name };
-      }
-      const createdId = makeId('top');
-      nextTopics = [
-        ...nextTopics,
-        {
-          id: createdId,
-          subjectId: fallbackSubjId,
-          name: customName.trim(),
-          completed: false,
-          notes: { summary: '', sections: [], keyTerms: [], examTip: '', workedExample: '', updatedAt: new Date().toISOString() },
-          createdAt: new Date().toISOString(),
-        },
-      ];
-      return { nextSubjs, nextTopics, subjId: fallbackSubjId, topicId: createdId, topicName: customName.trim() };
-    }
-    const found = nextTopics.find((t) => t.id === chosenTopicId) || nextTopics.find((t) => t.subjectId === fallbackSubjId);
-    if (found) {
-      return { nextSubjs, nextTopics, subjId: found.subjectId, topicId: found.id, topicName: found.name };
-    }
-    const createdId = makeId('top');
-    const fallbackName = customName.trim() || 'Core Topic';
-    nextTopics = [
-      ...nextTopics,
-      {
-        id: createdId,
-        subjectId: fallbackSubjId,
-        name: fallbackName,
-        completed: false,
-        notes: { summary: '', sections: [], keyTerms: [], examTip: '', workedExample: '', updatedAt: new Date().toISOString() },
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    return { nextSubjs, nextTopics, subjId: fallbackSubjId, topicId: createdId, topicName: fallbackName };
+      ],
+    };
   };
 
   const handleAddSingleCard = (e: FormEvent) => {
     e.preventDefault();
     if (!newQ.trim() || !newA.trim()) return;
-    const targetSubjId =
+    const requestedSubjId =
       selectedSubjectId && selectedSubjectId !== 'ALL'
         ? selectedSubjectId
-        : workspace.subjects[0]?.id || makeId('subj');
+        : addSubjectId || workspace.subjects[0]?.id || makeId('subj');
 
     onUpdateWorkspace((prev) => {
-      const resolved = resolveOrCreateTargetTopic(prev, targetSubjId, newTopicId, newTopicCustomName);
+      const linkedTopic = newTopicId ? prev.topics.find((t) => t.id === newTopicId) : undefined;
+      const { nextSubjs, subjId } = resolveTargetSubject(
+        prev,
+        linkedTopic ? linkedTopic.subjectId : requestedSubjId
+      );
       const card: StudyFlashcard = {
         id: makeId('fc'),
-        subjectId: resolved.subjId,
-        topicId: resolved.topicId,
-        sectionName: newSec.trim() || resolved.topicName || 'Core Deck',
+        subjectId: subjId,
+        topicId: linkedTopic ? linkedTopic.id : undefined,
+        sectionName: newSec.trim() || 'Core Deck',
         q: newQ.trim(),
         a: newA.trim(),
         box: 1,
@@ -793,15 +777,13 @@ export function FlashcardsView({
       };
       return {
         ...prev,
-        subjects: resolved.nextSubjs,
-        topics: resolved.nextTopics,
+        subjects: nextSubjs,
         flashcards: [card, ...prev.flashcards],
         updatedAt: new Date().toISOString(),
       };
     });
     setNewQ('');
     setNewA('');
-    if (newTopicId === '__new__') setNewTopicCustomName('');
   };
 
   const handleQuickBatchPaste = (e: FormEvent) => {
@@ -811,33 +793,44 @@ export function FlashcardsView({
       .map((l) => l.trim())
       .filter(Boolean);
     if (!lines.length) return;
-    const targetSubjId =
+    const requestedSubjId =
       selectedSubjectId && selectedSubjectId !== 'ALL'
         ? selectedSubjectId
-        : workspace.subjects[0]?.id || makeId('subj');
+        : addSubjectId || workspace.subjects[0]?.id || makeId('subj');
+
+    const splitOnce = (line: string, sep: string): [string, string] | null => {
+      const idx = line.indexOf(sep);
+      if (idx === -1) return null;
+      const left = line.slice(0, idx).trim();
+      const right = line.slice(idx + sep.length).trim();
+      return left && right ? [left, right] : null;
+    };
 
     const parsed: Array<{ q: string; a: string }> = [];
     for (const line of lines) {
-      const sep = line.includes('\t')
-        ? line.split('\t')
-        : line.includes('|')
-        ? line.split('|')
-        : line.includes('::')
-        ? line.split('::')
-        : null;
-      if (sep && sep.length >= 2 && sep[0].trim() && sep[1].trim()) {
-        parsed.push({ q: sep[0].trim(), a: sep[1].trim() });
+      const pair =
+        splitOnce(line, '\t') ||
+        splitOnce(line, '|') ||
+        splitOnce(line, '::') ||
+        splitOnce(line, ' -> ') ||
+        splitOnce(line, ' → ');
+      if (pair) {
+        parsed.push({ q: pair[0], a: pair[1] });
       }
     }
     if (!parsed.length) return;
 
     onUpdateWorkspace((prev) => {
-      const resolved = resolveOrCreateTargetTopic(prev, targetSubjId, newTopicId, newTopicCustomName);
+      const linkedTopic = newTopicId ? prev.topics.find((t) => t.id === newTopicId) : undefined;
+      const { nextSubjs, subjId } = resolveTargetSubject(
+        prev,
+        linkedTopic ? linkedTopic.subjectId : requestedSubjId
+      );
       const added: StudyFlashcard[] = parsed.map((p) => ({
         id: makeId('fc'),
-        subjectId: resolved.subjId,
-        topicId: resolved.topicId,
-        sectionName: newSec.trim() || resolved.topicName || 'Core Deck',
+        subjectId: subjId,
+        topicId: linkedTopic ? linkedTopic.id : undefined,
+        sectionName: newSec.trim() || 'Core Deck',
         q: p.q,
         a: p.a,
         box: 1,
@@ -847,14 +840,12 @@ export function FlashcardsView({
       }));
       return {
         ...prev,
-        subjects: resolved.nextSubjs,
-        topics: resolved.nextTopics,
+        subjects: nextSubjs,
         flashcards: [...added, ...prev.flashcards],
         updatedAt: new Date().toISOString(),
       };
     });
     setQuickBatchRaw('');
-    if (newTopicId === '__new__') setNewTopicCustomName('');
   };
 
   const deleteCard = (cardId: string) => {
@@ -875,8 +866,8 @@ export function FlashcardsView({
   const manageAvailableSections = useMemo(() => {
     const set = new Set<string>();
     subjectCards.forEach((c) => {
-      if (manageTopicFilter === '__unassigned__' && topicById.has(c.topicId)) return;
-      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unassigned__' && c.topicId !== manageTopicFilter) {
+      if (manageTopicFilter === '__unlinked__' && c.topicId && topicById.has(c.topicId)) return;
+      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unlinked__' && c.topicId !== manageTopicFilter) {
         return;
       }
       set.add((c.sectionName || 'Core Deck').trim() || 'Core Deck');
@@ -888,8 +879,8 @@ export function FlashcardsView({
     const q = manageSearch.trim().toLowerCase();
     const now = Date.now();
     const list = subjectCards.filter((c) => {
-      if (manageTopicFilter === '__unassigned__' && topicById.has(c.topicId)) return false;
-      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unassigned__' && c.topicId !== manageTopicFilter) {
+      if (manageTopicFilter === '__unlinked__' && c.topicId && topicById.has(c.topicId)) return false;
+      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unlinked__' && c.topicId !== manageTopicFilter) {
         return false;
       }
       const sec = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
@@ -900,8 +891,9 @@ export function FlashcardsView({
       if (manageFilter === 'flagged' && !c.flagged) return false;
       if (manageFilter === 'mastered' && c.box < 4) return false;
       if (q) {
-        const tName = topicById.get(c.topicId)?.name || '';
-        if (!(c.q + ' ' + c.a + ' ' + c.sectionName + ' ' + tName).toLowerCase().includes(q)) {
+        const sName = subjById.get(c.subjectId)?.name || '';
+        const tName = (c.topicId ? topicById.get(c.topicId)?.name : undefined) || '';
+        if (!(c.q + ' ' + c.a + ' ' + c.sectionName + ' ' + sName + ' ' + tName).toLowerCase().includes(q)) {
           return false;
         }
       }
@@ -919,9 +911,9 @@ export function FlashcardsView({
       sorted.sort((a, b) => a.q.localeCompare(b.q));
     } else {
       sorted.sort((a, b) => {
-        const ta = topicById.get(a.topicId)?.name || 'General';
-        const tb = topicById.get(b.topicId)?.name || 'General';
-        return ta.localeCompare(tb) || a.sectionName.localeCompare(b.sectionName);
+        const sa = subjById.get(a.subjectId)?.name || 'General';
+        const sb = subjById.get(b.subjectId)?.name || 'General';
+        return sa.localeCompare(sb) || a.sectionName.localeCompare(b.sectionName);
       });
     }
     return sorted;
@@ -932,15 +924,15 @@ export function FlashcardsView({
     manageSectionFilter,
     manageFilter,
     manageSort,
+    subjById,
     topicById,
   ]);
 
   const manageGroupedTree = useMemo(() => {
-    const topicMap = new Map<
+    const subjMap = new Map<
       string,
       {
-        topicId: string;
-        topicName: string;
+        subjectId: string;
         subjectName: string;
         color: string;
         totalCards: number;
@@ -950,8 +942,9 @@ export function FlashcardsView({
           {
             key: string;
             sectionName: string;
-            topicId: string;
             subjectId: string;
+            linkedTopicIds: string[];
+            linkedTopicNames: string[];
             cards: StudyFlashcard[];
           }
         >;
@@ -960,46 +953,51 @@ export function FlashcardsView({
     const now = Date.now();
     for (const c of manageFilteredCards) {
       const s = subjById.get(c.subjectId);
-      const t = topicById.get(c.topicId);
-      const tId = t ? t.id : '__unassigned__';
-      const tName = t ? t.name : 'General / Unassigned';
+      const t = c.topicId ? topicById.get(c.topicId) : undefined;
       const secName = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
-      const secKey = `${c.subjectId}:::${tId}:::${secName}`;
+      const secKey = `${c.subjectId}:::${secName}`;
 
-      let tGroup = topicMap.get(tId);
-      if (!tGroup) {
-        tGroup = {
-          topicId: tId,
-          topicName: tName,
+      let sGroup = subjMap.get(c.subjectId);
+      if (!sGroup) {
+        sGroup = {
+          subjectId: c.subjectId,
           subjectName: s?.name || 'General',
           color: s?.color || '#2F5F8A',
           totalCards: 0,
           dueCards: 0,
           sections: new Map(),
         };
-        topicMap.set(tId, tGroup);
+        subjMap.set(c.subjectId, sGroup);
       }
-      tGroup.totalCards += 1;
-      if (c.dueAt <= now) tGroup.dueCards += 1;
+      sGroup.totalCards += 1;
+      if (c.dueAt <= now) sGroup.dueCards += 1;
 
-      let secBucket = tGroup.sections.get(secKey);
+      let secBucket = sGroup.sections.get(secKey);
       if (!secBucket) {
         secBucket = {
           key: secKey,
           sectionName: secName,
-          topicId: tId,
           subjectId: c.subjectId,
+          linkedTopicIds: t ? [t.id] : [],
+          linkedTopicNames: t ? [t.name] : [],
           cards: [],
         };
-        tGroup.sections.set(secKey, secBucket);
+        sGroup.sections.set(secKey, secBucket);
+      } else if (t) {
+        if (!secBucket.linkedTopicIds.includes(t.id)) secBucket.linkedTopicIds.push(t.id);
+        if (!secBucket.linkedTopicNames.includes(t.name)) secBucket.linkedTopicNames.push(t.name);
       }
       secBucket.cards.push(c);
     }
 
-    return Array.from(topicMap.values()).map((tg) => ({
-      ...tg,
-      sectionList: Array.from(tg.sections.values()),
-    }));
+    return Array.from(subjMap.values())
+      .sort((a, b) => a.subjectName.localeCompare(b.subjectName))
+      .map((sg) => ({
+        ...sg,
+        sectionList: Array.from(sg.sections.values()).sort((a, b) =>
+          a.sectionName.localeCompare(b.sectionName)
+        ),
+      }));
   }, [manageFilteredCards, subjById, topicById]);
 
   const targetBulkCardIds = useMemo(() => {
@@ -1009,48 +1007,65 @@ export function FlashcardsView({
     return manageFilteredCards.map((c) => c.id);
   }, [selectedManageIds, manageFilteredCards]);
 
-  const handleMoveTargetCardsToTopic = () => {
+  const handleMoveTargetCards = () => {
     if (targetBulkCardIds.length === 0) return;
-    if (moveTargetTopicId === '__new__' && !moveNewTopicName.trim()) return;
-    const idsToMove = new Set(targetBulkCardIds);
-    const firstCard = manageFilteredCards.find((c) => idsToMove.has(c.id));
-    const fallbackSubjId =
-      selectedSubjectId && selectedSubjectId !== 'ALL'
-        ? selectedSubjectId
-        : firstCard?.subjectId || workspace.subjects[0]?.id || makeId('subj');
-
-    let destTopicLabel = '';
     const cleanNewSec = moveTargetSection.trim();
-    onUpdateWorkspace((prev) => {
-      const resolved = resolveOrCreateTargetTopic(
-        prev,
-        fallbackSubjId,
-        moveTargetTopicId,
-        moveNewTopicName
-      );
-      destTopicLabel = resolved.topicName;
-      return {
-        ...prev,
-        subjects: resolved.nextSubjs,
-        topics: resolved.nextTopics,
-        flashcards: prev.flashcards.map((c) =>
-          idsToMove.has(c.id)
-            ? {
-                ...c,
-                subjectId: resolved.subjId,
-                topicId: resolved.topicId,
-                ...(cleanNewSec ? { sectionName: cleanNewSec } : {}),
-              }
-            : c
-        ),
-        updatedAt: new Date().toISOString(),
-      };
-    });
+    const changeSubj = moveTargetSubjectId !== '__keep__';
+    const changeTopic = moveTargetTopicId !== '__keep__';
+    if (!cleanNewSec && !changeSubj && !changeTopic) return;
+
+    const idsToMove = new Set(targetBulkCardIds);
+    const chosenTopicObj =
+      moveTargetTopicId !== '__keep__' && moveTargetTopicId !== '__unlink__'
+        ? workspace.topics.find((t) => t.id === moveTargetTopicId)
+        : undefined;
+
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: prev.flashcards.map((c) => {
+        if (!idsToMove.has(c.id)) return c;
+        let nextSubjectId = c.subjectId;
+        let nextTopicId = c.topicId;
+
+        if (moveTargetSubjectId !== '__keep__' && prev.subjects.some((s) => s.id === moveTargetSubjectId)) {
+          nextSubjectId = moveTargetSubjectId;
+          if (nextTopicId) {
+            const linkedT = prev.topics.find((t) => t.id === nextTopicId);
+            if (!linkedT || linkedT.subjectId !== nextSubjectId) {
+              nextTopicId = undefined;
+            }
+          }
+        }
+        if (moveTargetTopicId === '__unlink__') {
+          nextTopicId = undefined;
+        } else if (chosenTopicObj) {
+          nextTopicId = chosenTopicObj.id;
+          nextSubjectId = chosenTopicObj.subjectId;
+        }
+
+        return {
+          ...c,
+          subjectId: nextSubjectId,
+          topicId: nextTopicId,
+          ...(cleanNewSec ? { sectionName: cleanNewSec } : {}),
+        };
+      }),
+      updatedAt: new Date().toISOString(),
+    }));
+
+    const parts: string[] = [];
+    if (cleanNewSec) parts.push(`deck "${cleanNewSec}"`);
+    if (moveTargetTopicId === '__unlink__') parts.push('unlinked from Study Notes');
+    else if (chosenTopicObj) parts.push(`linked to "${chosenTopicObj.name}"`);
+    else if (changeSubj) {
+      const sName = subjById.get(moveTargetSubjectId)?.name;
+      if (sName) parts.push(`subject "${sName}"`);
+    }
+
     setMoveFeedback(
-      `Moved ${idsToMove.size} card${idsToMove.size === 1 ? '' : 's'} into "${destTopicLabel || 'selected topic'}"${cleanNewSec ? ` · ${cleanNewSec}` : ''}.`
+      `Updated ${idsToMove.size} card${idsToMove.size === 1 ? '' : 's'}${parts.length ? ` (${parts.join(', ')})` : ''}.`
     );
     setSelectedManageIds(new Set());
-    if (moveTargetTopicId === '__new__') setMoveNewTopicName('');
     if (cleanNewSec) setMoveTargetSection('');
   };
 
@@ -1180,9 +1195,9 @@ export function FlashcardsView({
                     </option>
                   ))}
                 </select>
-                {topicCardsSummary.length > 0 && (
+                {linkedTopicsSummary.items.length > 0 && (
                   <select
-                    aria-label="Split by topic"
+                    aria-label="Filter by optional linked note topic"
                     value={selectedTopicFilter}
                     onChange={(e) => {
                       setSelectedTopicFilter(e.target.value);
@@ -1190,10 +1205,15 @@ export function FlashcardsView({
                     }}
                     className="sd-input w-auto max-w-[230px] py-1.5 text-xs font-semibold"
                   >
-                    <option value="ALL">All Topics ({subjectCards.length})</option>
-                    {topicCardsSummary.map((tp) => (
+                    <option value="ALL">All Decks ({subjectCards.length})</option>
+                    {linkedTopicsSummary.unlinkedCount > 0 && (
+                      <option value="__unlinked__">
+                        Standalone Decks ({linkedTopicsSummary.unlinkedCount})
+                      </option>
+                    )}
+                    {linkedTopicsSummary.items.map((tp) => (
                       <option key={tp.topicId} value={tp.topicId}>
-                        {tp.topicName} ({tp.count})
+                        Linked: {tp.topicName} ({tp.count})
                       </option>
                     ))}
                   </select>
@@ -1219,7 +1239,7 @@ export function FlashcardsView({
                     type="button"
                     onClick={() => {
                       const activeTopicObj =
-                        selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unassigned__'
+                        selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
                           ? topicById.get(selectedTopicFilter)
                           : undefined;
                       const shareSubjId =
@@ -1232,14 +1252,18 @@ export function FlashcardsView({
                       onShareDeck(
                         shareSubjId,
                         'ALL',
-                        selectedTopicFilter !== 'ALL' ? selectedTopicFilter : 'ALL'
+                        selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
+                          ? selectedTopicFilter
+                          : 'ALL'
                       );
                     }}
                     className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>
-                      {selectedTopicFilter !== 'ALL' ? 'Share Topic' : 'Share'}
+                      {selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
+                        ? 'Share Linked'
+                        : 'Share'}
                     </span>
                   </button>
                 )}
@@ -1378,15 +1402,15 @@ export function FlashcardsView({
                   </button>
                 </div>
 
-                {/* Topic-Split & Sections Grid */}
+                {/* Decks & Sections Grid (Independent from Study Notes by default) */}
                 <div className="sd-card space-y-4 p-5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h2 className="font-display text-base font-bold text-[var(--ink)]">
-                        Split by Topic &amp; Deck Sections
+                        Decks &amp; Sections
                       </h2>
                       <p className="text-xs text-[var(--mute)]">
-                        Pick a single topic (e.g. USA 1919–1941 in History) or mix specific sections.
+                        Organized separately from Study Notes by default. Pick one deck or mix sections across subjects.
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -1407,9 +1431,12 @@ export function FlashcardsView({
                     </div>
                   </div>
 
-                  {/* Quick Topic Filter Strip */}
-                  {topicCardsSummary.length > 1 && (
-                    <div className="flex flex-wrap gap-1.5 border-b border-[var(--line)] pb-3">
+                  {/* Optional Note-Link Filter Strip (only shown if any cards are linked to notes) */}
+                  {linkedTopicsSummary.items.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--line)] pb-3">
+                      <span className="mr-1 text-[11px] font-semibold text-[var(--mute)]">
+                        Note link:
+                      </span>
                       <button
                         type="button"
                         onClick={() => {
@@ -1422,9 +1449,25 @@ export function FlashcardsView({
                             : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
                         }`}
                       >
-                        All Topics ({subjectCards.length})
+                        All ({subjectCards.length})
                       </button>
-                      {topicCardsSummary.map((tp) => {
+                      {linkedTopicsSummary.unlinkedCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTopicFilter('__unlinked__');
+                            setSelectedSections([]);
+                          }}
+                          className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                            selectedTopicFilter === '__unlinked__'
+                              ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                              : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                          }`}
+                        >
+                          Standalone ({linkedTopicsSummary.unlinkedCount})
+                        </button>
+                      )}
+                      {linkedTopicsSummary.items.map((tp) => {
                         const active = selectedTopicFilter === tp.topicId;
                         return (
                           <button
@@ -1440,7 +1483,7 @@ export function FlashcardsView({
                                 : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
                             }`}
                           >
-                            {tp.topicName}{' '}
+                            Linked: {tp.topicName}{' '}
                             <span className="font-mono-num opacity-75">({tp.count})</span>
                           </button>
                         );
@@ -1448,13 +1491,13 @@ export function FlashcardsView({
                     </div>
                   )}
 
-                  {/* Sections Grouped by Topic */}
+                  {/* Decks Grouped by Subject */}
                   <div className="space-y-4">
-                    {topicGroupedBuckets.map((grp) => {
+                    {subjectGroupedBuckets.map((grp) => {
                       const groupKeys = grp.buckets.map((b) => b.key);
                       const allGroupSelected = groupKeys.every((k) => selectedSections.includes(k));
                       return (
-                        <div key={grp.topicId} className="space-y-2.5">
+                        <div key={grp.subjectId} className="space-y-2.5">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2">
                               <span
@@ -1463,23 +1506,25 @@ export function FlashcardsView({
                                 aria-hidden="true"
                               />
                               <span className="font-display text-sm font-bold text-[var(--ink)]">
-                                {grp.topicName}
+                                {grp.subjectName}
                               </span>
                               <span className="font-mono-num text-xs text-[var(--mute)]">
-                                · {grp.subjectName} · {grp.totalCards} cards
+                                · {grp.buckets.length} deck{grp.buckets.length === 1 ? '' : 's'} · {grp.totalCards} cards
                               </span>
                             </div>
                             <div className="flex items-center gap-1.5">
-                              {topicGroupedBuckets.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedSections(groupKeys)}
-                                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
-                                >
-                                  Only this topic
-                                </button>
+                              {subjectGroupedBuckets.length > 1 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedSections(groupKeys)}
+                                    className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                                  >
+                                    Only this subject
+                                  </button>
+                                  <span className="text-[var(--line)]">·</span>
+                                </>
                               )}
-                              <span className="text-[var(--line)]">·</span>
                               <button
                                 type="button"
                                 onClick={() =>
@@ -1496,16 +1541,7 @@ export function FlashcardsView({
                               <span className="text-[var(--line)]">·</span>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  onShareDeck(
-                                    grp.buckets[0]?.subjectId ||
-                                      (selectedSubjectId !== 'ALL'
-                                        ? selectedSubjectId
-                                        : workspace.subjects[0]?.id || ''),
-                                    'ALL',
-                                    grp.topicId
-                                  )
-                                }
+                                onClick={() => onShareDeck(grp.subjectId, 'ALL', 'ALL')}
                                 className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-[var(--mute)] hover:text-[var(--e3)] whitespace-nowrap"
                               >
                                 <Share2 className="h-3 w-3" aria-hidden="true" />
@@ -1557,6 +1593,11 @@ export function FlashcardsView({
                                   <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
                                     {b.cards.length} cards · {mastered} mastered
                                   </div>
+                                  {b.linkedTopicNames.length > 0 && (
+                                    <div className="mt-1 truncate text-[11px] font-medium text-[var(--e3)]">
+                                      Linked: {b.linkedTopicNames.join(', ')}
+                                    </div>
+                                  )}
                                   <div className="absolute inset-x-0 bottom-0 h-1 bg-[var(--line)]">
                                     <div
                                       className="h-full bg-[var(--ok)] transition-[width] duration-300"
@@ -1766,6 +1807,8 @@ export function FlashcardsView({
                         setEditModalCardId(currentCard.id);
                         setEditQ(currentCard.q);
                         setEditA(currentCard.a);
+                        setEditTopicId(currentCard.topicId || '');
+                        setEditSectionName(currentCard.sectionName || 'Core Deck');
                         setMenuOpen(false);
                       }}
                       className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-[var(--ink)] hover:bg-[var(--bg)]"
@@ -2226,8 +2269,9 @@ export function FlashcardsView({
           const nowMsManage = Date.now();
           const activeSelCount = selectedManageIds.size;
 
-          const renderManageCardRow = (card: StudyFlashcard, showTopicAndSection = true) => {
-            const topicName = topicById.get(card.topicId)?.name || 'General';
+          const renderManageCardRow = (card: StudyFlashcard, showDeckMeta = true) => {
+            const linkedTopic = card.topicId ? topicById.get(card.topicId) : undefined;
+            const subjName = subjById.get(card.subjectId)?.name || 'General';
             const checked = selectedManageIds.has(card.id);
             const isDue = card.dueAt <= nowMsManage;
             const daysUntilDue = Math.max(1, Math.ceil((card.dueAt - nowMsManage) / 86400000));
@@ -2264,11 +2308,19 @@ export function FlashcardsView({
                     <div className="font-semibold text-[var(--ink)]">{card.q}</div>
                     <div className="text-xs leading-relaxed text-[var(--mute)]">{card.a}</div>
                     <div className="font-mono-num flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--mute)]">
-                      {showTopicAndSection && (
+                      {showDeckMeta && (
                         <>
-                          <span className="font-semibold text-[var(--e3)]">{topicName}</span>
+                          <span className="font-semibold text-[var(--ink)]">{subjName}</span>
                           <span aria-hidden="true">·</span>
-                          <span>{card.sectionName}</span>
+                          <span>{card.sectionName || 'Core Deck'}</span>
+                          <span aria-hidden="true">·</span>
+                        </>
+                      )}
+                      {linkedTopic && (
+                        <>
+                          <span className="font-semibold text-[var(--e3)]">
+                            Linked: {linkedTopic.name}
+                          </span>
                           <span aria-hidden="true">·</span>
                         </>
                       )}
@@ -2332,8 +2384,8 @@ export function FlashcardsView({
                       setEditModalCardId(card.id);
                       setEditQ(card.q);
                       setEditA(card.a);
-                      setEditTopicId(card.topicId);
-                      setEditSectionName(card.sectionName);
+                      setEditTopicId(card.topicId || '');
+                      setEditSectionName(card.sectionName || 'Core Deck');
                     }}
                     aria-label="Edit card"
                     title="Edit card"
@@ -2355,6 +2407,11 @@ export function FlashcardsView({
             );
           };
 
+          const activeAddSubjId =
+            selectedSubjectId && selectedSubjectId !== 'ALL'
+              ? selectedSubjectId
+              : addSubjectId || workspace.subjects[0]?.id || '';
+
           return (
             <div className="space-y-4">
               {/* Top Manage Header */}
@@ -2373,7 +2430,7 @@ export function FlashcardsView({
                       Card Browser &amp; Manager
                     </h1>
                     <p className="text-xs text-[var(--mute)]">
-                      Organize cards by Topic &amp; Section, multi-select to split or reset progress, or batch-paste new cards.
+                      Organize cards by Subject &amp; Deck Section (independent of Study Notes unless optionally linked).
                     </p>
                   </div>
                 </div>
@@ -2445,45 +2502,58 @@ export function FlashcardsView({
                       Add Single Card
                     </h2>
                     <div className="grid gap-2 sm:grid-cols-2">
+                      {(!selectedSubjectId || selectedSubjectId === 'ALL') &&
+                        workspace.subjects.length > 0 && (
+                          <label className="block text-xs font-semibold text-[var(--mute)] sm:col-span-2">
+                            Subject
+                            <select
+                              value={activeAddSubjId}
+                              onChange={(e) => {
+                                setAddSubjectId(e.target.value);
+                                setNewTopicId('');
+                              }}
+                              className="sd-input mt-1 text-xs"
+                            >
+                              {workspace.subjects.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
                       <label className="block text-xs font-semibold text-[var(--mute)]">
-                        Topic
-                        <select
-                          value={newTopicId}
-                          onChange={(e) => setNewTopicId(e.target.value)}
-                          className="sd-input mt-1 text-xs"
-                        >
-                          {subjectTopicsList.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.name}
-                            </option>
-                          ))}
-                          <option value="__new__">+ New Topic…</option>
-                        </select>
-                      </label>
-                      <label className="block text-xs font-semibold text-[var(--mute)]">
-                        Section / Sub-deck
+                        Deck / Section Name *
                         <input
                           type="text"
+                          list="fc-deck-suggestions"
                           value={newSec}
                           onChange={(e) => setNewSec(e.target.value)}
                           placeholder="e.g. Wall Street Crash"
                           className="sd-input mt-1 text-xs"
                         />
+                        <datalist id="fc-deck-suggestions">
+                          {subjectDeckSuggestions.map((sec) => (
+                            <option key={sec} value={sec} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label className="block text-xs font-semibold text-[var(--mute)]">
+                        Link to Study Notes (optional)
+                        <select
+                          value={newTopicId}
+                          onChange={(e) => setNewTopicId(e.target.value)}
+                          className="sd-input mt-1 text-xs"
+                        >
+                          <option value="">None — Keep separate from Study Notes</option>
+                          {addSubjectTopicsList.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                     </div>
-                    {newTopicId === '__new__' && (
-                      <label className="block text-xs font-semibold text-[var(--mute)]">
-                        New Topic Name *
-                        <input
-                          type="text"
-                          required
-                          value={newTopicCustomName}
-                          onChange={(e) => setNewTopicCustomName(e.target.value)}
-                          placeholder="e.g. USA 1919–1941"
-                          className="sd-input mt-1 text-xs"
-                        />
-                      </label>
-                    )}
                     <label className="block text-xs font-semibold text-[var(--mute)]">
                       Question / Front *
                       <input
@@ -2517,11 +2587,11 @@ export function FlashcardsView({
                       Quick Batch Add (Quizlet / Pipe / Tab)
                     </h2>
                     <p className="text-xs text-[var(--mute)]">
-                      Saves into your selected Topic &amp; Section on the left. Paste one card per line
-                      separated by <code>|</code>, <code>::</code>, or Tab.
+                      Saves into Deck <strong>{newSec.trim() || 'Core Deck'}</strong> (never creates Study Notes pages). Paste one card per line separated by{' '}
+                      <code>|</code>, <code>::</code>, <code>→</code>, or Tab.
                     </p>
                     <textarea
-                      rows={7}
+                      rows={8}
                       value={quickBatchRaw}
                       onChange={(e) => setQuickBatchRaw(e.target.value)}
                       placeholder={
@@ -2558,33 +2628,33 @@ export function FlashcardsView({
                       </select>
 
                       <select
-                        aria-label="Filter by topic"
+                        aria-label="Filter by deck section"
+                        value={manageSectionFilter}
+                        onChange={(e) => setManageSectionFilter(e.target.value)}
+                        className="sd-input py-1.5 text-xs font-semibold"
+                      >
+                        <option value="ALL">All Decks ({manageAvailableSections.length})</option>
+                        {manageAvailableSections.map((sec) => (
+                          <option key={sec} value={sec}>
+                            {sec}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        aria-label="Filter by optional note link"
                         value={manageTopicFilter}
                         onChange={(e) => {
                           setManageTopicFilter(e.target.value);
                           setManageSectionFilter('ALL');
                         }}
-                        className="sd-input py-1.5 text-xs font-semibold"
-                      >
-                        <option value="ALL">All Topics</option>
-                        {subjectTopicsList.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.name}
-                          </option>
-                        ))}
-                        <option value="__unassigned__">General / Unassigned</option>
-                      </select>
-
-                      <select
-                        aria-label="Filter by section"
-                        value={manageSectionFilter}
-                        onChange={(e) => setManageSectionFilter(e.target.value)}
                         className="sd-input py-1.5 text-xs"
                       >
-                        <option value="ALL">All Sections ({manageAvailableSections.length})</option>
-                        {manageAvailableSections.map((sec) => (
-                          <option key={sec} value={sec}>
-                            {sec}
+                        <option value="ALL">All (Standalone &amp; Linked)</option>
+                        <option value="__unlinked__">Standalone Only (No Note Link)</option>
+                        {subjectTopicsList.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            Linked: {t.name}
                           </option>
                         ))}
                       </select>
@@ -2617,7 +2687,7 @@ export function FlashcardsView({
                         }
                         className="sd-input py-1.5 text-xs"
                       >
-                        <option value="orig">Sort: Topic &amp; Section</option>
+                        <option value="orig">Sort: Subject &amp; Deck</option>
                         <option value="box-asc">Sort: Weakest first (Box ↑)</option>
                         <option value="box-desc">Sort: Strongest first (Box ↓)</option>
                         <option value="due">Sort: Due soonest</option>
@@ -2683,8 +2753,8 @@ export function FlashcardsView({
                               type="button"
                               onClick={() => {
                                 const allKeys = new Set<string>();
-                                manageGroupedTree.forEach((tg) =>
-                                  tg.sectionList.forEach((sec) => allKeys.add(sec.key))
+                                manageGroupedTree.forEach((sg) =>
+                                  sg.sectionList.forEach((sec) => allKeys.add(sec.key))
                                 );
                                 setCollapsedManageGroups(allKeys);
                               }}
@@ -2716,7 +2786,7 @@ export function FlashcardsView({
                     </div>
                   </div>
 
-                  {/* Multi-Select / Split & Bulk Actions Toolbar */}
+                  {/* Multi-Select / Organize & Bulk Actions Toolbar */}
                   {manageFilteredCards.length > 0 && (
                     <div className="sd-card space-y-2.5 bg-[color-mix(in_srgb,var(--e3)_4%,var(--card))] p-3.5 text-xs">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2792,79 +2862,102 @@ export function FlashcardsView({
 
                       <div className="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2.5">
                         <span className="font-semibold text-[var(--mute)]">
-                          Split / move into topic:
+                          Organize / move:
                         </span>
-                        <select
-                          aria-label="Destination topic"
-                          value={moveTargetTopicId}
-                          onChange={(e) => setMoveTargetTopicId(e.target.value)}
-                          className="sd-input w-auto max-w-[200px] py-1 text-xs"
-                        >
-                          {subjectTopicsList.map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.name}
-                            </option>
-                          ))}
-                          <option value="__new__">+ New Topic…</option>
-                        </select>
-                        {moveTargetTopicId === '__new__' && (
-                          <input
-                            type="text"
-                            value={moveNewTopicName}
-                            onChange={(e) => setMoveNewTopicName(e.target.value)}
-                            placeholder="New topic name…"
-                            className="sd-input w-40 py-1 text-xs"
-                          />
-                        )}
                         <input
                           type="text"
+                          list="fc-move-deck-suggestions"
                           value={moveTargetSection}
                           onChange={(e) => setMoveTargetSection(e.target.value)}
-                          placeholder="Section (optional)…"
-                          className="sd-input w-40 py-1 text-xs"
+                          placeholder="Deck / Section name…"
+                          className="sd-input w-44 py-1 text-xs"
                         />
+                        <datalist id="fc-move-deck-suggestions">
+                          {manageAvailableSections.map((sec) => (
+                            <option key={sec} value={sec} />
+                          ))}
+                        </datalist>
+                        {workspace.subjects.length > 1 && (
+                          <select
+                            aria-label="Destination subject"
+                            value={moveTargetSubjectId}
+                            onChange={(e) => setMoveTargetSubjectId(e.target.value)}
+                            className="sd-input w-auto max-w-[170px] py-1 text-xs"
+                          >
+                            <option value="__keep__">Keep subject</option>
+                            {workspace.subjects.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <select
+                          aria-label="Optional Study Notes link"
+                          value={moveTargetTopicId}
+                          onChange={(e) => setMoveTargetTopicId(e.target.value)}
+                          className="sd-input w-auto max-w-[230px] py-1 text-xs"
+                        >
+                          <option value="__keep__">Keep current note link</option>
+                          <option value="__unlink__">Separate (unlink from Notes)</option>
+                          {workspace.topics
+                            .filter(
+                              (t) =>
+                                moveTargetSubjectId === '__keep__' ||
+                                t.subjectId === moveTargetSubjectId
+                            )
+                            .map((t) => (
+                              <option key={t.id} value={t.id}>
+                                Link: {subjById.get(t.subjectId)?.name || 'Subject'} — {t.name}
+                              </option>
+                            ))}
+                        </select>
                         <button
                           type="button"
-                          disabled={moveTargetTopicId === '__new__' && !moveNewTopicName.trim()}
-                          onClick={handleMoveTargetCardsToTopic}
+                          disabled={
+                            !moveTargetSection.trim() &&
+                            moveTargetSubjectId === '__keep__' &&
+                            moveTargetTopicId === '__keep__'
+                          }
+                          onClick={handleMoveTargetCards}
                           className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
                         >
-                          Move {activeSelCount > 0 ? activeSelCount : targetBulkCardIds.length} Card
+                          Apply to {activeSelCount > 0 ? activeSelCount : targetBulkCardIds.length} Card
                           {targetBulkCardIds.length === 1 ? '' : 's'}
                         </button>
                       </div>
                     </div>
                   )}
 
-                  {/* GROUPED TREE VIEW (Subject -> Topic -> Collapsible Sections) */}
+                  {/* GROUPED TREE VIEW (Subject -> Collapsible Decks / Sections) */}
                   {manageFilteredCards.length === 0 ? (
                     <div className="sd-card p-8 text-center text-xs text-[var(--mute)]">
                       No cards match your current filter. Try clearing search or switching to + Add Cards.
                     </div>
                   ) : manageLayout === 'grouped' ? (
                     <div className="space-y-4">
-                      {manageGroupedTree.map((tg) => (
-                        <div key={tg.topicId} className="sd-card overflow-hidden">
-                          {/* Topic Group Header */}
+                      {manageGroupedTree.map((sg) => (
+                        <div key={sg.subjectId} className="sd-card overflow-hidden">
+                          {/* Subject Group Header */}
                           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-5 py-3">
                             <div className="flex items-center gap-2.5">
                               <span
                                 className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                style={{ backgroundColor: tg.color }}
+                                style={{ backgroundColor: sg.color }}
                                 aria-hidden="true"
                               />
                               <span className="font-display text-base font-bold text-[var(--ink)]">
-                                {tg.topicName}
+                                {sg.subjectName}
                               </span>
                               <span className="font-mono-num text-xs text-[var(--mute)]">
-                                · {tg.subjectName} · {tg.totalCards} cards · {tg.dueCards} due
+                                · {sg.sectionList.length} deck{sg.sectionList.length === 1 ? '' : 's'} · {sg.totalCards} cards · {sg.dueCards} due
                               </span>
                             </div>
                           </div>
 
-                          {/* Sections Inside Topic */}
+                          {/* Decks / Sections Inside Subject */}
                           <div className="divide-y divide-[var(--line)]">
-                            {tg.sectionList.map((sec) => {
+                            {sg.sectionList.map((sec) => {
                               const isCollapsed = collapsedManageGroups.has(sec.key);
                               const secCardIds = sec.cards.map((c) => c.id);
                               const secAllSelected =
@@ -2931,9 +3024,16 @@ export function FlashcardsView({
                                           </button>
                                         </form>
                                       ) : (
-                                        <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
-                                          {sec.cards.length} cards · {masteryPct}% mastered
-                                        </span>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
+                                            {sec.cards.length} cards · {masteryPct}% mastered
+                                          </span>
+                                          {sec.linkedTopicNames.length > 0 && (
+                                            <span className="truncate text-[11px] font-semibold text-[var(--e3)]">
+                                              · Linked: {sec.linkedTopicNames.join(', ')}
+                                            </span>
+                                          )}
+                                        </div>
                                       )}
                                     </div>
 
@@ -2949,10 +3049,11 @@ export function FlashcardsView({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          if (tg.topicId !== '__unassigned__') {
-                                            setNewTopicId(tg.topicId);
-                                          }
+                                          setAddSubjectId(sec.subjectId);
                                           setNewSec(sec.sectionName);
+                                          setNewTopicId(
+                                            sec.linkedTopicIds.length === 1 ? sec.linkedTopicIds[0] : ''
+                                          );
                                           setManageSubTab('add');
                                         }}
                                         className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
@@ -3037,27 +3138,28 @@ export function FlashcardsView({
             </div>
             <div className="grid gap-2.5 sm:grid-cols-2">
               <label className="block text-xs font-semibold text-[var(--mute)]">
-                Topic
-                <select
-                  value={editTopicId}
-                  onChange={(e) => setEditTopicId(e.target.value)}
-                  className="sd-input mt-1 text-xs"
-                >
-                  {workspace.topics.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {subjById.get(t.subjectId)?.name || 'Subject'} — {t.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs font-semibold text-[var(--mute)]">
-                Section
+                Deck / Section
                 <input
                   type="text"
                   value={editSectionName}
                   onChange={(e) => setEditSectionName(e.target.value)}
                   className="sd-input mt-1 text-xs"
                 />
+              </label>
+              <label className="block text-xs font-semibold text-[var(--mute)]">
+                Link to Study Notes (optional)
+                <select
+                  value={editTopicId}
+                  onChange={(e) => setEditTopicId(e.target.value)}
+                  className="sd-input mt-1 text-xs"
+                >
+                  <option value="">None — Separate from Study Notes</option>
+                  {workspace.topics.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {subjById.get(t.subjectId)?.name || 'Subject'} — {t.name}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
             <label className="block text-xs font-semibold text-[var(--mute)]">

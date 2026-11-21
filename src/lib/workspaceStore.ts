@@ -362,7 +362,16 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
     version: 2,
     subjects: Array.isArray(r.subjects) ? r.subjects : [],
     topics: sanitizeTopicParents(Array.isArray(r.topics) ? r.topics : []),
-    flashcards: Array.isArray(r.flashcards) ? r.flashcards : [],
+    flashcards: Array.isArray(r.flashcards)
+      ? r.flashcards.map((fc) => {
+          const cleanTopicId =
+            typeof fc.topicId === 'string' && fc.topicId.trim() ? fc.topicId.trim() : undefined;
+          return {
+            ...fc,
+            topicId: cleanTopicId,
+          };
+        })
+      : [],
     todos: Array.isArray(r.todos) ? r.todos : [],
     calendarBlocks: Array.isArray(r.calendarBlocks) ? r.calendarBlocks : [],
     plannerPrefs: {
@@ -892,7 +901,7 @@ export function convertLegacyEntriesToWorkspace(
           const builtinRoute = LEGACY_SECTION_ROUTE[secKey.toLowerCase()];
 
           let subjectId = '';
-          let topicId = '';
+          let topicId: string | undefined = undefined;
           let sectionName = secMeta?.n || builtinRoute?.sectionLabel || 'Core Deck';
 
           if (secMeta?.topic && topicAliasMap.has(secMeta.topic)) {
@@ -907,24 +916,16 @@ export function convertLegacyEntriesToWorkspace(
                 ? LEGACY_SUBJECT_LABELS.h
                 : LEGACY_SUBJECT_LABELS.g
             );
-            const tMeta = LEGACY_SUBJECT_LABELS[builtinRoute.topicKey];
-            const topic = findOrAddTopic(
-              ws,
-              subj.id,
-              tMeta?.topicTitle || builtinRoute.sectionLabel
-            );
             subjectId = subj.id;
-            topicId = topic.id;
-            topicAliasMap.set(builtinRoute.topicKey, { subjectId, topicId });
+            const existingLink = topicAliasMap.get(builtinRoute.topicKey);
+            if (existingLink) {
+              topicId = existingLink.topicId;
+            }
           } else {
             const prefixSubj = /^geo/i.test(secKey)
               ? findOrAddSubject(ws, 'Geography', LEGACY_SUBJECT_LABELS.g)
               : ws.subjects[0] || findOrAddSubject(ws, 'Imported Flashcards');
-            const fallbackTopic =
-              ws.topics.find((t) => t.subjectId === prefixSubj.id) ||
-              findOrAddTopic(ws, prefixSubj.id, sectionName || 'Core Topic');
             subjectId = prefixSubj.id;
-            topicId = fallbackTopic.id;
           }
 
           const p = c.id ? fc.prog?.[c.id] : undefined;
@@ -934,7 +935,7 @@ export function convertLegacyEntriesToWorkspace(
           ws.flashcards.push({
             id: makeId('fc'),
             subjectId,
-            topicId,
+            ...(topicId ? { topicId } : {}),
             sectionName,
             q: c.q.trim(),
             a: c.a.trim(),
@@ -1123,7 +1124,7 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
 
   for (const c of incoming.flashcards) {
     const mappedSubjId = subjIdRemap.get(c.subjectId) || c.subjectId;
-    const mappedTopicId = topicIdRemap.get(c.topicId) || c.topicId;
+    const mappedTopicId = c.topicId ? topicIdRemap.get(c.topicId) || c.topicId : undefined;
     const dup = next.flashcards.some(
       (x) => x.q.trim().toLowerCase() === c.q.trim().toLowerCase() && x.subjectId === mappedSubjId
     );
@@ -1132,7 +1133,7 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
         ...c,
         id: makeId('fc'),
         subjectId: mappedSubjId,
-        topicId: mappedTopicId,
+        ...(mappedTopicId ? { topicId: mappedTopicId } : { topicId: undefined }),
       });
     }
   }
@@ -1200,13 +1201,13 @@ export function buildDeckSnapshot(ws: WorkspaceData): DeckSnapshot {
   const secMap = new Map<string, DeckSection>();
   const cards: DeckFlashcard[] = ws.flashcards.map((c) => {
     const s = subjMap.get(c.subjectId);
-    const t = topicMap.get(c.topicId);
+    const t = c.topicId ? topicMap.get(c.topicId) : undefined;
     const secName = (c.sectionName || t?.name || 'Core Deck').trim() || 'Core Deck';
-    const secId = `${c.subjectId}__${c.topicId}__${secName}`;
+    const secId = `${c.subjectId}__${t ? t.id : 'deck'}__${secName}`;
     if (!secMap.has(secId)) {
       secMap.set(secId, {
         id: secId,
-        topicId: c.topicId,
+        topicId: t ? t.id : '',
         name: secName,
         subjId: c.subjectId,
       });
@@ -1215,8 +1216,8 @@ export function buildDeckSnapshot(ws: WorkspaceData): DeckSnapshot {
       id: c.id,
       secId,
       secName,
-      topicId: c.topicId,
-      topicName: t?.name || 'Core Topic',
+      topicId: t ? t.id : '',
+      topicName: t ? t.name : '',
       subjId: c.subjectId,
       subjName: s?.name || 'General',
       q: c.q,

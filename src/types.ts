@@ -222,7 +222,7 @@ export interface StudySubject {
 export interface StudyFlashcard {
   id: string;
   subjectId: string;
-  topicId: string;
+  topicId?: string;
   sectionName: string;
   q: string;
   a: string;
@@ -422,7 +422,7 @@ export interface SharedSubjectPayload {
     timelineEvents?: TimelineEventItem[];
   }>;
   cards: Array<{
-    topicName: string;
+    topicName?: string;
     sectionName: string;
     q: string;
     a: string;

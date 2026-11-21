@@ -372,33 +372,10 @@ export function copySharedItemIntoWorkspace(
 
   if (item.type === 'flashcards' && item.flashcardsPayload) {
     const subj = ensureSubj(item.subjectName, item.examBoard);
-    const desiredTopicName = (
-      item.flashcardsPayload.sectionName ||
-      item.title ||
-      'Shared Deck'
-    )
-      .replace(/\s+Flashcards$/i, '')
-      .trim();
-    const isSubjectLevelDeck =
-      desiredTopicName.toLowerCase() === subj.name.trim().toLowerCase() ||
-      /^(?:shared deck|imported deck|general \/ unassigned|core deck)$/i.test(desiredTopicName);
-    let topic = isSubjectLevelDeck
-      ? next.topics.find((t) => t.subjectId === subj.id)
-      : next.topics.find(
-          (t) =>
-            t.subjectId === subj.id &&
-            t.name.trim().toLowerCase() === desiredTopicName.toLowerCase()
-        );
-    if (!topic) {
-      topic = {
-        id: makeId('top'),
-        subjectId: subj.id,
-        name: desiredTopicName || item.title,
-        notes: createEmptyStructuredNote(),
-        createdAt: new Date().toISOString(),
-      };
-      next.topics.push(topic);
-    }
+    const fallbackSection =
+      (item.flashcardsPayload.sectionName || item.title || 'Shared Deck')
+        .replace(/\s+Flashcards$/i, '')
+        .trim() || 'Shared Deck';
     const existingQ = new Set(next.flashcards.map((c) => `${c.subjectId}::${c.q.toLowerCase()}`));
     let added = 0;
     for (const c of item.flashcardsPayload.cards) {
@@ -408,8 +385,7 @@ export function copySharedItemIntoWorkspace(
       const card: StudyFlashcard = {
         id: makeId('fc'),
         subjectId: subj.id,
-        topicId: topic.id,
-        sectionName: c.sectionName || item.flashcardsPayload.sectionName || item.title,
+        sectionName: (c.sectionName || fallbackSection).trim() || 'Shared Deck',
         q: c.q.trim(),
         a: c.a.trim(),
         box: 1,
@@ -424,7 +400,6 @@ export function copySharedItemIntoWorkspace(
       workspace: next,
       summary: `Added ${added} flashcard${added === 1 ? '' : 's'} into ${subj.name}`,
       subjectId: subj.id,
-      topicId: topic.id,
     };
   }
 
@@ -494,13 +469,11 @@ export function copySharedItemIntoWorkspace(
       const key = `${subj.id}::${c.q.trim().toLowerCase()}`;
       if (!c.q.trim() || !c.a.trim() || existingQ.has(key)) continue;
       existingQ.add(key);
-      const t =
-        topicMap.get((c.topicName || '').toLowerCase()) ||
-        next.topics.find((x) => x.subjectId === subj.id);
+      const t = c.topicName ? topicMap.get(c.topicName.toLowerCase()) : undefined;
       next.flashcards.push({
         id: makeId('fc'),
         subjectId: subj.id,
-        topicId: t?.id || makeId('top'),
+        ...(t ? { topicId: t.id } : {}),
         sectionName: c.sectionName || c.topicName || 'Core Deck',
         q: c.q.trim(),
         a: c.a.trim(),

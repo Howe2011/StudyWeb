@@ -762,7 +762,9 @@ export function NotesStudioView({
     onUpdateWorkspace((prev) => ({
       ...prev,
       topics: deleteTopicPromotingChildren(prev.topics, topicId),
-      flashcards: prev.flashcards.filter((c) => c.topicId !== topicId),
+      flashcards: prev.flashcards.map((c) =>
+        c.topicId === topicId ? { ...c, topicId: undefined } : c
+      ),
       updatedAt: new Date().toISOString(),
     }));
     setConfirmDeleteTopicId(null);
@@ -1829,7 +1831,7 @@ export function NotesStudioView({
                     ? ` Its ${directChildTopics.length} sub-topic${
                         directChildTopics.length === 1 ? '' : 's'
                       } will move up one level and stay safe.`
-                    : ' Any notes and flashcards linked to this topic will be removed.'}
+                    : ' Notes in this topic will be removed. Any flashcards linked to it will stay in Flashcards as standalone cards.'}
                 </span>
                 <div className="flex items-center gap-2">
                   <button

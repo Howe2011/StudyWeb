@@ -448,7 +448,9 @@ export function SubjectsView({
     onUpdateWorkspace((prev) => ({
       ...prev,
       topics: deleteTopicPromotingChildren(prev.topics, topicId),
-      flashcards: prev.flashcards.filter((c) => c.topicId !== topicId),
+      flashcards: prev.flashcards.map((c) =>
+        c.topicId === topicId ? { ...c, topicId: undefined } : c
+      ),
       updatedAt: new Date().toISOString(),
     }));
   };

@@ -158,7 +158,7 @@ export function ShareItemModal({
     const nextDefaultTitle = isSingleTopic
       ? `${selectedFlashcardTopics[0].topicName} Flashcards`
       : flashcardScopeMode === 'topics' && selectedFlashcardTopics.length > 1
-      ? `${target.subjectName} (${selectedFlashcardTopics.length} Topics)`
+      ? `${target.subjectName} (${selectedFlashcardTopics.length} Decks)`
       : `${target.subjectName} Flashcards`;
     const nextDefaultSummary = isSingleTopic
       ? `${cardCount} active-recall flashcard${cardCount === 1 ? '' : 's'} for ${selectedFlashcardTopics[0].topicName} (${target.subjectName}).`
@@ -458,7 +458,7 @@ export function ShareItemModal({
                             : ''
                         }`}
                       >
-                        By Topic
+                        By Deck / Topic
                       </button>
                     </div>
                   </div>
@@ -504,17 +504,17 @@ export function ShareItemModal({
                       })}
                       {isEmptyFlashcardsSelection && (
                         <div className="px-1 pt-1 text-[11px] font-semibold text-[var(--bad)]">
-                          Select at least one topic to share.
+                          Select at least one deck or topic to share.
                         </div>
                       )}
                     </div>
                   ) : (
                     <p className="mt-2 text-[11px] text-[var(--mute)]">
                       Sharing all {totalSubjectFlashcardsCount} flashcards across{' '}
-                      {flashcardTopicOptions.length} topic
+                      {flashcardTopicOptions.length} deck
                       {flashcardTopicOptions.length === 1 ? '' : 's'} in {target.subjectName}. Click{' '}
-                      <span className="font-semibold text-[var(--ink)]">By Topic</span> to share a
-                      single topic instead.
+                      <span className="font-semibold text-[var(--ink)]">By Deck / Topic</span> to
+                      share a single deck or topic instead.
                     </p>
                   )}
                 </div>

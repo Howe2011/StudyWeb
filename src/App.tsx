@@ -937,7 +937,9 @@ export default function App() {
             timelineEvents: t.timelineEvents,
           })),
           cards: cards.map((c) => ({
-            topicName: topicNameMap.get(c.topicId) || topics[0]?.name || 'Core Topic',
+            ...(c.topicId && topicNameMap.get(c.topicId)
+              ? { topicName: topicNameMap.get(c.topicId) }
+              : {}),
             sectionName: c.sectionName || 'Core Deck',
             q: c.q,
             a: c.a,
@@ -1010,7 +1012,7 @@ export default function App() {
   const handleShareDeck = useCallback(
     (subjectId: string, sectionName: string, initialTopicId?: string) => {
       const explicitTopic =
-        initialTopicId && initialTopicId !== 'ALL' && initialTopicId !== '__unassigned__'
+        initialTopicId && initialTopicId !== 'ALL' && initialTopicId !== '__unlinked__'
           ? workspace.topics.find((t) => t.id === initialTopicId)
           : undefined;
       const targetSubjId =
@@ -1042,28 +1044,26 @@ export default function App() {
       >();
 
       for (const c of allSubjCards) {
-        const matchedTopic = topicMap.get(c.topicId);
-        const tid = matchedTopic ? matchedTopic.id : '__unassigned__';
-        const tName = matchedTopic ? matchedTopic.name : 'General / Unassigned';
-        const existing = grouped.get(tid);
+        const matchedTopic = c.topicId ? topicMap.get(c.topicId) : undefined;
+        const secLabel = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+        const optId = matchedTopic ? matchedTopic.id : `sec::${secLabel.toLowerCase()}`;
+        const optName = matchedTopic ? matchedTopic.name : secLabel;
+        const existing = grouped.get(optId);
         const payloadCard = { q: c.q, a: c.a, sectionName: c.sectionName };
         if (existing) {
           existing.cards.push(payloadCard);
         } else {
-          grouped.set(tid, {
-            topicId: tid,
-            topicName: tName,
+          grouped.set(optId, {
+            topicId: optId,
+            topicName: optName,
             cards: [payloadCard],
           });
         }
       }
 
-      const orderedTopicOptions = [
-        ...subjTopics
-          .map((t) => grouped.get(t.id))
-          .filter((x): x is NonNullable<typeof x> => Boolean(x)),
-        ...(grouped.has('__unassigned__') ? [grouped.get('__unassigned__')!] : []),
-      ];
+      const orderedTopicOptions = Array.from(grouped.values()).sort((a, b) =>
+        a.topicName.localeCompare(b.topicName)
+      );
 
       const resolvedInitTopic =
         initialTopicId && initialTopicId !== 'ALL' && grouped.has(initialTopicId)
