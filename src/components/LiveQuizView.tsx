@@ -2,10 +2,14 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useSta
 import {
   Award,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Copy,
   Database,
   FileSpreadsheet,
+  Folder,
+  FolderOpen,
   Gamepad2,
   Layers,
   LogOut,
@@ -43,7 +47,7 @@ import {
   submitCloudAnswer,
   subscribeCloudRoom,
 } from '../lib/liveQuizCloud';
-import { DeckFlashcard, DeckSnapshot, QuizDeckSummary, QuizRoomState } from '../types';
+import { DeckFlashcard, DeckGroup, DeckSnapshot, QuizDeckSummary, QuizRoomState } from '../types';
 
 interface LiveQuizViewProps {
   deckSnapshot: DeckSnapshot;
@@ -216,6 +220,7 @@ export function LiveQuizView({
   const [saveCurrentToDb, setSaveCurrentToDb] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState<15 | 20 | 30>(20);
   const [hostNickname, setHostNickname] = useState<string>(defaultNickname || 'Host');
+  const [expandedQuizFolders, setExpandedQuizFolders] = useState<Set<string>>(() => new Set());
   const hostSourceInitializedRef = useRef(false);
   const seenSecIdsRef = useRef<Set<string>>(new Set());
 
@@ -903,6 +908,40 @@ export function LiveQuizView({
     () => snapshotSubjectGroups.flatMap((g) => g.sections.map((s) => s.secId)),
     [snapshotSubjectGroups]
   );
+
+  const deckGroupsBySubject = useMemo(() => {
+    const map = new Map<string, DeckGroup[]>();
+    (deckSnapshot.deckGroups || []).forEach((g) => {
+      const arr = map.get(g.subjectId) || [];
+      arr.push(g);
+      map.set(g.subjectId, arr);
+    });
+    return map;
+  }, [deckSnapshot.deckGroups]);
+
+  const allQuizFolderKeys = useMemo(
+    () =>
+      snapshotSubjectGroups.flatMap((subj) => {
+        const groups = deckGroupsBySubject.get(subj.subjId) || [];
+        const keys = groups.map((g) => `folder:${g.id}`);
+        const folderedSecNames = new Set(groups.flatMap((g) => g.sectionNames));
+        const hasOther = subj.sections.some((s) => !folderedSecNames.has(s.secName));
+        if (groups.length > 0 && hasOther) {
+          keys.push(`other:${subj.subjId}`);
+        }
+        return keys;
+      }),
+    [snapshotSubjectGroups, deckGroupsBySubject]
+  );
+
+  const toggleQuizFolder = useCallback((folderKey: string) => {
+    setExpandedQuizFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderKey)) next.delete(folderKey);
+      else next.add(folderKey);
+      return next;
+    });
+  }, []);
 
   // Auto-select newly appearing sections (without overriding manual unchecks)
   useEffect(() => {
@@ -2240,7 +2279,25 @@ export function LiveQuizView({
                         Selected <strong className="text-[var(--ink)]">{selectedImportCards.length}</strong>{' '}
                         of {validSnapshotCards.length} cards
                       </span>
-                      <div className="flex gap-3 font-semibold">
+                      <div className="flex flex-wrap items-center gap-3 font-semibold">
+                        {allQuizFolderKeys.length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedQuizFolders(new Set(allQuizFolderKeys))}
+                              className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)] hover:underline"
+                            >
+                              Expand all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedQuizFolders(new Set())}
+                              className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)] hover:underline"
+                            >
+                              Collapse all
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => setImportSecIds(allSnapshotSecIds)}
@@ -2258,49 +2315,195 @@ export function LiveQuizView({
                       </div>
                     </div>
 
-                    <div className="max-h-60 space-y-2.5 overflow-y-auto pr-1">
-                      {snapshotSubjectGroups.map((subj) => (
-                        <div key={subj.subjId} className="space-y-1.5">
-                          <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                            {subj.subjName}
-                          </div>
-                          <div className="grid gap-1.5 sm:grid-cols-2">
-                            {subj.sections.map((sec) => {
-                              const checked = importSecIds.includes(sec.secId);
+                    <div className="max-h-72 space-y-2.5 overflow-y-auto pr-1">
+                      {snapshotSubjectGroups.map((subj) => {
+                        const subjFolders = deckGroupsBySubject.get(subj.subjId) || [];
+                        const folderedNames = new Set(subjFolders.flatMap((f) => f.sectionNames));
+                        const unfolderedSections = subj.sections.filter(
+                          (s) => !folderedNames.has(s.secName)
+                        );
+                        const renderImportSecCard = (sec: SnapshotSectionGroup) => {
+                          const checked = importSecIds.includes(sec.secId);
+                          return (
+                            <label
+                              key={sec.secId}
+                              className={`flex cursor-pointer items-center justify-between rounded-lg border px-2.5 py-2 text-xs transition-colors ${
+                                checked
+                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--bg))]'
+                                  : 'border-[var(--line)] bg-[var(--bg)]'
+                              }`}
+                            >
+                              <span className="flex min-w-0 items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setImportSecIds((prev) =>
+                                      checked
+                                        ? prev.filter((id) => id !== sec.secId)
+                                        : [...prev, sec.secId]
+                                    )
+                                  }
+                                />
+                                <span className="truncate font-semibold text-[var(--ink)]">
+                                  {sec.secName}
+                                </span>
+                              </span>
+                              <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
+                                {sec.cards.length}
+                              </span>
+                            </label>
+                          );
+                        };
+
+                        return (
+                          <div key={subj.subjId} className="space-y-1.5">
+                            <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                              {subj.subjName}
+                            </div>
+
+                            {subjFolders.map((folder) => {
+                              const folderSections = subj.sections.filter((s) =>
+                                folder.sectionNames.includes(s.secName)
+                              );
+                              if (folderSections.length === 0) return null;
+                              const folderSecIds = folderSections.map((s) => s.secId);
+                              const selectedCount = folderSecIds.filter((id) =>
+                                importSecIds.includes(id)
+                              ).length;
+                              const allSelected =
+                                folderSecIds.length > 0 && selectedCount === folderSecIds.length;
+                              const totalCards = folderSections.reduce(
+                                (sum, s) => sum + s.cards.length,
+                                0
+                              );
+                              const folderKey = `folder:${folder.id}`;
+                              const isOpen = expandedQuizFolders.has(folderKey);
                               return (
-                                <label
-                                  key={sec.secId}
-                                  className={`flex cursor-pointer items-center justify-between rounded-lg border px-2.5 py-2 text-xs transition-colors ${
-                                    checked
-                                      ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--bg))]'
-                                      : 'border-[var(--line)] bg-[var(--bg)]'
-                                  }`}
+                                <div
+                                  key={folder.id}
+                                  className="rounded-lg border border-[var(--line)] bg-[var(--bg)]"
                                 >
-                                  <span className="flex min-w-0 items-center gap-2">
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={() =>
-                                        setImportSecIds((prev) =>
-                                          checked
-                                            ? prev.filter((id) => id !== sec.secId)
-                                            : [...prev, sec.secId]
-                                        )
-                                      }
-                                    />
-                                    <span className="truncate font-semibold text-[var(--ink)]">
-                                      {sec.secName}
-                                    </span>
-                                  </span>
-                                  <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
-                                    {sec.cards.length}
-                                  </span>
-                                </label>
+                                  <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleQuizFolder(folderKey)}
+                                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                                    >
+                                      {isOpen ? (
+                                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]" />
+                                      ) : (
+                                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]" />
+                                      )}
+                                      {isOpen ? (
+                                        <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--e3)]" />
+                                      ) : (
+                                        <Folder className="h-3.5 w-3.5 shrink-0 text-[var(--e3)]" />
+                                      )}
+                                      <span className="truncate text-xs font-bold text-[var(--ink)]">
+                                        {folder.name}
+                                      </span>
+                                      <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
+                                        {folderSections.length} decks · {totalCards} cards
+                                      </span>
+                                    </button>
+                                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-[var(--e3)]">
+                                      <input
+                                        type="checkbox"
+                                        checked={allSelected}
+                                        onChange={() =>
+                                          setImportSecIds((prev) =>
+                                            allSelected
+                                              ? prev.filter((id) => !folderSecIds.includes(id))
+                                              : Array.from(new Set([...prev, ...folderSecIds]))
+                                          )
+                                        }
+                                      />
+                                      <span>
+                                        {allSelected
+                                          ? 'Folder Selected'
+                                          : selectedCount > 0
+                                            ? `${selectedCount}/${folderSecIds.length}`
+                                            : 'Select Folder'}
+                                      </span>
+                                    </label>
+                                  </div>
+                                  {isOpen && (
+                                    <div className="grid gap-1.5 border-t border-[var(--line)] p-2 sm:grid-cols-2">
+                                      {folderSections.map(renderImportSecCard)}
+                                    </div>
+                                  )}
+                                </div>
                               );
                             })}
+
+                            {unfolderedSections.length > 0 &&
+                              (subjFolders.length > 0 ? (
+                                (() => {
+                                  const otherKey = `other:${subj.subjId}`;
+                                  const isOpen = expandedQuizFolders.has(otherKey);
+                                  const otherIds = unfolderedSections.map((s) => s.secId);
+                                  const selectedCount = otherIds.filter((id) =>
+                                    importSecIds.includes(id)
+                                  ).length;
+                                  const allSelected =
+                                    otherIds.length > 0 && selectedCount === otherIds.length;
+                                  const totalCards = unfolderedSections.reduce(
+                                    (sum, s) => sum + s.cards.length,
+                                    0
+                                  );
+                                  return (
+                                    <div className="rounded-lg border border-dashed border-[var(--line)] bg-[var(--bg)]">
+                                      <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleQuizFolder(otherKey)}
+                                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                                        >
+                                          {isOpen ? (
+                                            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]" />
+                                          ) : (
+                                            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]" />
+                                          )}
+                                          <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]" />
+                                          <span className="truncate text-xs font-semibold text-[var(--ink)]">
+                                            Other Decks
+                                          </span>
+                                          <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
+                                            {unfolderedSections.length} decks · {totalCards} cards
+                                          </span>
+                                        </button>
+                                        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-[var(--e3)]">
+                                          <input
+                                            type="checkbox"
+                                            checked={allSelected}
+                                            onChange={() =>
+                                              setImportSecIds((prev) =>
+                                                allSelected
+                                                  ? prev.filter((id) => !otherIds.includes(id))
+                                                  : Array.from(new Set([...prev, ...otherIds]))
+                                              )
+                                            }
+                                          />
+                                          <span>{allSelected ? 'Selected' : 'Select'}</span>
+                                        </label>
+                                      </div>
+                                      {isOpen && (
+                                        <div className="grid gap-1.5 border-t border-[var(--line)] p-2 sm:grid-cols-2">
+                                          {unfolderedSections.map(renderImportSecCard)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()
+                              ) : (
+                                <div className="grid gap-1.5 sm:grid-cols-2">
+                                  {unfolderedSections.map(renderImportSecCard)}
+                                </div>
+                              ))}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     <div className="flex justify-end">
@@ -2569,11 +2772,29 @@ export function LiveQuizView({
                         ))}
                       </div>
 
-                      <div className="flex items-center gap-3 text-xs font-semibold">
+                      <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
                         <span className="font-mono-num text-[var(--mute)]">
                           <strong className="text-[var(--ink)]">{selectedCurrentCards.length}</strong>{' '}
                           questions selected
                         </span>
+                        {allQuizFolderKeys.length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedQuizFolders(new Set(allQuizFolderKeys))}
+                              className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)] hover:underline"
+                            >
+                              Expand all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setExpandedQuizFolders(new Set())}
+                              className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)] hover:underline"
+                            >
+                              Collapse all
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => setSelectedCurrentSecIds(allSnapshotSecIds)}
@@ -2597,6 +2818,59 @@ export function LiveQuizView({
                         const allSubjSelected = subjSecIds.every((id) =>
                           selectedCurrentSecIds.includes(id)
                         );
+                        const subjFolders = deckGroupsBySubject.get(subj.subjId) || [];
+                        const folderedNames = new Set(subjFolders.flatMap((f) => f.sectionNames));
+                        const unfolderedSections = subj.sections.filter(
+                          (s) => !folderedNames.has(s.secName)
+                        );
+
+                        const renderHostSecCard = (sec: SnapshotSectionGroup) => {
+                          const checked = selectedCurrentSecIds.includes(sec.secId);
+                          const matchingCount = sec.cards.filter(cardMatchesFilter).length;
+                          return (
+                            <label
+                              key={sec.secId}
+                              className={`flex cursor-pointer items-center justify-between gap-2 rounded-xl border p-3 text-xs transition-colors ${
+                                checked
+                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_9%,var(--card))]'
+                                  : 'border-[var(--line)] bg-[var(--card)]'
+                              }`}
+                            >
+                              <span className="flex min-w-0 items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setSelectedCurrentSecIds((prev) =>
+                                      checked
+                                        ? prev.filter((id) => id !== sec.secId)
+                                        : [...prev, sec.secId]
+                                    )
+                                  }
+                                />
+                                <span className="min-w-0">
+                                  <span className="block truncate font-semibold text-[var(--ink)]">
+                                    {sec.secName}
+                                  </span>
+                                  {sec.topicName && sec.topicName !== sec.secName && (
+                                    <span className="block truncate text-[11px] text-[var(--mute)]">
+                                      {sec.topicName}
+                                    </span>
+                                  )}
+                                </span>
+                              </span>
+                              <span
+                                className={`font-mono-num shrink-0 ${
+                                  matchingCount === 0 ? 'text-[var(--bad)]' : 'text-[var(--mute)]'
+                                }`}
+                              >
+                                {matchingCount}
+                                {flashcardFilter !== 'all' ? `/${sec.cards.length}` : ''} cards
+                              </span>
+                            </label>
+                          );
+                        };
+
                         return (
                           <div
                             key={subj.subjId}
@@ -2627,55 +2901,174 @@ export function LiveQuizView({
                               </button>
                             </div>
 
-                            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                              {subj.sections.map((sec) => {
-                                const checked = selectedCurrentSecIds.includes(sec.secId);
-                                const matchingCount = sec.cards.filter(cardMatchesFilter).length;
+                            <div className="space-y-2">
+                              {subjFolders.map((folder) => {
+                                const folderSections = subj.sections.filter((s) =>
+                                  folder.sectionNames.includes(s.secName)
+                                );
+                                if (folderSections.length === 0) return null;
+                                const folderSecIds = folderSections.map((s) => s.secId);
+                                const selectedCount = folderSecIds.filter((id) =>
+                                  selectedCurrentSecIds.includes(id)
+                                ).length;
+                                const allFolderSelected =
+                                  folderSecIds.length > 0 && selectedCount === folderSecIds.length;
+                                const totalMatching = folderSections.reduce(
+                                  (sum, s) => sum + s.cards.filter(cardMatchesFilter).length,
+                                  0
+                                );
+                                const totalInFolder = folderSections.reduce(
+                                  (sum, s) => sum + s.cards.length,
+                                  0
+                                );
+                                const folderKey = `folder:${folder.id}`;
+                                const isOpen = expandedQuizFolders.has(folderKey);
+
                                 return (
-                                  <label
-                                    key={sec.secId}
-                                    className={`flex cursor-pointer items-center justify-between gap-2 rounded-xl border p-3 text-xs transition-colors ${
-                                      checked
-                                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_9%,var(--card))]'
-                                        : 'border-[var(--line)] bg-[var(--card)]'
-                                    }`}
+                                  <div
+                                    key={folder.id}
+                                    className="rounded-xl border border-[var(--line)] bg-[var(--card)]"
                                   >
-                                    <span className="flex min-w-0 items-center gap-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={() =>
-                                          setSelectedCurrentSecIds((prev) =>
-                                            checked
-                                              ? prev.filter((id) => id !== sec.secId)
-                                              : [...prev, sec.secId]
-                                          )
-                                        }
-                                      />
-                                      <span className="min-w-0">
-                                        <span className="block truncate font-semibold text-[var(--ink)]">
-                                          {sec.secName}
-                                        </span>
-                                        {sec.topicName && sec.topicName !== sec.secName && (
-                                          <span className="block truncate text-[11px] text-[var(--mute)]">
-                                            {sec.topicName}
-                                          </span>
+                                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleQuizFolder(folderKey)}
+                                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                                      >
+                                        {isOpen ? (
+                                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--mute)]" />
+                                        ) : (
+                                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" />
                                         )}
-                                      </span>
-                                    </span>
-                                    <span
-                                      className={`font-mono-num shrink-0 ${
-                                        matchingCount === 0
-                                          ? 'text-[var(--bad)]'
-                                          : 'text-[var(--mute)]'
-                                      }`}
-                                    >
-                                      {matchingCount}
-                                      {flashcardFilter !== 'all' ? `/${sec.cards.length}` : ''} cards
-                                    </span>
-                                  </label>
+                                        {isOpen ? (
+                                          <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" />
+                                        ) : (
+                                          <Folder className="h-4 w-4 shrink-0 text-[var(--e3)]" />
+                                        )}
+                                        <span className="truncate text-xs font-bold text-[var(--ink)]">
+                                          {folder.name}
+                                        </span>
+                                        <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
+                                          {folderSections.length} deck
+                                          {folderSections.length === 1 ? '' : 's'} · {totalMatching}
+                                          {flashcardFilter !== 'all' ? `/${totalInFolder}` : ''} cards
+                                        </span>
+                                      </button>
+
+                                      <label className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1 text-xs font-semibold text-[var(--e3)]">
+                                        <input
+                                          type="checkbox"
+                                          checked={allFolderSelected}
+                                          onChange={() =>
+                                            setSelectedCurrentSecIds((prev) =>
+                                              allFolderSelected
+                                                ? prev.filter((id) => !folderSecIds.includes(id))
+                                                : Array.from(new Set([...prev, ...folderSecIds]))
+                                            )
+                                          }
+                                        />
+                                        <span>
+                                          {allFolderSelected
+                                            ? 'Folder Selected'
+                                            : selectedCount > 0
+                                              ? `${selectedCount}/${folderSecIds.length} Decks`
+                                              : 'Select Folder'}
+                                        </span>
+                                      </label>
+                                    </div>
+
+                                    {isOpen && (
+                                      <div className="grid gap-2 border-t border-[var(--line)] bg-[var(--bg)] p-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                                        {folderSections.map(renderHostSecCard)}
+                                      </div>
+                                    )}
+                                  </div>
                                 );
                               })}
+
+                              {unfolderedSections.length > 0 &&
+                                (subjFolders.length > 0 ? (
+                                  (() => {
+                                    const otherKey = `other:${subj.subjId}`;
+                                    const isOpen = expandedQuizFolders.has(otherKey);
+                                    const otherIds = unfolderedSections.map((s) => s.secId);
+                                    const selectedCount = otherIds.filter((id) =>
+                                      selectedCurrentSecIds.includes(id)
+                                    ).length;
+                                    const allOtherSelected =
+                                      otherIds.length > 0 && selectedCount === otherIds.length;
+                                    const totalMatching = unfolderedSections.reduce(
+                                      (sum, s) => sum + s.cards.filter(cardMatchesFilter).length,
+                                      0
+                                    );
+                                    const totalInOther = unfolderedSections.reduce(
+                                      (sum, s) => sum + s.cards.length,
+                                      0
+                                    );
+
+                                    return (
+                                      <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--card)]">
+                                        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleQuizFolder(otherKey)}
+                                            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                                          >
+                                            {isOpen ? (
+                                              <ChevronDown className="h-4 w-4 shrink-0 text-[var(--mute)]" />
+                                            ) : (
+                                              <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" />
+                                            )}
+                                            <Layers className="h-4 w-4 shrink-0 text-[var(--mute)]" />
+                                            <span className="truncate text-xs font-bold text-[var(--ink)]">
+                                              Other Decks
+                                            </span>
+                                            <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
+                                              {unfolderedSections.length} deck
+                                              {unfolderedSections.length === 1 ? '' : 's'} ·{' '}
+                                              {totalMatching}
+                                              {flashcardFilter !== 'all'
+                                                ? `/${totalInOther}`
+                                                : ''}{' '}
+                                              cards
+                                            </span>
+                                          </button>
+
+                                          <label className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1 text-xs font-semibold text-[var(--e3)]">
+                                            <input
+                                              type="checkbox"
+                                              checked={allOtherSelected}
+                                              onChange={() =>
+                                                setSelectedCurrentSecIds((prev) =>
+                                                  allOtherSelected
+                                                    ? prev.filter((id) => !otherIds.includes(id))
+                                                    : Array.from(new Set([...prev, ...otherIds]))
+                                                )
+                                              }
+                                            />
+                                            <span>
+                                              {allOtherSelected
+                                                ? 'All Selected'
+                                                : selectedCount > 0
+                                                  ? `${selectedCount}/${otherIds.length} Decks`
+                                                  : 'Select All'}
+                                            </span>
+                                          </label>
+                                        </div>
+
+                                        {isOpen && (
+                                          <div className="grid gap-2 border-t border-[var(--line)] bg-[var(--bg)] p-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                                            {unfolderedSections.map(renderHostSecCard)}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()
+                                ) : (
+                                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                    {unfolderedSections.map(renderHostSecCard)}
+                                  </div>
+                                ))}
                             </div>
                           </div>
                         );

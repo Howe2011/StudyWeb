@@ -11,6 +11,7 @@ import {
   Eye,
   Flag,
   Folder,
+  FolderOpen,
   FolderPlus,
   Gamepad2,
   Layers,
@@ -255,6 +256,9 @@ export function FlashcardsView({
   const [folderSubjectIdDraft, setFolderSubjectIdDraft] = useState<string>('');
   const [folderSelectedDecksDraft, setFolderSelectedDecksDraft] = useState<Set<string>>(new Set());
   const [manageFolderFilter, setManageFolderFilter] = useState<string>('ALL');
+  const [expandedSetupFolders, setExpandedSetupFolders] = useState<Set<string>>(() => new Set());
+  const [collapsedSetupSubjects, setCollapsedSetupSubjects] = useState<Set<string>>(() => new Set());
+  const [collapsedManageFolders, setCollapsedManageFolders] = useState<Set<string>>(() => new Set());
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -398,6 +402,29 @@ export function FlashcardsView({
     if (manageFolderFilter === folderId) setManageFolderFilter('ALL');
     setFolderModalOpen(false);
     setMoveFeedback('Folder removed (cards and decks remain safe).');
+  };
+
+  const handleMoveDeckToFolder = (subjectId: string, deckName: string, targetFolderId: string | null) => {
+    const targetFolder = targetFolderId
+      ? (workspace.deckGroups || []).find((g) => g.id === targetFolderId)
+      : null;
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      deckGroups: (prev.deckGroups || []).map((g) => {
+        if (g.subjectId !== subjectId) return g;
+        const without = g.sectionNames.filter((s) => s !== deckName);
+        if (targetFolderId && g.id === targetFolderId) {
+          return { ...g, sectionNames: [...without, deckName] };
+        }
+        return { ...g, sectionNames: without };
+      }),
+      updatedAt: new Date().toISOString(),
+    }));
+    setMoveFeedback(
+      targetFolder
+        ? `Moved deck "${deckName}" into folder "${targetFolder.name}".`
+        : `Removed deck "${deckName}" from folders.`
+    );
   };
 
   // Reset filters when subject changes
@@ -1119,6 +1146,113 @@ export function FlashcardsView({
       }));
   }, [manageFilteredCards, subjById, topicById]);
 
+  const manageFolderTree = useMemo(() => {
+    const allGroups = workspace.deckGroups || [];
+    const bySubjectId = new Map(manageGroupedTree.map((sg) => [sg.subjectId, sg]));
+
+    // Ensure subjects with folders (even if empty) appear when not filtering tightly
+    const showEmptyFolders =
+      !manageSearch.trim() &&
+      manageSectionFilter === 'ALL' &&
+      manageTopicFilter === 'ALL' &&
+      manageFilter === 'all' &&
+      manageFolderFilter !== '__unfoldered__';
+
+    const subjectIds = new Set<string>(manageGroupedTree.map((sg) => sg.subjectId));
+    if (showEmptyFolders) {
+      allGroups.forEach((g) => {
+        if (selectedSubjectId && selectedSubjectId !== 'ALL' && g.subjectId !== selectedSubjectId) {
+          return;
+        }
+        if (manageFolderFilter !== 'ALL' && g.id !== manageFolderFilter) return;
+        subjectIds.add(g.subjectId);
+      });
+    }
+
+    const result: Array<{
+      subjectId: string;
+      subjectName: string;
+      color: string;
+      totalCards: number;
+      dueCards: number;
+      allSectionsCount: number;
+      subjectFolders: DeckGroup[];
+      folders: Array<{
+        folder: DeckGroup;
+        sections: (typeof manageGroupedTree)[number]['sectionList'];
+        totalCards: number;
+        dueCards: number;
+      }>;
+      unfolderedSections: (typeof manageGroupedTree)[number]['sectionList'];
+    }> = [];
+
+    const now = Date.now();
+    subjectIds.forEach((subjId) => {
+      const existingSg = bySubjectId.get(subjId);
+      const subjObj = subjById.get(subjId);
+      const sectionList = existingSg?.sectionList || [];
+      const subjectFolders = allGroups.filter((g) => g.subjectId === subjId);
+      const filteredSubjectFolders =
+        manageFolderFilter === '__unfoldered__'
+          ? []
+          : manageFolderFilter !== 'ALL'
+          ? subjectFolders.filter((g) => g.id === manageFolderFilter)
+          : subjectFolders;
+
+      const assignedSectionNames = new Set<string>();
+      const folderEntries = filteredSubjectFolders
+        .map((folder) => {
+          const memberSections = sectionList.filter((sec) =>
+            folder.sectionNames.includes(sec.sectionName)
+          );
+          memberSections.forEach((sec) => assignedSectionNames.add(sec.sectionName));
+          const totalCards = memberSections.reduce((sum, sec) => sum + sec.cards.length, 0);
+          const dueCards = memberSections.reduce(
+            (sum, sec) => sum + sec.cards.filter((c) => c.dueAt <= now).length,
+            0
+          );
+          return {
+            folder,
+            sections: memberSections,
+            totalCards,
+            dueCards,
+          };
+        })
+        .filter((entry) => entry.sections.length > 0 || showEmptyFolders);
+
+      const unfolderedSections =
+        manageFolderFilter !== 'ALL' && manageFolderFilter !== '__unfoldered__'
+          ? []
+          : sectionList.filter((sec) => !assignedSectionNames.has(sec.sectionName));
+
+      if (folderEntries.length === 0 && unfolderedSections.length === 0) return;
+
+      result.push({
+        subjectId: subjId,
+        subjectName: existingSg?.subjectName || subjObj?.name || 'General',
+        color: existingSg?.color || subjObj?.color || '#2F5F8A',
+        totalCards: existingSg?.totalCards || 0,
+        dueCards: existingSg?.dueCards || 0,
+        allSectionsCount: sectionList.length,
+        subjectFolders,
+        folders: folderEntries,
+        unfolderedSections,
+      });
+    });
+
+    return result.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+  }, [
+    manageGroupedTree,
+    workspace.deckGroups,
+    subjById,
+    selectedSubjectId,
+    manageSearch,
+    manageSectionFilter,
+    manageTopicFilter,
+    manageFilter,
+    manageFolderFilter,
+  ]);
+
   const targetBulkCardIds = useMemo(() => {
     if (selectedManageIds.size > 0) {
       return manageFilteredCards.filter((c) => selectedManageIds.has(c.id)).map((c) => c.id);
@@ -1233,7 +1367,12 @@ export function FlashcardsView({
     setMoveFeedback(`Deleted ${ids.size} selected card${ids.size === 1 ? '' : 's'}.`);
   };
 
-  const handleRenameSection = (cardIds: string[], nextName: string) => {
+  const handleRenameSection = (
+    cardIds: string[],
+    nextName: string,
+    subjectId?: string,
+    oldName?: string
+  ) => {
     const clean = nextName.trim();
     if (!clean || cardIds.length === 0) {
       setRenamingSectionKey(null);
@@ -1245,6 +1384,18 @@ export function FlashcardsView({
       flashcards: prev.flashcards.map((c) =>
         idSet.has(c.id) ? { ...c, sectionName: clean } : c
       ),
+      deckGroups:
+        subjectId && oldName
+          ? (prev.deckGroups || []).map((g) => {
+              if (g.subjectId !== subjectId || !g.sectionNames.includes(oldName)) return g;
+              return {
+                ...g,
+                sectionNames: Array.from(
+                  new Set(g.sectionNames.map((s) => (s === oldName ? clean : s)))
+                ),
+              };
+            })
+          : prev.deckGroups,
       updatedAt: new Date().toISOString(),
     }));
     setRenamingSectionKey(null);
@@ -1521,18 +1672,49 @@ export function FlashcardsView({
                   </button>
                 </div>
 
-                {/* Decks & Sections Grid (Independent from Study Notes by default) */}
+                {/* Decks & Folders (Folder Dropdowns = Bundles of Decks; no individual cards shown here) */}
                 <div className="sd-card space-y-4 p-5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h2 className="font-display text-base font-bold text-[var(--ink)]">
-                        Decks &amp; Sections
+                        Decks &amp; Folders
                       </h2>
                       <p className="text-xs text-[var(--mute)]">
-                        Organized separately from Study Notes by default. Pick one deck or mix sections across subjects.
+                        Each folder dropdown bundles decks together. Open a folder to pick individual decks, or open{' '}
+                        <button
+                          type="button"
+                          onClick={() => setScreen('manage')}
+                          className="cursor-pointer font-semibold text-[var(--e3)] hover:underline"
+                        >
+                          Browse &amp; Manage
+                        </button>{' '}
+                        to view &amp; edit individual cards.
                       </p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {activeSubjectDeckGroups.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const allFIds = new Set(activeSubjectDeckGroups.map((g) => g.id));
+                              sectionBuckets.forEach((b) => allFIds.add(`unfoldered:${b.subjectId}`));
+                              setExpandedSetupFolders(allFIds);
+                              setCollapsedSetupSubjects(new Set());
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs"
+                          >
+                            Expand all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedSetupFolders(new Set())}
+                            className="sd-btn px-2.5 py-1 text-xs"
+                          >
+                            Collapse all
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         onClick={() => setSelectedSections(sectionBuckets.map((b) => b.key))}
@@ -1610,61 +1792,112 @@ export function FlashcardsView({
                     </div>
                   )}
 
-                  {/* Folders / Deck Groups Quick-Select */}
-                  {activeSubjectDeckGroups.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
-                        Folders:
-                      </span>
-                      {activeSubjectDeckGroups.map((grp) => {
-                        const memberKeys = grp.sectionNames.map(
-                          (sec) => `${grp.subjectId}:::${sec}`
-                        );
-                        const isFolderFullySelected =
-                          memberKeys.length > 0 &&
-                          memberKeys.every((k) => selectedSections.includes(k));
-
-                        return (
-                          <button
-                            key={grp.id}
-                            type="button"
-                            onClick={() => {
-                              if (isFolderFullySelected) {
-                                setSelectedSections((prev) =>
-                                  prev.filter((k) => !memberKeys.includes(k))
-                                );
-                              } else {
-                                setSelectedSections((prev) =>
-                                  Array.from(new Set([...prev, ...memberKeys]))
-                                );
-                              }
-                            }}
-                            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
-                              isFolderFullySelected
-                                ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
-                                : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
-                            }`}
-                          >
-                            <Folder className="h-3 w-3" aria-hidden="true" />
-                            <span>{grp.name}</span>
-                            <span className="font-mono-num text-[10px] opacity-75">
-                              ({grp.sectionNames.length} decks)
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Decks Grouped by Subject */}
+                  {/* Subject -> Folder Dropdown Bundles & Decks */}
                   <div className="space-y-4">
                     {subjectGroupedBuckets.map((grp) => {
                       const groupKeys = grp.buckets.map((b) => b.key);
                       const allGroupSelected = groupKeys.every((k) => selectedSections.includes(k));
+                      const subjCollapsed = collapsedSetupSubjects.has(grp.subjectId);
+
+                      const subjectFolders = (workspace.deckGroups || []).filter(
+                        (f) => f.subjectId === grp.subjectId
+                      );
+                      const assignedDeckNames = new Set<string>();
+                      const folderBundles = subjectFolders
+                        .map((folder) => {
+                          const memberBuckets = grp.buckets.filter((b) =>
+                            folder.sectionNames.includes(b.name)
+                          );
+                          memberBuckets.forEach((b) => assignedDeckNames.add(b.name));
+                          return { folder, buckets: memberBuckets };
+                        })
+                        .filter((fb) => fb.buckets.length > 0);
+
+                      const unfolderedBuckets = grp.buckets.filter(
+                        (b) => !assignedDeckNames.has(b.name)
+                      );
+
+                      const renderSetupDeckCard = (b: (typeof grp.buckets)[number]) => {
+                        const active = selectedSections.includes(b.key);
+                        const mastered = b.cards.filter((c) => c.box >= 4).length;
+                        const pct = Math.round(
+                          (mastered / Math.max(1, b.cards.length)) * 100
+                        );
+                        return (
+                          <button
+                            key={b.key}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() =>
+                              setSelectedSections((prev) =>
+                                prev.includes(b.key)
+                                  ? prev.filter((x) => x !== b.key)
+                                  : [...prev, b.key]
+                              )
+                            }
+                            style={{
+                              borderColor: active ? b.color : undefined,
+                              backgroundColor: active
+                                ? `color-mix(in srgb, ${b.color} 11%, var(--card))`
+                                : undefined,
+                            }}
+                            className="relative cursor-pointer overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-3 pb-4 text-left transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-sm font-bold text-[var(--ink)]">
+                                {b.name}
+                              </span>
+                              {active && (
+                                <span
+                                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                                  style={{ backgroundColor: b.color }}
+                                >
+                                  ✓
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
+                              {b.cards.length} cards · {mastered} mastered
+                            </div>
+                            {b.linkedTopicNames.length > 0 && (
+                              <div className="mt-1 truncate text-[11px] font-medium text-[var(--e3)]">
+                                Linked: {b.linkedTopicNames.join(', ')}
+                              </div>
+                            )}
+                            <div className="absolute inset-x-0 bottom-0 h-1 bg-[var(--line)]">
+                              <div
+                                className="h-full bg-[var(--ok)] transition-[width] duration-300"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </button>
+                        );
+                      };
+
+                      const unfolderedDropKey = `unfoldered:${grp.subjectId}`;
+                      const isUnfolderedExpanded =
+                        folderBundles.length === 0 || expandedSetupFolders.has(unfolderedDropKey);
+
                       return (
                         <div key={grp.subjectId} className="space-y-2.5">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCollapsedSetupSubjects((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(grp.subjectId)) next.delete(grp.subjectId);
+                                  else next.add(grp.subjectId);
+                                  return next;
+                                })
+                              }
+                              className="flex cursor-pointer items-center gap-2 text-left"
+                            >
+                              {subjCollapsed ? (
+                                <ChevronRight className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                              )}
                               <span
                                 className="h-2.5 w-2.5 shrink-0 rounded-full"
                                 style={{ backgroundColor: grp.color }}
@@ -1674,9 +1907,14 @@ export function FlashcardsView({
                                 {grp.subjectName}
                               </span>
                               <span className="font-mono-num text-xs text-[var(--mute)]">
-                                · {grp.buckets.length} deck{grp.buckets.length === 1 ? '' : 's'} · {grp.totalCards} cards
+                                ·{' '}
+                                {folderBundles.length > 0
+                                  ? `${folderBundles.length} folder${folderBundles.length === 1 ? '' : 's'} · `
+                                  : ''}
+                                {grp.buckets.length} deck{grp.buckets.length === 1 ? '' : 's'} · {grp.totalCards} cards
                               </span>
-                            </div>
+                            </button>
+
                             <div className="flex items-center gap-1.5">
                               {subjectGroupedBuckets.length > 1 && (
                                 <>
@@ -1715,64 +1953,162 @@ export function FlashcardsView({
                             </div>
                           </div>
 
-                          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                            {grp.buckets.map((b) => {
-                              const active = selectedSections.includes(b.key);
-                              const mastered = b.cards.filter((c) => c.box >= 4).length;
-                              const pct = Math.round(
-                                (mastered / Math.max(1, b.cards.length)) * 100
-                              );
-                              return (
-                                <button
-                                  key={b.key}
-                                  type="button"
-                                  aria-pressed={active}
-                                  onClick={() =>
-                                    setSelectedSections((prev) =>
-                                      prev.includes(b.key)
-                                        ? prev.filter((x) => x !== b.key)
-                                        : [...prev, b.key]
-                                    )
-                                  }
-                                  style={{
-                                    borderColor: active ? b.color : undefined,
-                                    backgroundColor: active
-                                      ? `color-mix(in srgb, ${b.color} 11%, var(--card))`
-                                      : undefined,
-                                  }}
-                                  className="relative cursor-pointer overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-3 pb-4 text-left transition-colors"
-                                >
-                                  <div className="flex items-start justify-between gap-2">
-                                    <span className="text-sm font-bold text-[var(--ink)]">
-                                      {b.name}
-                                    </span>
-                                    {active && (
-                                      <span
-                                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                                        style={{ backgroundColor: b.color }}
+                          {!subjCollapsed && (
+                            <div className="space-y-2.5">
+                              {/* Collapsible Folder Dropdowns (each dropdown is a bundle of decks) */}
+                              {folderBundles.map(({ folder, buckets: memberBuckets }) => {
+                                const isExpanded = expandedSetupFolders.has(folder.id);
+                                const memberKeys = memberBuckets.map((b) => b.key);
+                                const selectedInFolder = memberKeys.filter((k) =>
+                                  selectedSections.includes(k)
+                                ).length;
+                                const allFolderSelected =
+                                  memberKeys.length > 0 && selectedInFolder === memberKeys.length;
+                                const someFolderSelected =
+                                  selectedInFolder > 0 && selectedInFolder < memberKeys.length;
+                                const folderCards = memberBuckets.flatMap((b) => b.cards);
+                                const folderMastered = folderCards.filter((c) => c.box >= 4).length;
+                                const folderPct = Math.round(
+                                  (folderMastered / Math.max(1, folderCards.length)) * 100
+                                );
+
+                                return (
+                                  <div
+                                    key={folder.id}
+                                    className={`relative overflow-hidden rounded-xl border transition-colors ${
+                                      allFolderSelected
+                                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_6%,var(--card))]'
+                                        : 'border-[var(--line)] bg-[var(--bg)]'
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-3">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setExpandedSetupFolders((prev) => {
+                                            const next = new Set(prev);
+                                            if (next.has(folder.id)) next.delete(folder.id);
+                                            else next.add(folder.id);
+                                            return next;
+                                          })
+                                        }
+                                        aria-expanded={isExpanded}
+                                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
                                       >
-                                        ✓
+                                        {isExpanded ? (
+                                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                        ) : (
+                                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
+                                        )}
+                                        {isExpanded ? (
+                                          <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                        ) : (
+                                          <Folder className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                        )}
+                                        <div className="min-w-0">
+                                          <div className="truncate text-sm font-bold text-[var(--ink)]">
+                                            {folder.name}
+                                          </div>
+                                          <div className="font-mono-num text-[11px] text-[var(--mute)]">
+                                            {memberBuckets.length} deck{memberBuckets.length === 1 ? '' : 's'} ·{' '}
+                                            {folderCards.length} cards · {folderMastered} mastered
+                                          </div>
+                                        </div>
+                                      </button>
+
+                                      <div className="flex shrink-0 items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (allFolderSelected) {
+                                              setSelectedSections((prev) =>
+                                                prev.filter((k) => !memberKeys.includes(k))
+                                              );
+                                            } else {
+                                              setSelectedSections((prev) =>
+                                                Array.from(new Set([...prev, ...memberKeys]))
+                                              );
+                                            }
+                                          }}
+                                          className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                                            allFolderSelected
+                                              ? 'border-[var(--e3)] bg-[var(--e3)] text-white'
+                                              : someFolderSelected
+                                              ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                                              : 'border-[var(--line)] bg-[var(--card)] text-[var(--ink)] hover:border-[var(--mute)]'
+                                          }`}
+                                        >
+                                          {allFolderSelected
+                                            ? 'Folder Selected ✓'
+                                            : someFolderSelected
+                                            ? `${selectedInFolder}/${memberBuckets.length} Decks`
+                                            : 'Select Folder'}
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {isExpanded && (
+                                      <div className="grid gap-2.5 border-t border-[var(--line)] bg-[var(--card)] p-3 sm:grid-cols-2 lg:grid-cols-3">
+                                        {memberBuckets.map((b) => renderSetupDeckCard(b))}
+                                      </div>
+                                    )}
+
+                                    <div className="h-1 w-full bg-[var(--line)]">
+                                      <div
+                                        className="h-full bg-[var(--ok)] transition-[width] duration-300"
+                                        style={{ width: `${folderPct}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+
+                              {/* Unfoldered / Individual Decks */}
+                              {unfolderedBuckets.length > 0 && (
+                                folderBundles.length > 0 ? (
+                                  <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)]">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedSetupFolders((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(unfolderedDropKey)) next.delete(unfolderedDropKey);
+                                          else next.add(unfolderedDropKey);
+                                          return next;
+                                        })
+                                      }
+                                      aria-expanded={isUnfolderedExpanded}
+                                      className="flex w-full cursor-pointer items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+                                    >
+                                      <span className="flex items-center gap-2 text-xs font-bold text-[var(--mute)]">
+                                        {isUnfolderedExpanded ? (
+                                          <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                                        ) : (
+                                          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                                        )}
+                                        <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                                        <span>
+                                          Other Decks ({unfolderedBuckets.length})
+                                        </span>
                                       </span>
+                                      <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                                        {unfolderedBuckets.reduce((s, b) => s + b.cards.length, 0)} cards
+                                      </span>
+                                    </button>
+                                    {isUnfolderedExpanded && (
+                                      <div className="grid gap-2.5 border-t border-[var(--line)] bg-[var(--card)] p-3 sm:grid-cols-2 lg:grid-cols-3">
+                                        {unfolderedBuckets.map((b) => renderSetupDeckCard(b))}
+                                      </div>
                                     )}
                                   </div>
-                                  <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
-                                    {b.cards.length} cards · {mastered} mastered
+                                ) : (
+                                  <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                                    {unfolderedBuckets.map((b) => renderSetupDeckCard(b))}
                                   </div>
-                                  {b.linkedTopicNames.length > 0 && (
-                                    <div className="mt-1 truncate text-[11px] font-medium text-[var(--e3)]">
-                                      Linked: {b.linkedTopicNames.join(', ')}
-                                    </div>
-                                  )}
-                                  <div className="absolute inset-x-0 bottom-0 h-1 bg-[var(--line)]">
-                                    <div
-                                      className="h-full bg-[var(--ok)] transition-[width] duration-300"
-                                      style={{ width: `${pct}%` }}
-                                    />
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
+                                )
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -2928,11 +3264,14 @@ export function FlashcardsView({
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
-                        {manageLayout === 'grouped' && manageGroupedTree.length > 0 && (
+                        {manageLayout === 'grouped' && manageFolderTree.length > 0 && (
                           <>
                             <button
                               type="button"
-                              onClick={() => setCollapsedManageGroups(new Set())}
+                              onClick={() => {
+                                setCollapsedManageFolders(new Set());
+                                setCollapsedManageGroups(new Set());
+                              }}
                               className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline"
                             >
                               Expand all
@@ -2941,11 +3280,17 @@ export function FlashcardsView({
                             <button
                               type="button"
                               onClick={() => {
-                                const allKeys = new Set<string>();
-                                manageGroupedTree.forEach((sg) =>
-                                  sg.sectionList.forEach((sec) => allKeys.add(sec.key))
-                                );
-                                setCollapsedManageGroups(allKeys);
+                                const allFolderKeys = new Set<string>();
+                                const allDeckKeys = new Set<string>();
+                                manageFolderTree.forEach((sg) => {
+                                  sg.folders.forEach((f) => {
+                                    allFolderKeys.add(f.folder.id);
+                                    f.sections.forEach((sec) => allDeckKeys.add(sec.key));
+                                  });
+                                  sg.unfolderedSections.forEach((sec) => allDeckKeys.add(sec.key));
+                                });
+                                setCollapsedManageFolders(allFolderKeys);
+                                setCollapsedManageGroups(allDeckKeys);
                               }}
                               className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:text-[var(--ink)]"
                             >
@@ -2960,7 +3305,7 @@ export function FlashcardsView({
                             onClick={() => setManageLayout('grouped')}
                             className="sd-seg-btn px-2.5 py-0.5 text-xs"
                           >
-                            Grouped
+                            Folders &amp; Decks
                           </button>
                           <button
                             type="button"
@@ -2973,123 +3318,6 @@ export function FlashcardsView({
                         </div>
                       </div>
                     </div>
-                  </div>
-
-                  {/* Folders Management Panel in Browse Tab */}
-                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <Folder className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
-                        <span className="text-xs font-bold text-[var(--ink)]">
-                          Deck Folders ({activeSubjectDeckGroups.length})
-                        </span>
-                        <span className="text-[11px] text-[var(--mute)]">
-                          Group current decks together for organized browsing and 1-click study
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenCreateFolder()}
-                        className="sd-btn px-2.5 py-1 text-xs"
-                      >
-                        <FolderPlus className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
-                        <span>+ New Folder</span>
-                      </button>
-                    </div>
-
-                    {activeSubjectDeckGroups.length > 0 && (
-                      <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {activeSubjectDeckGroups.map((grp) => {
-                          const isCurrentFilter = manageFolderFilter === grp.id;
-                          const totalCardsInFolder = workspace.flashcards.filter(
-                            (c) =>
-                              c.subjectId === grp.subjectId &&
-                              grp.sectionNames.includes(
-                                (c.sectionName || 'Core Deck').trim() || 'Core Deck'
-                              )
-                          ).length;
-
-                          return (
-                            <div
-                              key={grp.id}
-                              className={`flex flex-col justify-between rounded-xl border p-3 transition-colors ${
-                                isCurrentFilter
-                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))]'
-                                  : 'border-[var(--line)] bg-[var(--card)]'
-                              }`}
-                            >
-                              <div>
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="flex items-center gap-1.5 font-bold text-xs text-[var(--ink)] truncate">
-                                    <Folder className="h-3.5 w-3.5 text-[var(--e3)] shrink-0" />
-                                    <span className="truncate">{grp.name}</span>
-                                  </span>
-                                  <span className="font-mono-num text-[10px] text-[var(--mute)] shrink-0">
-                                    {grp.sectionNames.length} deck{grp.sectionNames.length === 1 ? '' : 's'} · {totalCardsInFolder} cards
-                                  </span>
-                                </div>
-                                <div className="mt-1.5 flex flex-wrap gap-1">
-                                  {grp.sectionNames.length === 0 ? (
-                                    <span className="text-[11px] text-[var(--mute)] italic">
-                                      No decks in this folder yet
-                                    </span>
-                                  ) : (
-                                    grp.sectionNames.slice(0, 4).map((sec) => (
-                                      <span
-                                        key={sec}
-                                        className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--mute)]"
-                                      >
-                                        {sec}
-                                      </span>
-                                    ))
-                                  )}
-                                  {grp.sectionNames.length > 4 && (
-                                    <span className="rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--mute)]">
-                                      +{grp.sectionNames.length - 4} more
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-2 text-xs">
-                                <button
-                                  type="button"
-                                  onClick={() => setManageFolderFilter(isCurrentFilter ? 'ALL' : grp.id)}
-                                  className={`font-semibold ${
-                                    isCurrentFilter
-                                      ? 'text-[var(--e3)]'
-                                      : 'text-[var(--mute)] hover:text-[var(--ink)]'
-                                  }`}
-                                >
-                                  {isCurrentFilter ? 'Showing Folder ✓' : 'Filter Cards'}
-                                </button>
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenEditFolder(grp)}
-                                    title="Edit folder and member decks"
-                                    aria-label={`Edit ${grp.name}`}
-                                    className="sd-btn h-7 px-2 text-xs"
-                                  >
-                                    <Edit3 className="h-3 w-3" />
-                                    <span>Edit</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteDeckFolder(grp.id)}
-                                    title="Delete folder"
-                                    aria-label={`Delete ${grp.name}`}
-                                    className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
                   </div>
 
                   {/* Multi-Select / Organize & Bulk Actions Toolbar */}
@@ -3235,179 +3463,375 @@ export function FlashcardsView({
                     </div>
                   )}
 
-                  {/* GROUPED TREE VIEW (Subject -> Collapsible Decks / Sections) */}
-                  {manageFilteredCards.length === 0 ? (
+                  {/* FOLDER HIERARCHY VIEW (Subject -> Folder Dropdown -> Deck Dropdown -> Individual Cards) */}
+                  {manageFolderTree.length === 0 ? (
                     <div className="sd-card p-8 text-center text-xs text-[var(--mute)]">
-                      No cards match your current filter. Try clearing search or switching to + Add Cards.
+                      No cards or folders match your current filter. Try clearing search or switching to + Add Cards.
                     </div>
                   ) : manageLayout === 'grouped' ? (
                     <div className="space-y-4">
-                      {manageGroupedTree.map((sg) => (
-                        <div key={sg.subjectId} className="sd-card overflow-hidden">
-                          {/* Subject Group Header */}
-                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-5 py-3">
-                            <div className="flex items-center gap-2.5">
-                              <span
-                                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                style={{ backgroundColor: sg.color }}
-                                aria-hidden="true"
-                              />
-                              <span className="font-display text-base font-bold text-[var(--ink)]">
-                                {sg.subjectName}
-                              </span>
-                              <span className="font-mono-num text-xs text-[var(--mute)]">
-                                · {sg.sectionList.length} deck{sg.sectionList.length === 1 ? '' : 's'} · {sg.totalCards} cards · {sg.dueCards} due
-                              </span>
-                            </div>
-                          </div>
+                      {manageFolderTree.map((sg) => {
+                        const renderManageDeckBlock = (
+                          sec: (typeof manageGroupedTree)[number]['sectionList'][number],
+                          currentFolderId: string | null,
+                          nestedInFolder: boolean
+                        ) => {
+                          const isCollapsed = collapsedManageGroups.has(sec.key);
+                          const secCardIds = sec.cards.map((c) => c.id);
+                          const secAllSelected =
+                            secCardIds.length > 0 &&
+                            secCardIds.every((id) => selectedManageIds.has(id));
+                          const masteredCnt = sec.cards.filter((c) => c.box >= 4).length;
+                          const masteryPct = Math.round(
+                            (masteredCnt / Math.max(1, sec.cards.length)) * 100
+                          );
+                          const isRenaming = renamingSectionKey === sec.key;
 
-                          {/* Decks / Sections Inside Subject */}
-                          <div className="divide-y divide-[var(--line)]">
-                            {sg.sectionList.map((sec) => {
-                              const isCollapsed = collapsedManageGroups.has(sec.key);
-                              const secCardIds = sec.cards.map((c) => c.id);
-                              const secAllSelected =
-                                secCardIds.length > 0 &&
-                                secCardIds.every((id) => selectedManageIds.has(id));
-                              const masteredCnt = sec.cards.filter((c) => c.box >= 4).length;
-                              const masteryPct = Math.round(
-                                (masteredCnt / Math.max(1, sec.cards.length)) * 100
-                              );
-                              const isRenaming = renamingSectionKey === sec.key;
+                          return (
+                            <div
+                              key={`${currentFolderId || 'unfoldered'}::${sec.key}`}
+                              className={nestedInFolder ? 'bg-[var(--card)]' : ''}
+                            >
+                              <div
+                                className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 ${
+                                  nestedInFolder
+                                    ? 'bg-[color-mix(in_srgb,var(--bg)_35%,var(--card))] pl-7'
+                                    : 'bg-[color-mix(in_srgb,var(--bg)_45%,var(--card))]'
+                                }`}
+                              >
+                                <div className="flex min-w-0 flex-1 items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setCollapsedManageGroups((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(sec.key)) next.delete(sec.key);
+                                        else next.add(sec.key);
+                                        return next;
+                                      })
+                                    }
+                                    className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left"
+                                  >
+                                    {isCollapsed ? (
+                                      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
+                                    ) : (
+                                      <ChevronDown className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
+                                    )}
+                                    <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]" aria-hidden="true" />
+                                    {!isRenaming && (
+                                      <span className="truncate text-sm font-bold text-[var(--ink)]">
+                                        {sec.sectionName}
+                                      </span>
+                                    )}
+                                  </button>
 
-                              return (
-                                <div key={sec.key}>
-                                  <div className="flex flex-wrap items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--bg)_45%,var(--card))] px-4 py-2.5">
-                                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                                  {isRenaming ? (
+                                    <form
+                                      onSubmit={(e) => {
+                                        e.preventDefault();
+                                        handleRenameSection(
+                                          secCardIds,
+                                          renameSectionDraft,
+                                          sec.subjectId,
+                                          sec.sectionName
+                                        );
+                                      }}
+                                      className="flex items-center gap-1.5"
+                                    >
+                                      <input
+                                        type="text"
+                                        autoFocus
+                                        value={renameSectionDraft}
+                                        onChange={(e) => setRenameSectionDraft(e.target.value)}
+                                        className="sd-input w-48 py-1 text-xs font-bold"
+                                      />
+                                      <button type="submit" className="sd-btn-pri px-2.5 py-1 text-[11px]">
+                                        Save
+                                      </button>
                                       <button
                                         type="button"
-                                        onClick={() =>
-                                          setCollapsedManageGroups((prev) => {
-                                            const next = new Set(prev);
-                                            if (next.has(sec.key)) next.delete(sec.key);
-                                            else next.add(sec.key);
-                                            return next;
-                                          })
-                                        }
-                                        className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left"
+                                        onClick={() => setRenamingSectionKey(null)}
+                                        className="sd-btn px-2 py-1 text-[11px]"
                                       >
-                                        {isCollapsed ? (
-                                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
-                                        ) : (
-                                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
-                                        )}
-                                        {!isRenaming && (
-                                          <span className="truncate text-sm font-bold text-[var(--ink)]">
-                                            {sec.sectionName}
-                                          </span>
-                                        )}
+                                        Cancel
                                       </button>
-
-                                      {isRenaming ? (
-                                        <form
-                                          onSubmit={(e) => {
-                                            e.preventDefault();
-                                            handleRenameSection(secCardIds, renameSectionDraft);
-                                          }}
-                                          className="flex items-center gap-1.5"
-                                        >
-                                          <input
-                                            type="text"
-                                            autoFocus
-                                            value={renameSectionDraft}
-                                            onChange={(e) => setRenameSectionDraft(e.target.value)}
-                                            className="sd-input w-48 py-1 text-xs font-bold"
-                                          />
-                                          <button type="submit" className="sd-btn-pri px-2.5 py-1 text-[11px]">
-                                            Save
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => setRenamingSectionKey(null)}
-                                            className="sd-btn px-2 py-1 text-[11px]"
-                                          >
-                                            Cancel
-                                          </button>
-                                        </form>
-                                      ) : (
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
-                                            {sec.cards.length} cards · {masteryPct}% mastered
-                                          </span>
-                                          {sec.linkedTopicNames.length > 0 && (
-                                            <span className="truncate text-[11px] font-semibold text-[var(--e3)]">
-                                              · Linked: {sec.linkedTopicNames.join(', ')}
-                                            </span>
-                                          )}
-                                        </div>
+                                    </form>
+                                  ) : (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
+                                        {sec.cards.length} cards · {masteryPct}% mastered
+                                      </span>
+                                      {sec.linkedTopicNames.length > 0 && (
+                                        <span className="truncate text-[11px] font-semibold text-[var(--e3)]">
+                                          · Linked: {sec.linkedTopicNames.join(', ')}
+                                        </span>
                                       )}
-                                    </div>
-
-                                    <div className="flex flex-wrap items-center gap-1.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => launchSession(sec.cards)}
-                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                                      >
-                                        <Play className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
-                                        <span>Study</span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setAddSubjectId(sec.subjectId);
-                                          setNewSec(sec.sectionName);
-                                          setNewTopicId(
-                                            sec.linkedTopicIds.length === 1 ? sec.linkedTopicIds[0] : ''
-                                          );
-                                          setManageSubTab('add');
-                                        }}
-                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                                      >
-                                        <Plus className="h-3 w-3" aria-hidden="true" />
-                                        <span>Add</span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setRenamingSectionKey(sec.key);
-                                          setRenameSectionDraft(sec.sectionName);
-                                        }}
-                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                                      >
-                                        Rename
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setSelectedManageIds((prev) => {
-                                            const next = new Set(prev);
-                                            if (secAllSelected) {
-                                              secCardIds.forEach((id) => next.delete(id));
-                                            } else {
-                                              secCardIds.forEach((id) => next.add(id));
-                                            }
-                                            return next;
-                                          })
-                                        }
-                                        className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                                      >
-                                        {secAllSelected ? 'Unselect' : 'Select'}
-                                      </button>
-                                    </div>
-                                  </div>
-
-                                  {!isCollapsed && (
-                                    <div className="divide-y divide-[var(--line)]">
-                                      {sec.cards.map((card) => renderManageCardRow(card, false))}
                                     </div>
                                   )}
                                 </div>
-                              );
-                            })}
+
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {sg.subjectFolders.length > 0 && (
+                                    <select
+                                      aria-label={`Move ${sec.sectionName} to folder`}
+                                      value={currentFolderId || ''}
+                                      onChange={(e) =>
+                                        handleMoveDeckToFolder(
+                                          sec.subjectId,
+                                          sec.sectionName,
+                                          e.target.value || null
+                                        )
+                                      }
+                                      title="Move deck to folder"
+                                      className="sd-input h-7 w-auto max-w-[155px] py-0 text-[11px] font-semibold"
+                                    >
+                                      <option value="">No Folder</option>
+                                      {sg.subjectFolders.map((f) => (
+                                        <option key={f.id} value={f.id}>
+                                          📁 {f.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => launchSession(sec.cards)}
+                                    className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                  >
+                                    <Play className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                                    <span>Study</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAddSubjectId(sec.subjectId);
+                                      setNewSec(sec.sectionName);
+                                      setNewTopicId(
+                                        sec.linkedTopicIds.length === 1 ? sec.linkedTopicIds[0] : ''
+                                      );
+                                      setManageSubTab('add');
+                                    }}
+                                    className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                  >
+                                    <Plus className="h-3 w-3" aria-hidden="true" />
+                                    <span>Add</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRenamingSectionKey(sec.key);
+                                      setRenameSectionDraft(sec.sectionName);
+                                    }}
+                                    className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                  >
+                                    Rename
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setSelectedManageIds((prev) => {
+                                        const next = new Set(prev);
+                                        if (secAllSelected) {
+                                          secCardIds.forEach((id) => next.delete(id));
+                                        } else {
+                                          secCardIds.forEach((id) => next.add(id));
+                                        }
+                                        return next;
+                                      })
+                                    }
+                                    className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                  >
+                                    {secAllSelected ? 'Unselect' : 'Select'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {!isCollapsed && (
+                                <div
+                                  className={`divide-y divide-[var(--line)] ${
+                                    nestedInFolder ? 'pl-4' : ''
+                                  }`}
+                                >
+                                  {sec.cards.map((card) => renderManageCardRow(card, false))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        };
+
+                        return (
+                          <div key={sg.subjectId} className="sd-card overflow-hidden">
+                            {/* Subject Group Header */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-5 py-3">
+                              <div className="flex items-center gap-2.5">
+                                <span
+                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                  style={{ backgroundColor: sg.color }}
+                                  aria-hidden="true"
+                                />
+                                <span className="font-display text-base font-bold text-[var(--ink)]">
+                                  {sg.subjectName}
+                                </span>
+                                <span className="font-mono-num text-xs text-[var(--mute)]">
+                                  · {sg.folders.length} folder{sg.folders.length === 1 ? '' : 's'} ·{' '}
+                                  {sg.allSectionsCount} deck{sg.allSectionsCount === 1 ? '' : 's'} ·{' '}
+                                  {sg.totalCards} cards · {sg.dueCards} due
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenCreateFolder(sg.subjectId)}
+                                className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                              >
+                                <FolderPlus className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                                <span>+ New Folder</span>
+                              </button>
+                            </div>
+
+                            {/* Folders & Decks Inside Subject */}
+                            <div className="divide-y divide-[var(--line)]">
+                              {sg.folders.map(({ folder, sections: folderSections, totalCards, dueCards }) => {
+                                const folderCollapsed = collapsedManageFolders.has(folder.id);
+                                const folderCardIds = folderSections.flatMap((s) =>
+                                  s.cards.map((c) => c.id)
+                                );
+                                const folderAllSelected =
+                                  folderCardIds.length > 0 &&
+                                  folderCardIds.every((id) => selectedManageIds.has(id));
+
+                                return (
+                                  <div key={folder.id}>
+                                    {/* Folder Dropdown Header */}
+                                    <div className="flex flex-wrap items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--e3)_7%,var(--card))] px-4 py-3">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setCollapsedManageFolders((prev) => {
+                                            const next = new Set(prev);
+                                            if (next.has(folder.id)) next.delete(folder.id);
+                                            else next.add(folder.id);
+                                            return next;
+                                          })
+                                        }
+                                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                                      >
+                                        {folderCollapsed ? (
+                                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                        ) : (
+                                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                        )}
+                                        {folderCollapsed ? (
+                                          <Folder className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                        ) : (
+                                          <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                        )}
+                                        <span className="truncate font-display text-sm font-extrabold text-[var(--ink)]">
+                                          {folder.name}
+                                        </span>
+                                        <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
+                                          · {folder.sectionNames.length} deck
+                                          {folder.sectionNames.length === 1 ? '' : 's'} · {totalCards} cards
+                                          {dueCards > 0 ? ` · ${dueCards} due` : ''}
+                                        </span>
+                                      </button>
+
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        {totalCards > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              launchSession(folderSections.flatMap((s) => s.cards))
+                                            }
+                                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                          >
+                                            <Play className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                                            <span>Study Folder</span>
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenEditFolder(folder)}
+                                          className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                        >
+                                          <Edit3 className="h-3 w-3" aria-hidden="true" />
+                                          <span>Select Decks</span>
+                                        </button>
+                                        {folderCardIds.length > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setSelectedManageIds((prev) => {
+                                                const next = new Set(prev);
+                                                if (folderAllSelected) {
+                                                  folderCardIds.forEach((id) => next.delete(id));
+                                                } else {
+                                                  folderCardIds.forEach((id) => next.add(id));
+                                                }
+                                                return next;
+                                              })
+                                            }
+                                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                          >
+                                            {folderAllSelected ? 'Unselect' : 'Select'}
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteDeckFolder(folder.id)}
+                                          title="Delete folder (keeps decks & cards safe)"
+                                          aria-label={`Delete folder ${folder.name}`}
+                                          className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
+                                        >
+                                          <Trash2 className="h-3 w-3" aria-hidden="true" />
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Nested Decks Inside Folder */}
+                                    {!folderCollapsed && (
+                                      <div className="divide-y divide-[var(--line)] border-t border-[var(--line)]">
+                                        {folderSections.length === 0 ? (
+                                          <div className="flex flex-wrap items-center justify-between gap-2 bg-[var(--card)] px-8 py-4 text-xs text-[var(--mute)]">
+                                            <span>
+                                              This folder is empty. Store current decks inside it using{' '}
+                                              <strong>Select Decks</strong> or any deck&apos;s folder selector.
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleOpenEditFolder(folder)}
+                                              className="sd-btn px-3 py-1 text-xs font-semibold text-[var(--e3)]"
+                                            >
+                                              + Store Decks
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          folderSections.map((sec) =>
+                                            renderManageDeckBlock(sec, folder.id, true)
+                                          )
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+
+                              {/* Unfoldered / Standalone Decks */}
+                              {sg.unfolderedSections.length > 0 && (
+                                <>
+                                  {sg.folders.length > 0 && (
+                                    <div className="bg-[var(--bg)] px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                                      Unfoldered Decks ({sg.unfolderedSections.length})
+                                    </div>
+                                  )}
+                                  {sg.unfolderedSections.map((sec) =>
+                                    renderManageDeckBlock(sec, null, false)
+                                  )}
+                                </>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     /* FLAT LIST VIEW */
