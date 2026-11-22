@@ -366,6 +366,7 @@ export interface DeckGroup {
   name: string;
   subjectId: string;
   sectionNames: string[];
+  linkedTopicIds?: string[];
   createdAt: string;
 }
 

@@ -25,6 +25,7 @@ import {
   EyeOff,
   FileCheck2,
   Folder,
+  FolderOpen,
   FolderPlus,
   GitBranch,
   Globe,
@@ -893,9 +894,97 @@ export function NotesStudioView({
     return Array.from(deckMap.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [workspace.flashcards, activeSubject, activeTopic]);
 
+  const subjectFolderSummaries = useMemo(() => {
+    if (!activeSubject) return [];
+    return (workspace.deckGroups || [])
+      .filter((g) => g.subjectId === activeSubject.id)
+      .map((folder) => {
+        const secSet = new Set(folder.sectionNames);
+        const memberCards = workspace.flashcards.filter(
+          (c) =>
+            c.subjectId === activeSubject.id &&
+            secSet.has((c.sectionName || '').trim() || 'Core Deck')
+        );
+        const linkedCards = activeTopic
+          ? memberCards.filter((c) => c.topicId === activeTopic.id).length
+          : 0;
+        const explicitLinked = Boolean(
+          activeTopic && folder.linkedTopicIds?.includes(activeTopic.id)
+        );
+        return {
+          folder,
+          deckCount: folder.sectionNames.length,
+          totalCards: memberCards.length,
+          linkedCards,
+          isLinked:
+            explicitLinked ||
+            (memberCards.length > 0 && linkedCards === memberCards.length),
+        };
+      })
+      .sort((a, b) => a.folder.name.localeCompare(b.folder.name));
+  }, [workspace.deckGroups, workspace.flashcards, activeSubject, activeTopic]);
+
+  const linkedFoldersCount = useMemo(
+    () => subjectFolderSummaries.filter((f) => f.isLinked).length,
+    [subjectFolderSummaries]
+  );
+
   const linkedDecksCount = useMemo(() => {
     return subjectDeckSummaries.filter((d) => d.linkedCards > 0).length;
   }, [subjectDeckSummaries]);
+
+  const linkedFolderDeckNames = useMemo(() => {
+    const set = new Set<string>();
+    subjectFolderSummaries.forEach((f) => {
+      if (f.isLinked) {
+        f.folder.sectionNames.forEach((sn) => set.add(sn));
+      }
+    });
+    return set;
+  }, [subjectFolderSummaries]);
+
+  const activeTopicLinkedCards = useMemo(() => {
+    if (!activeTopic) return [];
+    return workspace.flashcards.filter((c) => {
+      if (c.topicId === activeTopic.id) return true;
+      if (activeSubject && c.subjectId === activeSubject.id) {
+        const deckName = (c.sectionName || '').trim() || 'Core Deck';
+        if (linkedFolderDeckNames.has(deckName)) return true;
+      }
+      return false;
+    });
+  }, [workspace.flashcards, activeTopic, activeSubject, linkedFolderDeckNames]);
+
+  const handleToggleFolderLink = (folderId: string, shouldLink: boolean) => {
+    if (!activeTopic || !activeSubject) return;
+    onUpdateWorkspace((prev) => {
+      const targetFolder = (prev.deckGroups || []).find((g) => g.id === folderId);
+      const secSet = new Set(targetFolder?.sectionNames || []);
+      const nextGroups = (prev.deckGroups || []).map((g) => {
+        if (g.id !== folderId) return g;
+        const currentIds = g.linkedTopicIds || [];
+        const nextIds = shouldLink
+          ? Array.from(new Set([...currentIds, activeTopic.id]))
+          : currentIds.filter((id) => id !== activeTopic.id);
+        return { ...g, linkedTopicIds: nextIds };
+      });
+      const updatedCards = prev.flashcards.map((c) => {
+        if (c.subjectId !== activeSubject.id) return c;
+        const cDeck = (c.sectionName || '').trim() || 'Core Deck';
+        if (!secSet.has(cDeck)) return c;
+        if (shouldLink) {
+          return { ...c, topicId: activeTopic.id };
+        }
+        return c.topicId === activeTopic.id ? { ...c, topicId: undefined } : c;
+      });
+      return {
+        ...prev,
+        deckGroups: nextGroups,
+        flashcards: updatedCards,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  };
 
   const handleToggleDeckLink = (deckName: string, shouldLink: boolean) => {
     if (!activeTopic || !activeSubject) return;
@@ -921,6 +1010,14 @@ export function NotesStudioView({
   const handleLinkAllDecks = (shouldLink: boolean) => {
     if (!activeTopic || !activeSubject) return;
     onUpdateWorkspace((prev) => {
+      const nextGroups = (prev.deckGroups || []).map((g) => {
+        if (g.subjectId !== activeSubject.id) return g;
+        const currentIds = g.linkedTopicIds || [];
+        const nextIds = shouldLink
+          ? Array.from(new Set([...currentIds, activeTopic.id]))
+          : currentIds.filter((id) => id !== activeTopic.id);
+        return { ...g, linkedTopicIds: nextIds };
+      });
       const updatedCards = prev.flashcards.map((c) => {
         if (c.subjectId !== activeSubject.id) return c;
         if (shouldLink) {
@@ -931,6 +1028,7 @@ export function NotesStudioView({
       });
       return {
         ...prev,
+        deckGroups: nextGroups,
         flashcards: updatedCards,
         updatedAt: new Date().toISOString(),
       };
@@ -1828,18 +1926,25 @@ export function NotesStudioView({
                   )}
                 </div>
 
-                {/* Link Decks to Note Button */}
+                {/* Link Flashcards & Folders to Note Button */}
                 <button
                   type="button"
                   onClick={() => setLinkDecksModalOpen(true)}
-                  title={`Link flashcard decks to ${activeTopic.name}`}
-                  aria-label={`Link flashcard decks to ${activeTopic.name}`}
+                  title={`Link flashcard decks or folders to ${activeTopic.name}`}
+                  aria-label={`Link flashcard decks or folders to ${activeTopic.name}`}
                   className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0 ${
-                    linkedDecksCount > 0 ? 'border-[var(--e3)] text-[var(--e3)] font-semibold' : ''
+                    linkedDecksCount + linkedFoldersCount > 0
+                      ? 'border-[var(--e3)] text-[var(--e3)] font-semibold'
+                      : ''
                   }`}
                 >
                   <Layers className="h-3.5 w-3.5 text-[var(--note-accent)]" aria-hidden="true" />
-                  <span>Link Decks{linkedDecksCount > 0 ? ` (${linkedDecksCount})` : ''}</span>
+                  <span>
+                    Link Cards
+                    {linkedDecksCount + linkedFoldersCount > 0
+                      ? ` (${linkedDecksCount + linkedFoldersCount})`
+                      : ''}
+                  </span>
                 </button>
 
                 <button
@@ -3045,24 +3150,65 @@ export function NotesStudioView({
                     </section>
                   )}
 
-                  {/* Linked Flashcards Section */}
+                  {/* Linked Flashcards & Folders Section */}
                   {activeTopic && (
                     <section className="sd-card space-y-4 p-6">
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-3">
                         <div className="flex items-center gap-2.5">
                           <Layers className="h-5 w-5 text-[var(--note-accent)]" aria-hidden="true" />
                           <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                            Linked Flashcards ({workspace.flashcards.filter((c) => c.topicId === activeTopic.id).length})
+                            Linked Flashcards ({activeTopicLinkedCards.length})
                           </h2>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setLinkedCardsExpanded((v) => !v)}
-                          className="sd-btn px-3 py-1 text-xs"
-                        >
-                          {linkedCardsExpanded ? 'Hide' : 'Show Cards'}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setLinkDecksModalOpen(true)}
+                            className="sd-btn px-3 py-1 text-xs"
+                          >
+                            <FolderOpen className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                            <span>Link Folders / Decks</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setLinkedCardsExpanded((v) => !v)}
+                            className="sd-btn px-3 py-1 text-xs"
+                          >
+                            {linkedCardsExpanded ? 'Hide' : 'Show Cards'}
+                          </button>
+                        </div>
                       </div>
+
+                      {linkedFoldersCount > 0 && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] font-semibold text-[var(--mute)]">
+                            Linked folders:
+                          </span>
+                          {subjectFolderSummaries
+                            .filter((f) => f.isLinked)
+                            .map(({ folder, deckCount, totalCards }) => (
+                              <span
+                                key={folder.id}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))] px-2.5 py-1 text-xs font-semibold text-[var(--ink)]"
+                              >
+                                <Folder className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                                <span>{folder.name}</span>
+                                <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                                  ({deckCount} decks · {totalCards} cards)
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleFolderLink(folder.id, false)}
+                                  title={`Unlink folder ${folder.name}`}
+                                  aria-label={`Unlink folder ${folder.name}`}
+                                  className="ml-0.5 cursor-pointer text-[var(--bad)] hover:underline"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                        </div>
+                      )}
 
                       {linkedCardsExpanded && (
                         <div className="space-y-4">
@@ -3091,19 +3237,18 @@ export function NotesStudioView({
                           </form>
 
                           <div className="divide-y divide-[var(--line)]">
-                            {workspace.flashcards.filter((c) => c.topicId === activeTopic.id).length === 0 ? (
+                            {activeTopicLinkedCards.length === 0 ? (
                               <p className="py-3 text-center text-xs text-[var(--mute)]">
-                                No flashcards linked to this note yet. Add one above or make them from key terms.
+                                No flashcards linked to this note yet. Add one above or link a folder/deck.
                               </p>
                             ) : (
-                              workspace.flashcards
-                                .filter((c) => c.topicId === activeTopic.id)
-                                .map((card) => (
-                                  <div key={card.id} className="flex items-start justify-between gap-3 py-2.5 text-xs">
-                                    <div>
-                                      <div className="font-semibold text-[var(--ink)]">{card.q}</div>
-                                      <div className="text-[var(--mute)]">{card.a}</div>
-                                    </div>
+                              activeTopicLinkedCards.map((card) => (
+                                <div key={card.id} className="flex items-start justify-between gap-3 py-2.5 text-xs">
+                                  <div>
+                                    <div className="font-semibold text-[var(--ink)]">{card.q}</div>
+                                    <div className="text-[var(--mute)]">{card.a}</div>
+                                  </div>
+                                  {card.topicId === activeTopic.id && (
                                     <button
                                       type="button"
                                       onClick={() => handleUnlinkCardFromTopic(card.id)}
@@ -3111,8 +3256,9 @@ export function NotesStudioView({
                                     >
                                       Unlink
                                     </button>
-                                  </div>
-                                ))
+                                  )}
+                                </div>
+                              ))
                             )}
                           </div>
                         </div>
@@ -4029,11 +4175,11 @@ export function NotesStudioView({
                 <div className="flex items-center gap-2">
                   <Layers className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
                   <h2 id="link-decks-title" className="font-display text-lg font-bold text-[var(--ink)]">
-                    Link Flashcard Decks
+                    Link Folders &amp; Flashcard Decks
                   </h2>
                 </div>
                 <p className="mt-0.5 text-xs text-[var(--mute)]">
-                  Connect flashcard decks in <strong>{activeSubject.name}</strong> to note &ldquo;{activeTopic.name}&rdquo;.
+                  Connect flashcard folders or individual decks in <strong>{activeSubject.name}</strong> to note &ldquo;{activeTopic.name}&rdquo;.
                 </p>
               </div>
               <button
@@ -4046,7 +4192,7 @@ export function NotesStudioView({
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
               {/* Search & Actions Bar */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="relative flex-1 min-w-[160px]">
@@ -4055,11 +4201,11 @@ export function NotesStudioView({
                     type="text"
                     value={linkDecksSearch}
                     onChange={(e) => setLinkDecksSearch(e.target.value)}
-                    placeholder="Search decks…"
+                    placeholder="Search folders or decks…"
                     className="sd-input py-1.5 pl-8 text-xs"
                   />
                 </div>
-                {subjectDeckSummaries.length > 0 && (
+                {(subjectFolderSummaries.length > 0 || subjectDeckSummaries.length > 0) && (
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
@@ -4079,12 +4225,11 @@ export function NotesStudioView({
                 )}
               </div>
 
-              {/* Decks List */}
-              {subjectDeckSummaries.length === 0 ? (
+              {subjectFolderSummaries.length === 0 && subjectDeckSummaries.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--line)] p-6 text-center">
                   <Layers className="mx-auto h-8 w-8 text-[var(--mute)] opacity-50" aria-hidden="true" />
                   <p className="mt-2 text-xs font-semibold text-[var(--ink)]">
-                    No flashcard decks in {activeSubject.name} yet
+                    No flashcard folders or decks in {activeSubject.name} yet
                   </p>
                   <p className="mt-1 text-xs text-[var(--mute)]">
                     Create flashcards or import a deck to organize cards and link them to your notes.
@@ -4101,81 +4246,173 @@ export function NotesStudioView({
                   </button>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {subjectDeckSummaries
-                    .filter((d) =>
+                <div className="space-y-4">
+                  {/* Folders Section */}
+                  {subjectFolderSummaries.filter(
+                    (f) =>
                       !linkDecksSearch.trim() ||
-                      d.name.toLowerCase().includes(linkDecksSearch.toLowerCase())
-                    )
-                    .map((deck) => {
-                      const isLinked = deck.linkedCards > 0;
-                      const isFullyLinked = deck.linkedCards === deck.totalCards && deck.totalCards > 0;
-                      const memberFolder = workspace.deckGroups?.find(
-                        (g) => g.subjectId === activeSubject.id && g.sectionNames.includes(deck.name)
-                      );
-
-                      return (
-                        <div
-                          key={deck.name}
-                          onClick={() => handleToggleDeckLink(deck.name, !isLinked)}
-                          className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border p-3 transition-colors ${
-                            isLinked
-                              ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))]'
-                              : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
-                          }`}
-                        >
-                          <div className="flex min-w-0 items-center gap-3">
-                            <span className="shrink-0 text-[var(--e3)]">
-                              {isLinked ? (
-                                <CheckSquare className="h-4 w-4" aria-hidden="true" />
-                              ) : (
-                                <Square className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
-                              )}
-                            </span>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="truncate text-xs font-bold text-[var(--ink)]">
-                                  {deck.name}
-                                </span>
-                                {memberFolder && (
-                                  <span className="flex items-center gap-1 rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--mute)]">
-                                    <Folder className="h-2.5 w-2.5" />
-                                    {memberFolder.name}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[11px] text-[var(--mute)]">
-                                {deck.totalCards} card{deck.totalCards === 1 ? '' : 's'}
-                                {isLinked && (
-                                  <>
-                                    {' '}·{' '}
-                                    <span className="font-semibold text-[var(--e3)]">
-                                      {isFullyLinked ? 'All cards linked' : `${deck.linkedCards}/${deck.totalCards} cards linked`}
-                                    </span>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          <span
-                            className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                      f.folder.name.toLowerCase().includes(linkDecksSearch.toLowerCase()) ||
+                      f.folder.sectionNames.some((s) =>
+                        s.toLowerCase().includes(linkDecksSearch.toLowerCase())
+                      )
+                  ).length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Flashcard Folders
+                      </div>
+                      {subjectFolderSummaries
+                        .filter(
+                          (f) =>
+                            !linkDecksSearch.trim() ||
+                            f.folder.name.toLowerCase().includes(linkDecksSearch.toLowerCase()) ||
+                            f.folder.sectionNames.some((s) =>
+                              s.toLowerCase().includes(linkDecksSearch.toLowerCase())
+                            )
+                        )
+                        .map(({ folder, deckCount, totalCards, isLinked }) => (
+                          <div
+                            key={folder.id}
+                            onClick={() => handleToggleFolderLink(folder.id, !isLinked)}
+                            className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border p-3 transition-colors ${
                               isLinked
-                                ? 'bg-[var(--e3)] text-white'
-                                : 'bg-[var(--bg)] text-[var(--mute)]'
+                                ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))]'
+                                : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
                             }`}
                           >
-                            {isLinked ? 'Linked' : 'Not linked'}
-                          </span>
+                            <div className="flex min-w-0 items-center gap-3">
+                              <span className="shrink-0 text-[var(--e3)]">
+                                {isLinked ? (
+                                  <CheckSquare className="h-4 w-4" aria-hidden="true" />
+                                ) : (
+                                  <Square className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                                )}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                  <span className="truncate text-xs font-bold text-[var(--ink)]">
+                                    {folder.name}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-[var(--mute)]">
+                                  {deckCount} deck{deckCount === 1 ? '' : 's'} · {totalCards} card
+                                  {totalCards === 1 ? '' : 's'}
+                                  {folder.sectionNames.length > 0 && (
+                                    <span className="opacity-80">
+                                      {' '}({folder.sectionNames.slice(0, 3).join(', ')}
+                                      {folder.sectionNames.length > 3 ? '…' : ''})
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            <span
+                              className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-semibold ${
+                                isLinked
+                                  ? 'bg-[var(--e3)] text-white'
+                                  : 'bg-[var(--bg)] text-[var(--mute)]'
+                              }`}
+                            >
+                              {isLinked ? 'Folder Linked' : 'Not linked'}
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+
+                  {/* Individual Decks Section */}
+                  {subjectDeckSummaries.filter(
+                    (d) =>
+                      !linkDecksSearch.trim() ||
+                      d.name.toLowerCase().includes(linkDecksSearch.toLowerCase())
+                  ).length > 0 && (
+                    <div className="space-y-2">
+                      {subjectFolderSummaries.length > 0 && (
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                          Individual Decks
                         </div>
-                      );
-                    })}
+                      )}
+                      {subjectDeckSummaries
+                        .filter(
+                          (d) =>
+                            !linkDecksSearch.trim() ||
+                            d.name.toLowerCase().includes(linkDecksSearch.toLowerCase())
+                        )
+                        .map((deck) => {
+                          const isLinked = deck.linkedCards > 0;
+                          const isFullyLinked =
+                            deck.linkedCards === deck.totalCards && deck.totalCards > 0;
+                          const memberFolder = workspace.deckGroups?.find(
+                            (g) => g.subjectId === activeSubject.id && g.sectionNames.includes(deck.name)
+                          );
+
+                          return (
+                            <div
+                              key={deck.name}
+                              onClick={() => handleToggleDeckLink(deck.name, !isLinked)}
+                              className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border p-3 transition-colors ${
+                                isLinked
+                                  ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))]'
+                                  : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
+                              }`}
+                            >
+                              <div className="flex min-w-0 items-center gap-3">
+                                <span className="shrink-0 text-[var(--e3)]">
+                                  {isLinked ? (
+                                    <CheckSquare className="h-4 w-4" aria-hidden="true" />
+                                  ) : (
+                                    <Square className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                                  )}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="truncate text-xs font-bold text-[var(--ink)]">
+                                      {deck.name}
+                                    </span>
+                                    {memberFolder && (
+                                      <span className="flex items-center gap-1 rounded bg-[var(--bg)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--mute)]">
+                                        <Folder className="h-2.5 w-2.5" />
+                                        {memberFolder.name}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-[var(--mute)]">
+                                    {deck.totalCards} card{deck.totalCards === 1 ? '' : 's'}
+                                    {isLinked && (
+                                      <>
+                                        {' '}·{' '}
+                                        <span className="font-semibold text-[var(--e3)]">
+                                          {isFullyLinked
+                                            ? 'All cards linked'
+                                            : `${deck.linkedCards}/${deck.totalCards} cards linked`}
+                                        </span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <span
+                                className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-semibold ${
+                                  isLinked
+                                    ? 'bg-[var(--e3)] text-white'
+                                    : 'bg-[var(--bg)] text-[var(--mute)]'
+                                }`}
+                              >
+                                {isLinked ? 'Linked' : 'Not linked'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
             <div className="flex items-center justify-between border-t border-[var(--line)] bg-[var(--bg)] px-5 py-3 text-xs">
               <span className="text-[var(--mute)]">
+                {linkedFoldersCount > 0 ? `${linkedFoldersCount} folder${linkedFoldersCount === 1 ? '' : 's'} · ` : ''}
                 {linkedDecksCount} deck{linkedDecksCount === 1 ? '' : 's'} linked to this note
               </span>
               <button

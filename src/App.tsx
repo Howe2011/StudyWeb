@@ -338,13 +338,16 @@ export default function App() {
   const latestWorkspaceRef = useRef<WorkspaceData>(workspace);
   latestWorkspaceRef.current = workspace;
 
-  // Keep selectedSubjectId valid
+  // Keep selectedSubjectId valid (preserve 'ALL' for All Subjects view in Flashcards)
   useEffect(() => {
     if (workspace.subjects.length === 0) {
-      if (selectedSubjectId) setSelectedSubjectId('');
+      if (selectedSubjectId && selectedSubjectId !== 'ALL') setSelectedSubjectId('');
       return;
     }
-    if (!workspace.subjects.some((s) => s.id === selectedSubjectId)) {
+    if (
+      selectedSubjectId !== 'ALL' &&
+      !workspace.subjects.some((s) => s.id === selectedSubjectId)
+    ) {
       setSelectedSubjectId(workspace.subjects[0].id);
     }
   }, [workspace.subjects, selectedSubjectId]);
@@ -1564,7 +1567,9 @@ export default function App() {
           open={importModalOpen}
           onClose={() => setImportModalOpen(false)}
           workspace={workspace}
-          defaultSubjectId={selectedSubjectId}
+          defaultSubjectId={
+            selectedSubjectId === 'ALL' ? workspace.subjects[0]?.id || '' : selectedSubjectId
+          }
           onOpenApiKeySettings={() => {
             setImportModalOpen(false);
             handleNavigate('vault', { vaultSection: 'data' });

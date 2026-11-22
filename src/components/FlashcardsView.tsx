@@ -255,12 +255,16 @@ export function FlashcardsView({
   const [folderNameDraft, setFolderNameDraft] = useState<string>('');
   const [folderSubjectIdDraft, setFolderSubjectIdDraft] = useState<string>('');
   const [folderSelectedDecksDraft, setFolderSelectedDecksDraft] = useState<Set<string>>(new Set());
+  const [folderSelectedTopicsDraft, setFolderSelectedTopicsDraft] = useState<Set<string>>(new Set());
   const [manageFolderFilter, setManageFolderFilter] = useState<string>('ALL');
   const [expandedSetupFolders, setExpandedSetupFolders] = useState<Set<string>>(() => new Set());
   const [collapsedSetupSubjects, setCollapsedSetupSubjects] = useState<Set<string>>(() => new Set());
   const [collapsedManageFolders, setCollapsedManageFolders] = useState<Set<string>>(() => new Set());
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  const [renameFolderDraft, setRenameFolderDraft] = useState<string>('');
 
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const prevSubjectIdRef = useRef<string>(selectedSubjectId);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const swipeLockRef = useRef<boolean>(false);
@@ -330,6 +334,11 @@ export function FlashcardsView({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [workspace.flashcards, folderSubjectIdDraft]);
 
+  const folderAvailableTopics = useMemo(() => {
+    if (!folderSubjectIdDraft) return [];
+    return workspace.topics.filter((t) => t.subjectId === folderSubjectIdDraft);
+  }, [workspace.topics, folderSubjectIdDraft]);
+
   const handleOpenCreateFolder = (presetSubjectId?: string) => {
     const sId =
       presetSubjectId ||
@@ -340,6 +349,7 @@ export function FlashcardsView({
     setFolderNameDraft('');
     setFolderSubjectIdDraft(sId);
     setFolderSelectedDecksDraft(new Set());
+    setFolderSelectedTopicsDraft(new Set());
     setFolderModalOpen(true);
   };
 
@@ -348,6 +358,7 @@ export function FlashcardsView({
     setFolderNameDraft(folder.name);
     setFolderSubjectIdDraft(folder.subjectId);
     setFolderSelectedDecksDraft(new Set(folder.sectionNames));
+    setFolderSelectedTopicsDraft(new Set(folder.linkedTopicIds || []));
     setFolderModalOpen(true);
   };
 
@@ -359,12 +370,27 @@ export function FlashcardsView({
     onUpdateWorkspace((prev) => {
       const existingGroups = prev.deckGroups || [];
       const deckNames = Array.from(folderSelectedDecksDraft);
+      const topicIds = Array.from(folderSelectedTopicsDraft);
+      const prevFolder = editingFolderId
+        ? existingGroups.find((g) => g.id === editingFolderId)
+        : undefined;
+      const prevTopics = new Set(prevFolder?.linkedTopicIds || []);
+      const nextTopicSet = new Set(topicIds);
+      const removedTopics = Array.from(prevTopics).filter((id) => !nextTopicSet.has(id));
+      const addedTopics = topicIds.filter((id) => !prevTopics.has(id));
+      const secSet = new Set(deckNames);
 
       let nextGroups: DeckGroup[];
       if (editingFolderId) {
         nextGroups = existingGroups.map((g) =>
           g.id === editingFolderId
-            ? { ...g, name: cleanName, subjectId: folderSubjectIdDraft, sectionNames: deckNames }
+            ? {
+                ...g,
+                name: cleanName,
+                subjectId: folderSubjectIdDraft,
+                sectionNames: deckNames,
+                linkedTopicIds: topicIds,
+              }
             : g
         );
       } else {
@@ -373,14 +399,33 @@ export function FlashcardsView({
           name: cleanName,
           subjectId: folderSubjectIdDraft,
           sectionNames: deckNames,
+          linkedTopicIds: topicIds,
           createdAt: new Date().toISOString(),
         };
         nextGroups = [...existingGroups, newGroup];
       }
 
+      let nextCards = prev.flashcards;
+      if (deckNames.length > 0 && (addedTopics.length > 0 || removedTopics.length > 0)) {
+        const primaryTopic = addedTopics[0] || topicIds[0];
+        nextCards = prev.flashcards.map((c) => {
+          if (c.subjectId !== folderSubjectIdDraft) return c;
+          const sec = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+          if (!secSet.has(sec)) return c;
+          if (addedTopics.length > 0 && primaryTopic) {
+            return { ...c, topicId: primaryTopic };
+          }
+          if (c.topicId && removedTopics.includes(c.topicId)) {
+            return { ...c, topicId: primaryTopic || undefined };
+          }
+          return c;
+        });
+      }
+
       return {
         ...prev,
         deckGroups: nextGroups,
+        flashcards: nextCards,
         updatedAt: new Date().toISOString(),
       };
     });
@@ -391,6 +436,59 @@ export function FlashcardsView({
         ? `Folder "${cleanName}" updated with ${folderSelectedDecksDraft.size} deck(s).`
         : `Created folder "${cleanName}" with ${folderSelectedDecksDraft.size} deck(s).`
     );
+  };
+
+  const handleRenameFolder = (folderId: string, nextName: string) => {
+    const clean = nextName.trim();
+    if (!clean) {
+      setRenamingFolderId(null);
+      return;
+    }
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      deckGroups: (prev.deckGroups || []).map((g) =>
+        g.id === folderId ? { ...g, name: clean } : g
+      ),
+      updatedAt: new Date().toISOString(),
+    }));
+    setRenamingFolderId(null);
+    setRenameFolderDraft('');
+    setMoveFeedback(`Renamed folder to "${clean}".`);
+  };
+
+  const handleSetFolderLinkedTopic = (folderId: string, topicId: string) => {
+    const targetFolder = (workspace.deckGroups || []).find((g) => g.id === folderId);
+    const topicName = topicId ? topicById.get(topicId)?.name || 'Study Note' : '';
+    onUpdateWorkspace((prev) => {
+      const grp = (prev.deckGroups || []).find((g) => g.id === folderId);
+      if (!grp) return prev;
+      const prevIds = new Set(grp.linkedTopicIds || []);
+      const secSet = new Set(grp.sectionNames);
+      const nextGroups = (prev.deckGroups || []).map((g) => {
+        if (g.id !== folderId) return g;
+        return { ...g, linkedTopicIds: topicId ? [topicId] : [] };
+      });
+      const updatedCards = prev.flashcards.map((c) => {
+        if (c.subjectId !== grp.subjectId) return c;
+        const sec = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+        if (!secSet.has(sec)) return c;
+        if (topicId) return { ...c, topicId };
+        return c.topicId && prevIds.has(c.topicId) ? { ...c, topicId: undefined } : c;
+      });
+      return {
+        ...prev,
+        deckGroups: nextGroups,
+        flashcards: updatedCards,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (targetFolder) {
+      setMoveFeedback(
+        topicId
+          ? `Linked folder "${targetFolder.name}" to note "${topicName}".`
+          : `Unlinked Study Notes from folder "${targetFolder.name}".`
+      );
+    }
   };
 
   const handleDeleteDeckFolder = (folderId: string) => {
@@ -453,12 +551,48 @@ export function FlashcardsView({
     }
   }, [addSubjectTopicsList, newTopicId]);
 
+  const folderLinkedTopicsByDeckKey = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    (workspace.deckGroups || []).forEach((g) => {
+      if (!g.linkedTopicIds || g.linkedTopicIds.length === 0) return;
+      g.sectionNames.forEach((secName) => {
+        const key = `${g.subjectId}:::${secName}`;
+        let set = map.get(key);
+        if (!set) {
+          set = new Set<string>();
+          map.set(key, set);
+        }
+        g.linkedTopicIds!.forEach((tid) => set!.add(tid));
+      });
+    });
+    return map;
+  }, [workspace.deckGroups]);
+
+  const cardEffectiveTopicIds = useCallback(
+    (card: StudyFlashcard): string[] => {
+      const ids = new Set<string>();
+      if (card.topicId && topicById.has(card.topicId)) {
+        ids.add(card.topicId);
+      }
+      const secName = (card.sectionName || 'Core Deck').trim() || 'Core Deck';
+      const folderSet = folderLinkedTopicsByDeckKey.get(`${card.subjectId}:::${secName}`);
+      if (folderSet) {
+        folderSet.forEach((tid) => {
+          if (topicById.has(tid)) ids.add(tid);
+        });
+      }
+      return Array.from(ids);
+    },
+    [topicById, folderLinkedTopicsByDeckKey]
+  );
+
   const linkedTopicsSummary = useMemo(() => {
     const counts = new Map<string, number>();
     let unlinkedCount = 0;
     for (const c of subjectCards) {
-      if (c.topicId && topicById.has(c.topicId)) {
-        counts.set(c.topicId, (counts.get(c.topicId) || 0) + 1);
+      const effIds = cardEffectiveTopicIds(c);
+      if (effIds.length > 0) {
+        effIds.forEach((tid) => counts.set(tid, (counts.get(tid) || 0) + 1));
       } else {
         unlinkedCount += 1;
       }
@@ -473,15 +607,15 @@ export function FlashcardsView({
       }))
       .filter((x) => x.count > 0);
     return { items, unlinkedCount };
-  }, [subjectCards, subjectTopicsList, topicById, subjById]);
+  }, [subjectCards, subjectTopicsList, subjById, cardEffectiveTopicIds]);
 
   const topicFilteredCards = useMemo(() => {
     if (selectedTopicFilter === 'ALL') return subjectCards;
     if (selectedTopicFilter === '__unlinked__') {
-      return subjectCards.filter((c) => !c.topicId || !topicById.has(c.topicId));
+      return subjectCards.filter((c) => cardEffectiveTopicIds(c).length === 0);
     }
-    return subjectCards.filter((c) => c.topicId === selectedTopicFilter);
-  }, [subjectCards, selectedTopicFilter, topicById]);
+    return subjectCards.filter((c) => cardEffectiveTopicIds(c).includes(selectedTopicFilter));
+  }, [subjectCards, selectedTopicFilter, cardEffectiveTopicIds]);
 
   const sectionBuckets = useMemo(() => {
     const map = new Map<
@@ -557,12 +691,15 @@ export function FlashcardsView({
   // Auto-select sections cleanly when subject or optional note filter changes
   useEffect(() => {
     const validKeys = new Set(sectionBuckets.map((b) => b.key));
+    const subjectChanged = prevSubjectIdRef.current !== selectedSubjectId;
+    prevSubjectIdRef.current = selectedSubjectId;
     setSelectedSections((prev) => {
+      if (subjectChanged) return sectionBuckets.map((b) => b.key);
       const kept = prev.filter((k) => validKeys.has(k));
       if (kept.length > 0) return kept;
       return sectionBuckets.map((b) => b.key);
     });
-  }, [sectionBuckets]);
+  }, [sectionBuckets, selectedSubjectId]);
 
   // Base pool of cards matching selected decks + filters
   const basePool = useMemo(() => {
@@ -801,18 +938,18 @@ export function FlashcardsView({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [screen, editModalCardId, flipCard, stepCard, seenAnswer, rateCurrentCard]);
 
-  const handleShuffleDeckInPlayer = (includeCurrent: boolean) => {
+  const handleShuffleDeckInPlayer = () => {
     if (queue.length < 2) return;
     setQueue((prev) => {
-      if (includeCurrent) {
-        return shuffleIds(prev);
+      const shuffled = shuffleIds(prev);
+      if (shuffled.length >= 2 && shuffled[0] === prev[0]) {
+        const swapIdx = 1 + Math.floor(Math.random() * (shuffled.length - 1));
+        [shuffled[0], shuffled[swapIdx]] = [shuffled[swapIdx], shuffled[0]];
       }
-      return [prev[0], ...shuffleIds(prev.slice(1))];
+      return shuffled;
     });
-    if (includeCurrent) {
-      resetCardFaceForCurrent();
-      setAnimPhase('in');
-    }
+    resetCardFaceForCurrent();
+    setAnimPhase('in');
     setMenuOpen(false);
     setShuffleToast(true);
     window.setTimeout(() => setShuffleToast(false), 1100);
@@ -995,21 +1132,31 @@ export function FlashcardsView({
   const manageAvailableSections = useMemo(() => {
     const set = new Set<string>();
     subjectCards.forEach((c) => {
-      if (manageTopicFilter === '__unlinked__' && c.topicId && topicById.has(c.topicId)) return;
-      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unlinked__' && c.topicId !== manageTopicFilter) {
+      const effIds = cardEffectiveTopicIds(c);
+      if (manageTopicFilter === '__unlinked__' && effIds.length > 0) return;
+      if (
+        manageTopicFilter !== 'ALL' &&
+        manageTopicFilter !== '__unlinked__' &&
+        !effIds.includes(manageTopicFilter)
+      ) {
         return;
       }
       set.add((c.sectionName || 'Core Deck').trim() || 'Core Deck');
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [subjectCards, manageTopicFilter, topicById]);
+  }, [subjectCards, manageTopicFilter, cardEffectiveTopicIds]);
 
   const manageFilteredCards = useMemo(() => {
     const q = manageSearch.trim().toLowerCase();
     const now = Date.now();
     const list = subjectCards.filter((c) => {
-      if (manageTopicFilter === '__unlinked__' && c.topicId && topicById.has(c.topicId)) return false;
-      if (manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unlinked__' && c.topicId !== manageTopicFilter) {
+      const effIds = cardEffectiveTopicIds(c);
+      if (manageTopicFilter === '__unlinked__' && effIds.length > 0) return false;
+      if (
+        manageTopicFilter !== 'ALL' &&
+        manageTopicFilter !== '__unlinked__' &&
+        !effIds.includes(manageTopicFilter)
+      ) {
         return false;
       }
       const sec = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
@@ -1072,6 +1219,7 @@ export function FlashcardsView({
     manageSort,
     subjById,
     topicById,
+    cardEffectiveTopicIds,
   ]);
 
   const manageGroupedTree = useMemo(() => {
@@ -1461,7 +1609,7 @@ export function FlashcardsView({
                   <option value="ALL">All Subjects ({workspace.flashcards.length})</option>
                   {workspace.subjects.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.name}
+                      {s.name} ({workspace.flashcards.filter((c) => c.subjectId === s.id).length})
                     </option>
                   ))}
                 </select>
@@ -1823,30 +1971,94 @@ export function FlashcardsView({
                         const pct = Math.round(
                           (mastered / Math.max(1, b.cards.length)) * 100
                         );
+                        const isRenamingDeck = renamingSectionKey === b.key;
+
+                        if (isRenamingDeck) {
+                          return (
+                            <form
+                              key={b.key}
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                handleRenameSection(
+                                  b.cards.map((c) => c.id),
+                                  renameSectionDraft,
+                                  b.subjectId,
+                                  b.name
+                                );
+                              }}
+                              className="flex flex-col justify-between gap-2 rounded-xl border border-[var(--e3)] bg-[var(--bg)] p-3"
+                            >
+                              <input
+                                type="text"
+                                autoFocus
+                                value={renameSectionDraft}
+                                onChange={(e) => setRenameSectionDraft(e.target.value)}
+                                className="sd-input py-1 text-xs font-bold"
+                                placeholder="Deck name…"
+                              />
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setRenamingSectionKey(null)}
+                                  className="sd-btn px-2 py-1 text-[11px]"
+                                >
+                                  Cancel
+                                </button>
+                                <button type="submit" className="sd-btn-pri px-2.5 py-1 text-[11px]">
+                                  Save
+                                </button>
+                              </div>
+                            </form>
+                          );
+                        }
+
                         return (
-                          <button
+                          <div
                             key={b.key}
-                            type="button"
-                            aria-pressed={active}
-                            onClick={() =>
-                              setSelectedSections((prev) =>
-                                prev.includes(b.key)
-                                  ? prev.filter((x) => x !== b.key)
-                                  : [...prev, b.key]
-                              )
-                            }
                             style={{
                               borderColor: active ? b.color : undefined,
                               backgroundColor: active
                                 ? `color-mix(in srgb, ${b.color} 11%, var(--card))`
                                 : undefined,
                             }}
-                            className="relative cursor-pointer overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-3 pb-4 text-left transition-colors"
+                            className="group relative overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)] transition-colors"
                           >
-                            <div className="flex items-start justify-between gap-2">
-                              <span className="text-sm font-bold text-[var(--ink)]">
-                                {b.name}
-                              </span>
+                            <button
+                              type="button"
+                              aria-pressed={active}
+                              onClick={() =>
+                                setSelectedSections((prev) =>
+                                  prev.includes(b.key)
+                                    ? prev.filter((x) => x !== b.key)
+                                    : [...prev, b.key]
+                                )
+                              }
+                              className="block w-full cursor-pointer px-3.5 py-3 pb-4 pr-16 text-left"
+                            >
+                              <div className="text-sm font-bold text-[var(--ink)]">{b.name}</div>
+                              <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
+                                {b.cards.length} cards · {mastered} mastered
+                              </div>
+                              {b.linkedTopicNames.length > 0 && (
+                                <div className="mt-1 truncate text-[11px] font-medium text-[var(--e3)]">
+                                  Linked: {b.linkedTopicNames.join(', ')}
+                                </div>
+                              )}
+                            </button>
+                            <div className="absolute right-2.5 top-2.5 flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRenamingSectionKey(b.key);
+                                  setRenameSectionDraft(b.name);
+                                }}
+                                title={`Rename deck ${b.name}`}
+                                aria-label={`Rename deck ${b.name}`}
+                                className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-[var(--line)] bg-[var(--card)] text-[var(--mute)] hover:border-[var(--e3)] hover:text-[var(--ink)]"
+                              >
+                                <Edit3 className="h-3 w-3" aria-hidden="true" />
+                              </button>
                               {active && (
                                 <span
                                   className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
@@ -1856,21 +2068,13 @@ export function FlashcardsView({
                                 </span>
                               )}
                             </div>
-                            <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
-                              {b.cards.length} cards · {mastered} mastered
-                            </div>
-                            {b.linkedTopicNames.length > 0 && (
-                              <div className="mt-1 truncate text-[11px] font-medium text-[var(--e3)]">
-                                Linked: {b.linkedTopicNames.join(', ')}
-                              </div>
-                            )}
                             <div className="absolute inset-x-0 bottom-0 h-1 bg-[var(--line)]">
                               <div
                                 className="h-full bg-[var(--ok)] transition-[width] duration-300"
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
-                          </button>
+                          </div>
                         );
                       };
 
@@ -1982,41 +2186,93 @@ export function FlashcardsView({
                                     }`}
                                   >
                                     <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-3">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setExpandedSetupFolders((prev) => {
-                                            const next = new Set(prev);
-                                            if (next.has(folder.id)) next.delete(folder.id);
-                                            else next.add(folder.id);
-                                            return next;
-                                          })
-                                        }
-                                        aria-expanded={isExpanded}
-                                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
-                                      >
-                                        {isExpanded ? (
-                                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
-                                        ) : (
-                                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
-                                        )}
-                                        {isExpanded ? (
-                                          <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
-                                        ) : (
+                                      {renamingFolderId === folder.id ? (
+                                        <form
+                                          onSubmit={(e) => {
+                                            e.preventDefault();
+                                            handleRenameFolder(folder.id, renameFolderDraft);
+                                          }}
+                                          className="flex min-w-0 flex-1 items-center gap-1.5"
+                                        >
                                           <Folder className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
-                                        )}
-                                        <div className="min-w-0">
-                                          <div className="truncate text-sm font-bold text-[var(--ink)]">
-                                            {folder.name}
+                                          <input
+                                            type="text"
+                                            autoFocus
+                                            value={renameFolderDraft}
+                                            onChange={(e) => setRenameFolderDraft(e.target.value)}
+                                            className="sd-input w-48 py-1 text-xs font-bold"
+                                          />
+                                          <button type="submit" className="sd-btn-pri px-2.5 py-1 text-[11px]">
+                                            Save
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setRenamingFolderId(null)}
+                                            className="sd-btn px-2 py-1 text-[11px]"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </form>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedSetupFolders((prev) => {
+                                              const next = new Set(prev);
+                                              if (next.has(folder.id)) next.delete(folder.id);
+                                              else next.add(folder.id);
+                                              return next;
+                                            })
+                                          }
+                                          aria-expanded={isExpanded}
+                                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
+                                        >
+                                          {isExpanded ? (
+                                            <ChevronDown className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                          ) : (
+                                            <ChevronRight className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
+                                          )}
+                                          {isExpanded ? (
+                                            <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                          ) : (
+                                            <Folder className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                          )}
+                                          <div className="min-w-0">
+                                            <div className="truncate text-sm font-bold text-[var(--ink)]">
+                                              {folder.name}
+                                            </div>
+                                            <div className="font-mono-num text-[11px] text-[var(--mute)]">
+                                              {memberBuckets.length} deck{memberBuckets.length === 1 ? '' : 's'} ·{' '}
+                                              {folderCards.length} cards · {folderMastered} mastered
+                                              {folder.linkedTopicIds && folder.linkedTopicIds.length > 0 && (
+                                                <span className="ml-1.5 font-sans font-semibold text-[var(--e3)]">
+                                                  · Linked:{' '}
+                                                  {folder.linkedTopicIds
+                                                    .map((id) => topicById.get(id)?.name)
+                                                    .filter(Boolean)
+                                                    .join(', ')}
+                                                </span>
+                                              )}
+                                            </div>
                                           </div>
-                                          <div className="font-mono-num text-[11px] text-[var(--mute)]">
-                                            {memberBuckets.length} deck{memberBuckets.length === 1 ? '' : 's'} ·{' '}
-                                            {folderCards.length} cards · {folderMastered} mastered
-                                          </div>
-                                        </div>
-                                      </button>
+                                        </button>
+                                      )}
 
-                                      <div className="flex shrink-0 items-center gap-2">
+                                      <div className="flex shrink-0 items-center gap-1.5">
+                                        {renamingFolderId !== folder.id && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setRenamingFolderId(folder.id);
+                                              setRenameFolderDraft(folder.name);
+                                            }}
+                                            title={`Rename folder ${folder.name}`}
+                                            aria-label={`Rename folder ${folder.name}`}
+                                            className="sd-btn h-7 w-7 p-0 text-[var(--mute)] hover:text-[var(--ink)]"
+                                          >
+                                            <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                                          </button>
+                                        )}
                                         <button
                                           type="button"
                                           onClick={() => {
@@ -2325,21 +2581,11 @@ export function FlashcardsView({
                     <button
                       type="button"
                       disabled={queue.length < 2}
-                      onClick={() => handleShuffleDeckInPlayer(true)}
+                      onClick={handleShuffleDeckInPlayer}
                       className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-[var(--ink)] hover:bg-[var(--bg)] disabled:opacity-40"
                     >
                       <Shuffle className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                      <span>Shuffle all (incl. current)</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={queue.length < 2}
-                      onClick={() => handleShuffleDeckInPlayer(false)}
-                      className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-[var(--ink)] hover:bg-[var(--bg)] disabled:opacity-40"
-                    >
-                      <Shuffle className="h-3.5 w-3.5 text-[var(--mute)]" aria-hidden="true" />
-                      <span>Shuffle remaining only</span>
+                      <span>Shuffle all cards</span>
                     </button>
 
                     <label className="sd-sw rounded-lg px-3 py-2 text-sm font-medium text-[var(--ink)] hover:bg-[var(--bg)]">
@@ -3132,7 +3378,7 @@ export function FlashcardsView({
                         <option value="ALL">All Subjects ({workspace.flashcards.length})</option>
                         {workspace.subjects.map((s) => (
                           <option key={s.id} value={s.id}>
-                            {s.name}
+                            {s.name} ({workspace.flashcards.filter((c) => c.subjectId === s.id).length})
                           </option>
                         ))}
                       </select>
@@ -3703,39 +3949,94 @@ export function FlashcardsView({
                                   <div key={folder.id}>
                                     {/* Folder Dropdown Header */}
                                     <div className="flex flex-wrap items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--e3)_7%,var(--card))] px-4 py-3">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setCollapsedManageFolders((prev) => {
-                                            const next = new Set(prev);
-                                            if (next.has(folder.id)) next.delete(folder.id);
-                                            else next.add(folder.id);
-                                            return next;
-                                          })
-                                        }
-                                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-                                      >
-                                        {folderCollapsed ? (
-                                          <ChevronRight className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                                        {renamingFolderId === folder.id ? (
+                                          <form
+                                            onSubmit={(e) => {
+                                              e.preventDefault();
+                                              handleRenameFolder(folder.id, renameFolderDraft);
+                                            }}
+                                            className="flex items-center gap-1.5"
+                                          >
+                                            <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                            <input
+                                              type="text"
+                                              autoFocus
+                                              value={renameFolderDraft}
+                                              onChange={(e) => setRenameFolderDraft(e.target.value)}
+                                              className="sd-input w-48 py-1 text-xs font-bold"
+                                            />
+                                            <button type="submit" className="sd-btn-pri px-2.5 py-1 text-[11px]">
+                                              Save
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => setRenamingFolderId(null)}
+                                              className="sd-btn px-2 py-1 text-[11px]"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </form>
                                         ) : (
-                                          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setCollapsedManageFolders((prev) => {
+                                                const next = new Set(prev);
+                                                if (next.has(folder.id)) next.delete(folder.id);
+                                                else next.add(folder.id);
+                                                return next;
+                                              })
+                                            }
+                                            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                                          >
+                                            {folderCollapsed ? (
+                                              <ChevronRight className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                            ) : (
+                                              <ChevronDown className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                            )}
+                                            {folderCollapsed ? (
+                                              <Folder className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                            ) : (
+                                              <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
+                                            )}
+                                            <span className="truncate font-display text-sm font-extrabold text-[var(--ink)]">
+                                              {folder.name}
+                                            </span>
+                                            <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
+                                              · {folder.sectionNames.length} deck
+                                              {folder.sectionNames.length === 1 ? '' : 's'} · {totalCards} cards
+                                              {dueCards > 0 ? ` · ${dueCards} due` : ''}
+                                            </span>
+                                          </button>
                                         )}
-                                        {folderCollapsed ? (
-                                          <Folder className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
-                                        ) : (
-                                          <FolderOpen className="h-4 w-4 shrink-0 text-[var(--e3)]" aria-hidden="true" />
-                                        )}
-                                        <span className="truncate font-display text-sm font-extrabold text-[var(--ink)]">
-                                          {folder.name}
-                                        </span>
-                                        <span className="font-mono-num text-[11px] text-[var(--mute)] whitespace-nowrap">
-                                          · {folder.sectionNames.length} deck
-                                          {folder.sectionNames.length === 1 ? '' : 's'} · {totalCards} cards
-                                          {dueCards > 0 ? ` · ${dueCards} due` : ''}
-                                        </span>
-                                      </button>
+                                      </div>
 
                                       <div className="flex flex-wrap items-center gap-1.5">
+                                        {workspace.topics.some((t) => t.subjectId === folder.subjectId) && (
+                                          <select
+                                            aria-label={`Link note to folder ${folder.name}`}
+                                            value={
+                                              folder.linkedTopicIds && folder.linkedTopicIds.length > 0
+                                                ? folder.linkedTopicIds[0]
+                                                : ''
+                                            }
+                                            onChange={(e) =>
+                                              handleSetFolderLinkedTopic(folder.id, e.target.value)
+                                            }
+                                            title="Link a Study Note to this folder"
+                                            className="sd-input h-7 w-auto max-w-[165px] py-0 text-[11px] font-semibold"
+                                          >
+                                            <option value="">Link Note (None)</option>
+                                            {workspace.topics
+                                              .filter((t) => t.subjectId === folder.subjectId)
+                                              .map((t) => (
+                                                <option key={t.id} value={t.id}>
+                                                  Linked: {t.name}
+                                                </option>
+                                              ))}
+                                          </select>
+                                        )}
                                         {totalCards > 0 && (
                                           <button
                                             type="button"
@@ -3750,11 +4051,21 @@ export function FlashcardsView({
                                         )}
                                         <button
                                           type="button"
+                                          onClick={() => {
+                                            setRenamingFolderId(folder.id);
+                                            setRenameFolderDraft(folder.name);
+                                          }}
+                                          className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                                        >
+                                          Rename
+                                        </button>
+                                        <button
+                                          type="button"
                                           onClick={() => handleOpenEditFolder(folder)}
                                           className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
                                         >
                                           <Edit3 className="h-3 w-3" aria-hidden="true" />
-                                          <span>Select Decks</span>
+                                          <span>Edit &amp; Link</span>
                                         </button>
                                         {folderCardIds.length > 0 && (
                                           <button
@@ -3973,6 +4284,7 @@ export function FlashcardsView({
                       onChange={(e) => {
                         setFolderSubjectIdDraft(e.target.value);
                         setFolderSelectedDecksDraft(new Set());
+                        setFolderSelectedTopicsDraft(new Set());
                       }}
                       className="sd-input mt-1 text-xs"
                     >
@@ -4067,6 +4379,61 @@ export function FlashcardsView({
                             <span className="font-mono-num text-[11px] text-[var(--mute)]">
                               {cardsInSec} card{cardsInSec === 1 ? '' : 's'}
                             </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Optional Linked Study Notes Selection */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[var(--ink)]">
+                      Link Study Notes to this Folder ({folderSelectedTopicsDraft.size}/{folderAvailableTopics.length})
+                    </span>
+                    {folderSelectedTopicsDraft.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setFolderSelectedTopicsDraft(new Set())}
+                        className="cursor-pointer text-xs font-semibold text-[var(--mute)] hover:text-[var(--ink)]"
+                      >
+                        Unlink all
+                      </button>
+                    )}
+                  </div>
+
+                  {folderAvailableTopics.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-[var(--line)] p-3 text-center text-xs text-[var(--mute)]">
+                      No Study Notes in this subject yet.
+                    </p>
+                  ) : (
+                    <div className="max-h-40 space-y-1.5 overflow-y-auto rounded-xl border border-[var(--line)] p-2">
+                      {folderAvailableTopics.map((topic) => {
+                        const isChecked = folderSelectedTopicsDraft.has(topic.id);
+                        return (
+                          <label
+                            key={topic.id}
+                            className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
+                              isChecked
+                                ? 'bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))] text-[var(--ink)] font-semibold'
+                                : 'text-[var(--ink)] hover:bg-[var(--bg)]'
+                            }`}
+                          >
+                            <div className="flex min-w-0 items-center gap-2.5">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const next = new Set(folderSelectedTopicsDraft);
+                                  if (e.target.checked) next.add(topic.id);
+                                  else next.delete(topic.id);
+                                  setFolderSelectedTopicsDraft(next);
+                                }}
+                                className="h-4 w-4 rounded accent-[var(--e3)]"
+                              />
+                              <span className="truncate">{topic.name}</span>
+                            </div>
                           </label>
                         );
                       })}

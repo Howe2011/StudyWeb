@@ -379,6 +379,9 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
           name: String(g.name || 'Untitled Group'),
           subjectId: String(g.subjectId || ''),
           sectionNames: Array.isArray(g.sectionNames) ? g.sectionNames.map(String) : [],
+          linkedTopicIds: Array.isArray(g.linkedTopicIds)
+            ? Array.from(new Set(g.linkedTopicIds.map(String).filter(Boolean)))
+            : undefined,
           createdAt: String(g.createdAt || new Date().toISOString()),
         }))
       : [],
@@ -1145,6 +1148,41 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
         subjectId: mappedSubjId,
         ...(mappedTopicId ? { topicId: mappedTopicId } : { topicId: undefined }),
       });
+    }
+  }
+
+  for (const grp of incoming.deckGroups || []) {
+    const mappedSubjId = subjIdRemap.get(grp.subjectId) || grp.subjectId;
+    const mappedTopics = Array.isArray(grp.linkedTopicIds)
+      ? Array.from(
+          new Set(grp.linkedTopicIds.map((tid) => topicIdRemap.get(tid) || tid).filter(Boolean))
+        )
+      : undefined;
+    const existing = (next.deckGroups || []).find(
+      (x) =>
+        x.subjectId === mappedSubjId &&
+        x.name.trim().toLowerCase() === grp.name.trim().toLowerCase()
+    );
+    if (existing) {
+      existing.sectionNames = Array.from(
+        new Set([...existing.sectionNames, ...grp.sectionNames])
+      );
+      if (mappedTopics && mappedTopics.length > 0) {
+        existing.linkedTopicIds = Array.from(
+          new Set([...(existing.linkedTopicIds || []), ...mappedTopics])
+        );
+      }
+    } else {
+      next.deckGroups = [
+        ...(next.deckGroups || []),
+        {
+          ...grp,
+          id: makeId('grp'),
+          subjectId: mappedSubjId,
+          sectionNames: [...grp.sectionNames],
+          ...(mappedTopics && mappedTopics.length > 0 ? { linkedTopicIds: mappedTopics } : {}),
+        },
+      ];
     }
   }
 
