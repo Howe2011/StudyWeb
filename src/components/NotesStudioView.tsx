@@ -45,6 +45,7 @@ import {
   Plus,
   Quote,
   Redo2,
+  RefreshCw,
   Search,
   Share2,
   Star,
@@ -90,6 +91,7 @@ import {
 } from '../lib/workspaceStore';
 import {
   NoteAccentColor,
+  SharedStudyItem,
   StructuredNoteData,
   StudyFlashcard,
   StudyTopic,
@@ -107,6 +109,10 @@ interface NotesStudioViewProps {
   onUpdateWorkspace: (updater: (prev: WorkspaceData) => WorkspaceData) => void;
   onOpenImport: () => void;
   onShareTopic: (subjectId: string, topicId: string) => void;
+  sharedNoteByTopicId?: Map<string, SharedStudyItem>;
+  onPublishTopicChanges?: (
+    topicId: string
+  ) => Promise<{ ok: boolean; shareCode?: string; error?: string }>;
   onBrowseCommunityNotes?: () => void;
   onNavigate: (tab: WorkspaceTab) => void;
 }
@@ -223,6 +229,8 @@ export function NotesStudioView({
   onUpdateWorkspace,
   onOpenImport,
   onShareTopic,
+  sharedNoteByTopicId,
+  onPublishTopicChanges,
   onBrowseCommunityNotes,
   onNavigate,
 }: NotesStudioViewProps) {
@@ -283,6 +291,11 @@ export function NotesStudioView({
   const [newLinkedCardA, setNewLinkedCardA] = useState('');
   const [linkDecksModalOpen, setLinkDecksModalOpen] = useState(false);
   const [linkDecksSearch, setLinkDecksSearch] = useState('');
+  const [publishingShare, setPublishingShare] = useState(false);
+  const [publishShareNotice, setPublishShareNotice] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
   const [docTextColorOpen, setDocTextColorOpen] = useState(false);
   const [docHighlightOpen, setDocHighlightOpen] = useState(false);
@@ -290,6 +303,10 @@ export function NotesStudioView({
   const colorMenuRef = useRef<HTMLDivElement | null>(null);
   const docTextColorRef = useRef<HTMLDivElement | null>(null);
   const docHighlightRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setPublishShareNotice(null);
+  }, [selectedTopicId]);
 
   useEffect(() => {
     if (!colorMenuOpen && !docTextColorOpen && !docHighlightOpen) return;
@@ -386,6 +403,38 @@ export function NotesStudioView({
       topicTreeNodes[0].topic
     );
   }, [topicTreeNodes, selectedTopicId]);
+
+  const activeTopicShare = useMemo(
+    () => (activeTopic ? sharedNoteByTopicId?.get(activeTopic.id) || null : null),
+    [activeTopic, sharedNoteByTopicId]
+  );
+
+  const hasUnpublishedNoteChanges = useMemo(() => {
+    if (!activeTopic || !activeTopicShare) return false;
+    const noteMs = Date.parse(activeTopic.notes.updatedAt || '');
+    const shareMs = Date.parse(activeTopicShare.updatedAt || '');
+    return Number.isFinite(noteMs) && Number.isFinite(shareMs) && noteMs > shareMs;
+  }, [activeTopic, activeTopicShare]);
+
+  const handlePublishChangesClick = async () => {
+    if (!activeTopic || !onPublishTopicChanges || publishingShare) return;
+    setPublishingShare(true);
+    setPublishShareNotice(null);
+    try {
+      const res = await onPublishTopicChanges(activeTopic.id);
+      if (res.ok) {
+        setPublishShareNotice({
+          ok: true,
+          text: `Published newest notes to Community Share (#${res.shareCode || activeTopicShare?.shareCode || ''}).`,
+        });
+        window.setTimeout(() => setPublishShareNotice(null), 4000);
+      } else if (res.error) {
+        setPublishShareNotice({ ok: false, text: res.error });
+      }
+    } finally {
+      setPublishingShare(false);
+    }
+  };
 
   const activeTreeNode = useMemo(() => {
     if (!activeTopic) return null;
@@ -1970,13 +2019,44 @@ export function NotesStudioView({
                   <span>{activeTopic.completed ? 'Studied' : 'Mark Studied'}</span>
                 </button>
 
+                {activeTopicShare && onPublishTopicChanges && (
+                  <button
+                    type="button"
+                    disabled={publishingShare}
+                    onClick={() => void handlePublishChangesClick()}
+                    title={`Update shared link #${activeTopicShare.shareCode} in Community Share with the newest version of these notes`}
+                    className={`sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0 disabled:opacity-60 ${
+                      hasUnpublishedNoteChanges
+                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)] font-bold'
+                        : 'border-[var(--ok)]/60 text-[var(--ok)] font-semibold'
+                    }`}
+                  >
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 ${publishingShare ? 'animate-spin' : ''}`}
+                      aria-hidden="true"
+                    />
+                    <span>{publishingShare ? 'Publishing…' : 'Publish Changes'}</span>
+                    {hasUnpublishedNoteChanges && !publishingShare && (
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-[var(--e3)]"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => activeSubject && onShareTopic(activeSubject.id, activeTopic.id)}
+                  title={
+                    activeTopicShare
+                      ? `Manage share link #${activeTopicShare.shareCode}`
+                      : `Share ${activeTopic.name}`
+                  }
                   className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0"
                 >
                   <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Share</span>
+                  <span>{activeTopicShare ? `Share #${activeTopicShare.shareCode}` : 'Share'}</span>
                 </button>
 
                 <button
@@ -2082,6 +2162,27 @@ export function NotesStudioView({
                     Delete Topic
                   </button>
                 </div>
+              </div>
+            )}
+
+            {publishShareNotice && (
+              <div
+                role="status"
+                className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-xs font-semibold ${
+                  publishShareNotice.ok
+                    ? 'border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] text-[var(--ink)]'
+                    : 'border-[var(--bad)] bg-[color-mix(in_srgb,var(--bad)_9%,var(--card))] text-[var(--bad)]'
+                }`}
+              >
+                <span>{publishShareNotice.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setPublishShareNotice(null)}
+                  aria-label="Dismiss publish notice"
+                  className="cursor-pointer p-0.5 text-[var(--mute)] hover:text-[var(--ink)]"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
               </div>
             )}
 

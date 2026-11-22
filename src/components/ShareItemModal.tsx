@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
-import { Check, Copy, Globe, Link2, Lock, Share2, X } from 'lucide-react';
-import { publishSharedItem } from '../lib/communityService';
+import { Check, Copy, Globe, Link2, Lock, RefreshCw, Share2, X } from 'lucide-react';
+import { publishSharedItem, updateSharedItem } from '../lib/communityService';
 import {
   SharedFlashcardsPayload,
   SharedItemType,
@@ -32,6 +32,7 @@ export interface ShareTargetConfig {
   defaultSummary: string;
   itemCount: number;
   rootTopicOldId?: string;
+  existingShare?: SharedStudyItem;
   subTopicShareOptions?: SubTopicShareOption[];
   initialFlashcardTopicId?: string;
   flashcardTopicOptions?: FlashcardTopicShareOption[];
@@ -47,10 +48,22 @@ interface ShareItemModalProps {
   firebaseUser: User | null;
   authorName: string;
   onOpenAuth: () => void;
-  onPublished: (item: SharedStudyItem) => void;
+  onPublished: (item: SharedStudyItem, topicId?: string) => void;
 }
 
 const MAX_SHARE_PAYLOAD_BYTES = 390_000;
+
+function formatShareUpdated(iso?: string): string {
+  if (!iso) return '';
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 export function ShareItemModal({
   open,
@@ -66,6 +79,7 @@ export function ShareItemModal({
   const [titleEdited, setTitleEdited] = useState(false);
   const [summaryEdited, setSummaryEdited] = useState(false);
   const [visibility, setVisibility] = useState<SharedItemVisibility>('public');
+  const [publishMode, setPublishMode] = useState<'update' | 'new'>('new');
   const [selectedSubTopicIds, setSelectedSubTopicIds] = useState<Set<string>>(() => new Set());
   const [flashcardScopeMode, setFlashcardScopeMode] = useState<'all' | 'topics'>('all');
   const [selectedFlashcardTopicIds, setSelectedFlashcardTopicIds] = useState<Set<string>>(
@@ -74,18 +88,37 @@ export function ShareItemModal({
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [publishedItem, setPublishedItem] = useState<SharedStudyItem | null>(null);
+  const [wasUpdated, setWasUpdated] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
   useEffect(() => {
     if (open && target) {
-      setTitle(target.defaultTitle);
-      setSummary(target.defaultSummary);
+      const existing = target.existingShare;
+      setPublishMode(existing ? 'update' : 'new');
+      setTitle(existing?.title || target.defaultTitle);
+      setSummary(existing?.summary || target.defaultSummary);
       setTitleEdited(false);
       setSummaryEdited(false);
-      setVisibility('public');
-      setSelectedSubTopicIds(
-        new Set((target.subTopicShareOptions || []).map((opt) => opt.topic.id))
-      );
+      setVisibility(existing?.visibility || 'public');
+
+      if (existing && target.type === 'notes') {
+        const prevIds = new Set(
+          (existing.notesPayload?.subTopics || []).map((st) => st.oldId).filter(Boolean)
+        );
+        const validOpts = (target.subTopicShareOptions || []).map((opt) => opt.topic.id);
+        const matched = validOpts.filter((id) => prevIds.has(id));
+        setSelectedSubTopicIds(
+          new Set(
+            matched.length > 0 || (existing.notesPayload?.subTopics?.length || 0) === 0
+              ? matched
+              : validOpts
+          )
+        );
+      } else {
+        setSelectedSubTopicIds(
+          new Set((target.subTopicShareOptions || []).map((opt) => opt.topic.id))
+        );
+      }
 
       const fcOpts = target.flashcardTopicOptions || [];
       const initTopicId = target.initialFlashcardTopicId;
@@ -103,6 +136,7 @@ export function ShareItemModal({
       }
 
       setPublishedItem(null);
+      setWasUpdated(false);
       setErrorMsg(null);
       setCopiedLink(false);
     }
@@ -261,22 +295,47 @@ export function ShareItemModal({
     setErrorMsg(null);
     setBusy(true);
     try {
-      const item = await publishSharedItem({
-        uid: firebaseUser.uid,
-        ownerName: authorName || firebaseUser.displayName || 'StudyWeb Student',
-        type: target.type,
-        title: title.trim() || target.defaultTitle,
-        subjectName: target.subjectName,
-        examBoard: target.examBoard,
-        summary: summary.trim() || target.defaultSummary,
-        visibility,
-        itemCount: resolvedItemCount,
-        notesPayload: resolvedNotesPayload,
-        flashcardsPayload: resolvedFlashcardsPayload,
-        subjectPayload: target.subjectPayload,
-      });
+      const canUpdateExisting = Boolean(
+        target.existingShare &&
+          publishMode === 'update' &&
+          target.existingShare.ownerId === firebaseUser.uid
+      );
+      const item = canUpdateExisting && target.existingShare
+        ? await updateSharedItem({
+            id: target.existingShare.id,
+            uid: firebaseUser.uid,
+            ownerName: authorName || firebaseUser.displayName || 'StudyWeb Student',
+            type: target.type,
+            shareCode: target.existingShare.shareCode,
+            createdAt: target.existingShare.createdAt,
+            copyCount: target.existingShare.copyCount,
+            title: title.trim() || target.defaultTitle,
+            subjectName: target.subjectName,
+            examBoard: target.examBoard,
+            summary: summary.trim() || target.defaultSummary,
+            visibility,
+            itemCount: resolvedItemCount,
+            notesPayload: resolvedNotesPayload,
+            flashcardsPayload: resolvedFlashcardsPayload,
+            subjectPayload: target.subjectPayload,
+          })
+        : await publishSharedItem({
+            uid: firebaseUser.uid,
+            ownerName: authorName || firebaseUser.displayName || 'StudyWeb Student',
+            type: target.type,
+            title: title.trim() || target.defaultTitle,
+            subjectName: target.subjectName,
+            examBoard: target.examBoard,
+            summary: summary.trim() || target.defaultSummary,
+            visibility,
+            itemCount: resolvedItemCount,
+            notesPayload: resolvedNotesPayload,
+            flashcardsPayload: resolvedFlashcardsPayload,
+            subjectPayload: target.subjectPayload,
+          });
+      setWasUpdated(canUpdateExisting);
       setPublishedItem(item);
-      onPublished(item);
+      onPublished(item, target.rootTopicOldId);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to share right now.');
     } finally {
@@ -287,6 +346,9 @@ export function ShareItemModal({
   const totalSubjectFlashcardsCount = flashcardTopicOptions.reduce(
     (sum, opt) => sum + opt.cards.length,
     0
+  );
+  const hasExistingOwnShare = Boolean(
+    target.existingShare && firebaseUser && target.existingShare.ownerId === firebaseUser.uid
   );
 
   return (
@@ -307,7 +369,11 @@ export function ShareItemModal({
               className="font-display text-lg font-bold text-[var(--ink)]"
             >
               {publishedItem
-                ? 'Ready to Share!'
+                ? wasUpdated
+                  ? 'Shared Link Updated!'
+                  : 'Ready to Share!'
+                : hasExistingOwnShare && publishMode === 'update'
+                ? 'Update Shared Notes'
                 : `Share ${
                     target.type === 'notes'
                       ? 'Topic Notes'
@@ -398,6 +464,42 @@ export function ShareItemModal({
             </div>
           ) : (
             <form onSubmit={(e) => void handlePublish(e)} className="space-y-4">
+              {hasExistingOwnShare && target.existingShare && (
+                <div className="rounded-xl border border-[color-mix(in_srgb,var(--e3)_40%,var(--line))] bg-[color-mix(in_srgb,var(--e3)_8%,var(--bg))] p-3 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span className="font-bold text-[var(--ink)]">
+                        Existing share{' '}
+                        <span className="font-mono-num text-[var(--e3)]">
+                          #{target.existingShare.shareCode}
+                        </span>
+                      </span>
+                      {target.existingShare.updatedAt && (
+                        <span className="ml-1.5 text-[11px] text-[var(--mute)]">
+                          · Updated {formatShareUpdated(target.existingShare.updatedAt)}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPublishMode((m) => (m === 'update' ? 'new' : 'update'))
+                      }
+                      className="cursor-pointer text-[11px] font-bold text-[var(--e3)] hover:underline"
+                    >
+                      {publishMode === 'update'
+                        ? 'Create new link instead'
+                        : `Update #${target.existingShare.shareCode} instead`}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[11px] text-[var(--mute)]">
+                    {publishMode === 'update'
+                      ? `Publishing changes updates link #${target.existingShare.shareCode} with your newest notes in Community Share.`
+                      : 'Creating a new link leaves your previous share unchanged and generates a new 6-character code.'}
+                  </p>
+                </div>
+              )}
+
               {errorMsg && (
                 <div className="rounded-lg border border-[var(--bad)] bg-[var(--bg)] px-3 py-2 text-xs font-semibold text-[var(--bad)]">
                   {errorMsg}
@@ -667,12 +769,25 @@ export function ShareItemModal({
                   disabled={busy || isOverSizeLimit || isEmptyFlashcardsSelection}
                   className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap disabled:opacity-50"
                 >
-                  {visibility === 'public' ? (
+                  {hasExistingOwnShare && publishMode === 'update' ? (
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`}
+                      aria-hidden="true"
+                    />
+                  ) : visibility === 'public' ? (
                     <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
                   ) : (
                     <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
                   )}
-                  <span>{busy ? 'Publishing…' : 'Create Share Link'}</span>
+                  <span>
+                    {busy
+                      ? hasExistingOwnShare && publishMode === 'update'
+                        ? 'Publishing Changes…'
+                        : 'Publishing…'
+                      : hasExistingOwnShare && publishMode === 'update'
+                      ? 'Publish Changes'
+                      : 'Create Share Link'}
+                  </span>
                 </button>
               </div>
             </form>

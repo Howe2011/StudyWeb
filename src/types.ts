@@ -203,6 +203,15 @@ export interface StructuredNoteData {
   updatedAt: string;
 }
 
+export interface SharedTopicLink {
+  shareId: string;
+  shareCode: string;
+  title: string;
+  visibility: SharedItemVisibility;
+  lastPublishedAt: string;
+  includedSubTopicIds?: string[];
+}
+
 export interface StudyTopic {
   id: string;
   subjectId: string;
@@ -214,6 +223,7 @@ export interface StudyTopic {
   confidence?: 0 | 1 | 2 | 3; // 0=Not started, 1=Weak/Red, 2=Alright/Amber, 3=Mastered/Green
   notes: StructuredNoteData;
   timelineEvents?: TimelineEventItem[];
+  sharedRef?: SharedTopicLink;
   createdAt: string;
 }
 

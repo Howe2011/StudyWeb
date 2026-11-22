@@ -26,7 +26,9 @@ import {
 } from './lib/crypto';
 import {
   clearCommunityCache,
+  fetchUserSharedItems,
   updateCommunityAuthorName,
+  updateSharedItem,
 } from './lib/communityService';
 import {
   createUserAccountWithVault,
@@ -68,6 +70,7 @@ import {
   DecryptedProfile,
   LiveTimerState,
   PlannerSubTab,
+  SharedStudyItem,
   StopwatchState,
   StudyTopic,
   UserAccountDoc,
@@ -253,6 +256,8 @@ export default function App() {
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [shareTarget, setShareTarget] = useState<ShareTargetConfig | null>(null);
+  const [userSharedItems, setUserSharedItems] = useState<SharedStudyItem[]>([]);
+  const [userSharedLoadedUid, setUserSharedLoadedUid] = useState<string | null>(null);
 
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [account, setAccount] = useState<UserAccountDoc | null>(null);
@@ -959,6 +964,85 @@ export default function App() {
     [workspace]
   );
 
+  useEffect(() => {
+    const uid = firebaseUser?.uid;
+    if (!uid) {
+      setUserSharedItems([]);
+      setUserSharedLoadedUid(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchUserSharedItems(uid)
+      .then((items) => {
+        if (!cancelled) {
+          setUserSharedItems(items);
+          setUserSharedLoadedUid(uid);
+        }
+      })
+      .catch(() => {
+        // Non-fatal background lookup for shared link status
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser?.uid]);
+
+  const sharedNoteByTopicId = useMemo(() => {
+    const map = new Map<string, SharedStudyItem>();
+    if (!firebaseUser) return map;
+
+    const byShareId = new Map(userSharedItems.map((item) => [item.id, item]));
+    const loadedForUser = userSharedLoadedUid === firebaseUser.uid;
+
+    for (const item of userSharedItems) {
+      if (item.type === 'notes' && item.notesPayload?.topicOldId) {
+        if (!map.has(item.notesPayload.topicOldId)) {
+          map.set(item.notesPayload.topicOldId, item);
+        }
+      }
+    }
+
+    for (const topic of workspace.topics) {
+      if (!topic.sharedRef?.shareId) continue;
+      const remote = byShareId.get(topic.sharedRef.shareId);
+      if (remote) {
+        map.set(topic.id, remote);
+      } else if (!loadedForUser) {
+        // Optimistic fallback before remote list finishes loading
+        map.set(topic.id, {
+          id: topic.sharedRef.shareId,
+          shareCode: topic.sharedRef.shareCode,
+          type: 'notes',
+          title: topic.sharedRef.title || topic.name,
+          subjectName:
+            workspace.subjects.find((s) => s.id === topic.subjectId)?.name || 'Subject',
+          examBoard:
+            workspace.subjects.find((s) => s.id === topic.subjectId)?.examBoard || 'Revision',
+          summary: topic.notes.summary || '',
+          visibility: topic.sharedRef.visibility,
+          ownerId: firebaseUser.uid,
+          ownerName: accountDisplayName,
+          itemCount: Math.max(
+            1,
+            topic.notes.sections.reduce((acc, s) => acc + s.points.length, 0) +
+              topic.notes.keyTerms.length
+          ),
+          copyCount: 0,
+          createdAt: topic.sharedRef.lastPublishedAt,
+          updatedAt: topic.sharedRef.lastPublishedAt,
+        });
+      }
+    }
+    return map;
+  }, [
+    firebaseUser,
+    userSharedItems,
+    userSharedLoadedUid,
+    workspace.topics,
+    workspace.subjects,
+    accountDisplayName,
+  ]);
+
   const handleShareTopic = useCallback(
     (subjectId: string, topicId: string) => {
       const subj = workspace.subjects.find((s) => s.id === subjectId);
@@ -994,6 +1078,7 @@ export default function App() {
       }
 
       const count = countTopicItems(topic);
+      const existingShare = sharedNoteByTopicId.get(topic.id);
 
       setShareTarget({
         type: 'notes',
@@ -1005,6 +1090,7 @@ export default function App() {
           `Structured revision notes for ${subj.name}: ${topic.name}.`,
         itemCount: count,
         rootTopicOldId: topic.id,
+        existingShare,
         subTopicShareOptions,
         notesPayload: {
           topicName: topic.name,
@@ -1015,7 +1101,146 @@ export default function App() {
         },
       });
     },
-    [workspace]
+    [workspace, sharedNoteByTopicId]
+  );
+
+  const handlePublishTopicChanges = useCallback(
+    async (
+      topicId: string
+    ): Promise<{ ok: boolean; shareCode?: string; error?: string }> => {
+      if (!firebaseUser) {
+        setAuthModalOpen(true);
+        return { ok: false, error: 'Sign in with Google to publish changes.' };
+      }
+
+      const topic = workspace.topics.find((t) => t.id === topicId);
+      const subj = topic
+        ? workspace.subjects.find((s) => s.id === topic.subjectId)
+        : undefined;
+      const existingShare = topic ? sharedNoteByTopicId.get(topic.id) : undefined;
+
+      if (!topic || !subj || !existingShare) {
+        if (subj && topic) handleShareTopic(subj.id, topic.id);
+        return { ok: false, error: 'No existing share link found for this note.' };
+      }
+
+      const countTopicItems = (t: StudyTopic) =>
+        Math.max(
+          1,
+          t.notes.sections.reduce((acc, s) => acc + s.points.length, 0) +
+            t.notes.keyTerms.length
+        );
+
+      const subjTree = buildTopicTreeList(
+        workspace.topics.filter((t) => t.subjectId === subj.id)
+      );
+      const rootIdx = subjTree.findIndex((n) => n.topic.id === topic.id);
+      const descendantTopics: StudyTopic[] = [];
+      if (rootIdx !== -1) {
+        const rootDepth = subjTree[rootIdx].depth;
+        for (let i = rootIdx + 1; i < subjTree.length; i++) {
+          if (subjTree[i].depth <= rootDepth) break;
+          descendantTopics.push(subjTree[i].topic);
+        }
+      }
+
+      const prevSubIds = new Set(
+        topic.sharedRef?.includedSubTopicIds ||
+          (existingShare.notesPayload?.subTopics || [])
+            .map((st) => st.oldId)
+            .filter(Boolean)
+      );
+      const includedSubs =
+        prevSubIds.size > 0
+          ? descendantTopics.filter((dt) => prevSubIds.has(dt.id))
+          : [];
+
+      const totalItemCount =
+        countTopicItems(topic) +
+        includedSubs.reduce((sum, st) => sum + countTopicItems(st), 0);
+
+      const nextTitle = (existingShare.title || topic.name).trim() || topic.name;
+      const nextSummary =
+        (topic.notes.summary || '').trim() ||
+        existingShare.summary ||
+        `Structured revision notes for ${subj.name}: ${topic.name}.`;
+
+      try {
+        const updated = await updateSharedItem({
+          id: existingShare.id,
+          uid: firebaseUser.uid,
+          ownerName: accountDisplayName,
+          type: 'notes',
+          shareCode: existingShare.shareCode,
+          createdAt: existingShare.createdAt,
+          copyCount: existingShare.copyCount,
+          title: nextTitle,
+          subjectName: subj.name,
+          examBoard: subj.examBoard,
+          summary: nextSummary,
+          visibility: existingShare.visibility,
+          itemCount: totalItemCount,
+          notesPayload: {
+            topicName: topic.name,
+            topicOldId: topic.id,
+            specCode: topic.specCode,
+            notes: topic.notes,
+            timelineEvents: topic.timelineEvents,
+            subTopics:
+              includedSubs.length > 0
+                ? includedSubs.map((st) => ({
+                    oldId: st.id,
+                    parentOldId: st.parentTopicId,
+                    topicName: st.name,
+                    specCode: st.specCode,
+                    tags: st.tags,
+                    notes: st.notes,
+                    timelineEvents: st.timelineEvents,
+                  }))
+                : undefined,
+          },
+        });
+
+        clearCommunityCache();
+        setUserSharedItems((prev) => [
+          updated,
+          ...prev.filter((item) => item.id !== updated.id),
+        ]);
+        updateWorkspace((prev) => ({
+          ...prev,
+          topics: prev.topics.map((t) =>
+            t.id === topic.id
+              ? {
+                  ...t,
+                  sharedRef: {
+                    shareId: updated.id,
+                    shareCode: updated.shareCode,
+                    title: updated.title,
+                    visibility: updated.visibility,
+                    lastPublishedAt: updated.updatedAt,
+                    includedSubTopicIds: includedSubs.map((st) => st.id),
+                  },
+                }
+              : t
+          ),
+        }));
+        return { ok: true, shareCode: updated.shareCode };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'Unable to publish changes right now.',
+        };
+      }
+    },
+    [
+      firebaseUser,
+      workspace.topics,
+      workspace.subjects,
+      sharedNoteByTopicId,
+      accountDisplayName,
+      handleShareTopic,
+      updateWorkspace,
+    ]
   );
 
   const handleShareDeck = useCallback(
@@ -1434,6 +1659,8 @@ export default function App() {
               onUpdateWorkspace={updateWorkspace}
               onOpenImport={() => setImportModalOpen(true)}
               onShareTopic={handleShareTopic}
+              sharedNoteByTopicId={sharedNoteByTopicId}
+              onPublishTopicChanges={handlePublishTopicChanges}
               onBrowseCommunityNotes={() =>
                 handleNavigate('community', { communityTypeFilter: 'notes' })
               }
@@ -1499,6 +1726,21 @@ export default function App() {
               onOpenAuth={() => setAuthModalOpen(true)}
               onRequestClearInitialShareCode={() => setInitialShareCode(null)}
               onRequestClearInitialTypeFilter={() => setCommunityTypeFilter(null)}
+              onDeletedSharedItem={(deletedId) => {
+                setUserSharedItems((prev) => prev.filter((item) => item.id !== deletedId));
+                updateWorkspace((prev) => {
+                  const hasRef = prev.topics.some((t) => t.sharedRef?.shareId === deletedId);
+                  if (!hasRef) return prev;
+                  return {
+                    ...prev,
+                    topics: prev.topics.map((t) => {
+                      if (t.sharedRef?.shareId !== deletedId) return t;
+                      const { sharedRef: _drop, ...rest } = t;
+                      return rest;
+                    }),
+                  };
+                });
+              }}
               onOpenCopiedNotes={(subjectId, topicId) =>
                 handleNavigate('notes', { subjectId, topicId })
               }
@@ -1593,8 +1835,36 @@ export default function App() {
           setShareTarget(null);
           setAuthModalOpen(true);
         }}
-        onPublished={() => {
+        onPublished={(item, topicId) => {
           clearCommunityCache();
+          setUserSharedItems((prev) => [
+            item,
+            ...prev.filter((existing) => existing.id !== item.id),
+          ]);
+          const targetTopicId = topicId || item.notesPayload?.topicOldId;
+          if (item.type === 'notes' && targetTopicId) {
+            const subIds = (item.notesPayload?.subTopics || [])
+              .map((st) => st.oldId)
+              .filter(Boolean);
+            updateWorkspace((prev) => ({
+              ...prev,
+              topics: prev.topics.map((t) =>
+                t.id === targetTopicId
+                  ? {
+                      ...t,
+                      sharedRef: {
+                        shareId: item.id,
+                        shareCode: item.shareCode,
+                        title: item.title,
+                        visibility: item.visibility,
+                        lastPublishedAt: item.updatedAt,
+                        includedSubTopicIds: subIds,
+                      },
+                    }
+                  : t
+              ),
+            }));
+          }
         }}
       />
 

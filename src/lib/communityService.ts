@@ -101,7 +101,7 @@ export async function fetchPublicSharedItems(forceRefresh = false): Promise<Shar
     const items = snap.docs
       .map((d) => parseSharedDoc(d.id, d.data() as Record<string, unknown>))
       .filter((x): x is SharedStudyItem => Boolean(x))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
 
     cachedPublicItems = { items, fetchedAt: Date.now() };
     return items;
@@ -122,7 +122,7 @@ export async function fetchUserSharedItems(uid: string): Promise<SharedStudyItem
     return snap.docs
       .map((d) => parseSharedDoc(d.id, d.data() as Record<string, unknown>))
       .filter((x): x is SharedStudyItem => Boolean(x))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
   } catch (err) {
     handleFirestoreError(err, OperationType.LIST, path);
   }
@@ -214,6 +214,92 @@ export async function publishSharedItem(params: {
     itemCount: Math.max(0, Math.round(params.itemCount)),
     copyCount: 0,
     createdAt: nowIso,
+    updatedAt: nowIso,
+    notesPayload: params.notesPayload,
+    flashcardsPayload: params.flashcardsPayload,
+    subjectPayload: params.subjectPayload,
+  };
+}
+
+export async function updateSharedItem(params: {
+  id: string;
+  uid: string;
+  ownerName: string;
+  type: SharedItemType;
+  shareCode?: string;
+  createdAt?: string;
+  copyCount?: number;
+  title: string;
+  subjectName: string;
+  examBoard: string;
+  summary: string;
+  visibility: SharedItemVisibility;
+  itemCount: number;
+  notesPayload?: SharedNotesPayload;
+  flashcardsPayload?: SharedFlashcardsPayload;
+  subjectPayload?: SharedSubjectPayload;
+}): Promise<SharedStudyItem> {
+  const payloadJson = JSON.stringify({
+    notesPayload: params.notesPayload,
+    flashcardsPayload: params.flashcardsPayload,
+    subjectPayload: params.subjectPayload,
+  });
+
+  if (payloadJson.length > 400000) {
+    throw new Error('This shared item is over the 400 KB limit. Try sharing fewer sub-topics or removing large images.');
+  }
+
+  const docRef = doc(db, 'sharedItems', params.id);
+  const path = `sharedItems/${params.id}`;
+  const cleanTitle = (params.title || 'Untitled Share').trim().slice(0, 140);
+  const cleanSubject = (params.subjectName || 'General').trim().slice(0, 80);
+  const cleanBoard = (params.examBoard || 'GCSE / Revision').trim().slice(0, 80);
+  const cleanSummary = (params.summary || '').trim().slice(0, 280);
+  const cleanOwner = (params.ownerName || 'StudyWeb Student').trim().slice(0, 100);
+  const cleanCount = Math.max(0, Math.round(params.itemCount));
+
+  try {
+    await updateDoc(docRef, {
+      title: cleanTitle,
+      subjectName: cleanSubject,
+      examBoard: cleanBoard,
+      summary: cleanSummary,
+      visibility: params.visibility,
+      ownerName: cleanOwner,
+      itemCount: cleanCount,
+      payloadJson,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+
+  cachedPublicItems = null;
+  try {
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const parsed = parseSharedDoc(snap.id, snap.data() as Record<string, unknown>);
+      if (parsed) return parsed;
+    }
+  } catch {
+    // fallback to optimistic object below
+  }
+
+  const nowIso = new Date().toISOString();
+  return {
+    id: params.id,
+    shareCode: params.shareCode || '',
+    type: params.type,
+    title: cleanTitle,
+    subjectName: cleanSubject,
+    examBoard: cleanBoard,
+    summary: cleanSummary,
+    visibility: params.visibility,
+    ownerId: params.uid,
+    ownerName: cleanOwner,
+    itemCount: cleanCount,
+    copyCount: params.copyCount ?? 0,
+    createdAt: params.createdAt || nowIso,
     updatedAt: nowIso,
     notesPayload: params.notesPayload,
     flashcardsPayload: params.flashcardsPayload,
@@ -602,7 +688,14 @@ export async function updateCommunityAuthorName(uid: string, newAuthorName: stri
   try {
     const q = query(collection(db, 'sharedItems'), where('ownerId', '==', uid));
     const snap = await getDocs(q);
-    await Promise.all(snap.docs.map((d) => updateDoc(d.ref, { ownerName: newAuthorName })));
+    await Promise.all(
+      snap.docs.map((d) =>
+        updateDoc(d.ref, {
+          ownerName: newAuthorName,
+          updatedAt: serverTimestamp(),
+        })
+      )
+    );
     clearCommunityCache();
   } catch {
     // ignore

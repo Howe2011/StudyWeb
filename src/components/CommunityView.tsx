@@ -5,6 +5,7 @@ import {
   BookOpen,
   Calendar,
   Check,
+  Clock,
   Copy,
   Download,
   ExternalLink,
@@ -48,8 +49,37 @@ interface CommunityViewProps {
   onOpenAuth: () => void;
   onRequestClearInitialShareCode?: () => void;
   onRequestClearInitialTypeFilter?: () => void;
+  onDeletedSharedItem?: (id: string) => void;
   onOpenCopiedNotes?: (subjectId: string, topicId?: string) => void;
   onOpenCopiedFlashcards?: (subjectId: string) => void;
+}
+
+function formatLastUpdated(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return 'Recently';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (diffSec < 60) return 'Just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  const d = new Date(ms);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
+}
+
+function formatFullDateTime(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 
@@ -332,6 +362,7 @@ export function CommunityView({
   onOpenAuth,
   onRequestClearInitialShareCode,
   onRequestClearInitialTypeFilter,
+  onDeletedSharedItem,
   onOpenCopiedNotes,
   onOpenCopiedFlashcards,
 }: CommunityViewProps) {
@@ -519,6 +550,7 @@ export function CommunityView({
       await deleteSharedItem(id);
       setMyItems((prev) => prev.filter((x) => x.id !== id));
       setPublicItems((prev) => prev.filter((x) => x.id !== id));
+      onDeletedSharedItem?.(id);
       if (previewItem?.id === id) setPreviewItem(null);
       setStatusBanner({ ok: true, msg: 'Removed shared link.' });
     } catch (err) {
@@ -764,12 +796,21 @@ export function CommunityView({
                     )}
                   </div>
 
-                  <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-3">
-                    <div className="flex items-center justify-between text-[11px] text-[var(--mute)]">
-                      <span className="truncate">By {item.ownerName}</span>
-                      <span className="font-mono-num shrink-0">
-                        {item.itemCount} item{item.itemCount === 1 ? '' : 's'} · {item.copyCount} uses
-                      </span>
+                  <div className="mt-4 space-y-2.5 border-t border-[var(--line)] pt-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] text-[var(--mute)]">
+                        <span className="truncate">By {item.ownerName}</span>
+                        <span className="font-mono-num shrink-0">
+                          {item.itemCount} item{item.itemCount === 1 ? '' : 's'} · {item.copyCount} uses
+                        </span>
+                      </div>
+                      <div
+                        className="flex items-center gap-1.5 text-[11px] text-[var(--mute)]"
+                        title={formatFullDateTime(item.updatedAt || item.createdAt)}
+                      >
+                        <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        <span>Updated {formatLastUpdated(item.updatedAt || item.createdAt)}</span>
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -839,15 +880,26 @@ export function CommunityView({
                 <h2 className="font-display mt-0.5 text-lg font-bold text-[var(--ink)] sm:text-xl">
                   {previewItem.title}
                 </h2>
-                <div className="text-xs text-[var(--mute)]">
-                  {previewItem.subjectName} · {previewItem.examBoard} · Shared by {previewItem.ownerName}
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--mute)]">
+                  <span>
+                    {previewItem.subjectName} · {previewItem.examBoard} · Shared by{' '}
+                    {previewItem.ownerName}
+                  </span>
                   {previewItem.type === 'notes' &&
                     (previewItem.notesPayload?.subTopics?.length || 0) > 0 && (
-                      <span className="ml-1.5 font-bold text-[var(--e3)]">
+                      <span className="font-bold text-[var(--e3)]">
                         · +{previewItem.notesPayload!.subTopics!.length} sub-topic
                         {previewItem.notesPayload!.subTopics!.length === 1 ? '' : 's'}
                       </span>
                     )}
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title={formatFullDateTime(previewItem.updatedAt || previewItem.createdAt)}
+                  >
+                    <span>
+                      · Last updated {formatFullDateTime(previewItem.updatedAt || previewItem.createdAt)}
+                    </span>
+                  </span>
                 </div>
               </div>
               <button
