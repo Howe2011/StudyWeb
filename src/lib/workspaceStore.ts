@@ -6,6 +6,8 @@ import {
 } from './noteFormat';
 import {
   CalendarStudyBlock,
+  CustomCountdownItem,
+  DailyStudyTaskItem,
   DeckFlashcard,
   DeckSection,
   DeckSnapshot,
@@ -14,11 +16,15 @@ import {
   HomeWidgetId,
   HomeWidgetLayoutItem,
   HomeWidgetPrefs,
+  PastPaperScore,
   PlannerSchedulePrefs,
+  SharedFlashcardLink,
   StudyFlashcard,
+  StudyLogEntry,
   StudySubject,
   StudyTopic,
   TimelineEventItem,
+  TodoStepItem,
   TodoTaskItem,
   WorkspaceData,
 } from '../types';
@@ -130,6 +136,7 @@ export function createEmptyWorkspace(): WorkspaceData {
     topics: [],
     flashcards: [],
     deckGroups: [],
+    sharedFlashcardRefs: [],
     todos: [],
     calendarBlocks: [],
     plannerPrefs: {
@@ -385,6 +392,26 @@ export function normalizeWorkspace(raw: unknown): WorkspaceData {
           createdAt: String(g.createdAt || new Date().toISOString()),
         }))
       : [],
+    sharedFlashcardRefs: Array.isArray(r.sharedFlashcardRefs)
+      ? r.sharedFlashcardRefs
+          .filter((x: unknown): x is Record<string, unknown> => Boolean(x && typeof x === 'object'))
+          .map((x): SharedFlashcardLink => ({
+            shareId: String(x.shareId || ''),
+            shareCode: String(x.shareCode || ''),
+            subjectId: String(x.subjectId || ''),
+            scopeKey: String(x.scopeKey || ''),
+            title: String(x.title || ''),
+            visibility: x.visibility === 'unlisted' ? 'unlisted' : 'public',
+            lastPublishedAt: String(x.lastPublishedAt || new Date().toISOString()),
+            ...(Array.isArray(x.sectionNames)
+              ? { sectionNames: x.sectionNames.map(String).filter(Boolean) }
+              : {}),
+            ...(Array.isArray(x.topicIds)
+              ? { topicIds: x.topicIds.map(String).filter(Boolean) }
+              : {}),
+          }))
+          .filter((x) => Boolean(x.shareId && x.shareCode && x.scopeKey))
+      : [],
     todos: Array.isArray(r.todos) ? r.todos : [],
     calendarBlocks: Array.isArray(r.calendarBlocks) ? r.calendarBlocks : [],
     plannerPrefs: {
@@ -560,6 +587,32 @@ function findOrAddTopic(
   return topic;
 }
 
+function parseExamDurationMins(title?: string): number {
+  const s = String(title || '');
+  const hoursMatch = s.match(/\(?\b(\d+)\s*h(?:ours?|rs?)?\s*(?:(\d+)\s*(?:m(?:ins?|inutes?)?)?)?\b\)?/i);
+  if (hoursMatch) {
+    const h = Number(hoursMatch[1]) || 0;
+    const m = hoursMatch[2] ? Number(hoursMatch[2]) || 0 : 0;
+    const total = h * 60 + m;
+    if (total > 0) return total;
+  }
+  const minsMatch = s.match(/\(?\b(\d+)\s*(?:min(?:ute)?s?|m)\b\)?/i);
+  if (minsMatch) {
+    const total = Number(minsMatch[1]) || 0;
+    if (total > 0) return total;
+  }
+  return 90;
+}
+
+function minutesToHHMM(mins: unknown, fallback = '09:00'): string {
+  const num = Number(mins);
+  if (!Number.isFinite(num)) return fallback;
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, Math.round(num)));
+  const hh = String(Math.floor(clamped / 60)).padStart(2, '0');
+  const mm = String(clamped % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 /**
  * Converts legacy revision + planner key-value entries into WorkspaceData v2 cleanly.
  */
@@ -592,7 +645,7 @@ export function convertLegacyEntriesToWorkspace(
     return link;
   };
 
-  // 1. Parse planner ('mockplanner.v1')
+  // 1. Parse planner ('mockplanner.v1' or Revision Planner export JSON)
   const rawPlanner = planner['mockplanner.v1'];
   if (rawPlanner) {
     try {
@@ -603,7 +656,9 @@ export function convertLegacyEntriesToWorkspace(
           date?: string;
           w?: number;
           col?: string;
+          board?: string;
           topics?: string[];
+          t?: Array<string | { x?: string; l?: number; at?: string }>;
           ex?: Array<{ d?: string; t?: string; n?: string }>;
         }>;
         td?: {
@@ -613,6 +668,16 @@ export function convertLegacyEntriesToWorkspace(
             d?: string;
             pri?: number;
             done?: boolean | number;
+            c?: string;
+            st?: boolean | number;
+            td?: string;
+            da?: string;
+            tg?: string[];
+            est?: number;
+            steps?: Array<string | { text?: string; t?: string; done?: boolean | number }>;
+            note?: string;
+            rep?: string;
+            cr?: number;
           }>;
         };
         todos?: Array<{ text?: string; subj?: string; due?: string; pri?: number; done?: boolean }>;
@@ -627,44 +692,136 @@ export function convertLegacyEntriesToWorkspace(
           subj?: string;
           done?: boolean;
         }>;
+        cal?: {
+          ev?: Array<{
+            id?: number | string;
+            d?: string;
+            s?: number;
+            e?: number;
+            i?: number | null;
+            j?: number;
+            k?: string;
+            a?: number | boolean;
+            m?: number | boolean;
+            done?: number | boolean;
+          }>;
+          ds?: string;
+          we?: string;
+        };
+        avail?: number[];
+        log?: Array<{
+          i?: number | null;
+          m?: number;
+          d?: string;
+          h?: string;
+          k?: string;
+          x?: string;
+        }>;
+        scores?: Array<{
+          id?: string;
+          i?: number | null;
+          subj?: string;
+          p?: string;
+          paper?: string;
+          m?: number;
+          mark?: number;
+          t?: number;
+          total?: number;
+          d?: string;
+          date?: string;
+        }>;
+        today?: {
+          d?: string;
+          items?: Array<{
+            i?: number | null;
+            j?: number;
+            p?: number | boolean;
+            k?: string;
+            done?: number | boolean;
+          }>;
+        };
         sess?: { mins?: number };
-        hist?: Record<string, { mins?: number }>;
+        hist?: Record<string, number | { mins?: number }>;
       };
 
       const indexToSubjId = new Map<number, string>();
+      const indexToSubjName = new Map<number, string>();
+      const subjTopicsByIdx = new Map<number, StudyTopic[]>();
+
       if (Array.isArray(pl.subs)) {
         pl.subs.forEach((s, idx) => {
           if (!s || !s.n || s.on === false) return;
+          const cleanSubjName = s.n.trim();
+          if (!cleanSubjName) return;
           hadLegacyData = true;
           const firstExam = s.date || s.ex?.[0]?.d || '';
           const weightNum = s.w === 3 ? 3 : s.w === 1 ? 1 : 2;
-          const subj = findOrAddSubject(ws, s.n, {
+          const subj = findOrAddSubject(ws, cleanSubjName, {
             color: s.col,
             examDate: firstExam,
             weight: weightNum,
+            examBoard: s.board,
           });
           indexToSubjId.set(idx, subj.id);
-          if (Array.isArray(s.topics)) {
-            s.topics.forEach((tp) => {
-              if (tp && tp.trim()) {
-                const t = findOrAddTopic(ws, subj.id, tp.trim());
-                topicAliasMap.set(tp.trim().toLowerCase(), { subjectId: subj.id, topicId: t.id });
+          indexToSubjName.set(idx, subj.name);
+
+          const orderedTopics: StudyTopic[] = [];
+          const registerTopic = (titleRaw: string, conf?: number, atDate?: string) => {
+            const title = titleRaw.trim();
+            if (!title) return;
+            const topic = findOrAddTopic(ws, subj.id, title);
+            if (conf === 0 || conf === 1 || conf === 2 || conf === 3) {
+              topic.confidence = conf;
+              topic.completed = conf === 3;
+            }
+            if (atDate && /^\d{4}-\d{2}-\d{2}$/.test(atDate)) {
+              topic.createdAt = `${atDate}T12:00:00.000Z`;
+            }
+            topicAliasMap.set(title.toLowerCase(), { subjectId: subj.id, topicId: topic.id });
+            if (!orderedTopics.some((x) => x.id === topic.id)) {
+              orderedTopics.push(topic);
+            }
+          };
+
+          if (Array.isArray(s.t)) {
+            s.t.forEach((tp) => {
+              if (typeof tp === 'string') {
+                registerTopic(tp);
+              } else if (tp && typeof tp === 'object' && tp.x) {
+                registerTopic(tp.x, typeof tp.l === 'number' ? tp.l : undefined, tp.at);
               }
             });
           }
+
+          if (Array.isArray(s.topics)) {
+            s.topics.forEach((tp) => {
+              if (typeof tp === 'string' && tp.trim()) {
+                registerTopic(tp);
+              }
+            });
+          }
+
+          subjTopicsByIdx.set(idx, orderedTopics);
+
           if (Array.isArray(s.ex)) {
             s.ex.forEach((ex) => {
-              if (!ex.d) return;
+              if (!ex.d || !/^\d{4}-\d{2}-\d{2}$/.test(ex.d)) return;
+              const examTitle = (ex.n || `${subj.name} Exam`).trim();
+              const startTime = ex.t && /^\d{2}:\d{2}$/.test(ex.t) ? ex.t : '09:00';
               const dup = ws.calendarBlocks.some(
-                (b) => b.kind === 'exam' && b.date === ex.d && b.subjectId === subj.id
+                (b) =>
+                  b.kind === 'exam' &&
+                  b.date === ex.d &&
+                  b.subjectId === subj.id &&
+                  b.title.trim().toLowerCase() === examTitle.toLowerCase()
               );
               if (!dup) {
                 ws.calendarBlocks.push({
                   id: makeId('blk'),
                   date: ex.d,
-                  startTime: ex.t || '09:00',
-                  durationMins: 90,
-                  title: ex.n || `${subj.name} Exam`,
+                  startTime,
+                  durationMins: parseExamDurationMins(examTitle),
+                  title: examTitle,
                   subjectId: subj.id,
                   kind: 'exam',
                   done: false,
@@ -675,21 +832,138 @@ export function convertLegacyEntriesToWorkspace(
         });
       }
 
+      if (
+        (Array.isArray(pl.avail) && pl.avail.length === 7) ||
+        (pl.cal && (pl.cal.ds || pl.cal.we))
+      ) {
+        hadLegacyData = true;
+        const basePrefs = ws.plannerPrefs || DEFAULT_PLANNER_PREFS;
+        ws.plannerPrefs = {
+          weekdayStart:
+            pl.cal?.ds && /^\d{2}:\d{2}$/.test(pl.cal.ds)
+              ? pl.cal.ds
+              : basePrefs.weekdayStart,
+          weekendStart:
+            pl.cal?.we && /^\d{2}:\d{2}$/.test(pl.cal.we)
+              ? pl.cal.we
+              : basePrefs.weekendStart,
+          availHours:
+            Array.isArray(pl.avail) && pl.avail.length === 7
+              ? pl.avail.map((n) => Math.max(0, Math.min(12, Number(n) || 0)))
+              : [...basePrefs.availHours],
+        };
+      }
+
+      if (Array.isArray(pl.cal?.ev)) {
+        pl.cal!.ev!.forEach((ev) => {
+          if (!ev || !ev.d || !/^\d{4}-\d{2}-\d{2}$/.test(ev.d)) return;
+          hadLegacyData = true;
+          const subjId = ev.i != null ? indexToSubjId.get(ev.i) : undefined;
+          const subjName = (ev.i != null ? indexToSubjName.get(ev.i) : undefined) || 'Study';
+          const topicObj =
+            ev.i != null && typeof ev.j === 'number' && ev.j >= 0
+              ? subjTopicsByIdx.get(ev.i)?.[ev.j]
+              : undefined;
+          const kind: CalendarStudyBlock['kind'] =
+            ev.k === 'paper' ? 'past-paper' : ev.k === 'recall' ? 'flashcards' : 'revision';
+          const startTime = typeof ev.s === 'number' ? minutesToHHMM(ev.s, '16:00') : '16:00';
+          const endTime = typeof ev.e === 'number' ? minutesToHHMM(ev.e, '') : undefined;
+          const durationMins =
+            typeof ev.s === 'number' && typeof ev.e === 'number' && ev.e > ev.s
+              ? ev.e - ev.s
+              : 25;
+          const title = topicObj
+            ? topicObj.name
+            : kind === 'past-paper'
+            ? `${subjName} — Past Paper`
+            : kind === 'flashcards'
+            ? `${subjName} — Recall`
+            : `${subjName} — Revision`;
+
+          const dup = ws.calendarBlocks.some(
+            (x) =>
+              x.date === ev.d &&
+              x.startTime === startTime &&
+              x.title === title &&
+              x.subjectId === subjId
+          );
+          if (!dup) {
+            ws.calendarBlocks.push({
+              id: makeId('blk'),
+              date: ev.d,
+              startTime,
+              durationMins,
+              ...(endTime ? { endTime } : {}),
+              title,
+              ...(subjId ? { subjectId: subjId } : {}),
+              ...(topicObj ? { topicId: topicObj.id } : {}),
+              kind,
+              done: Boolean(ev.done && Number(ev.done) > 0),
+              ...(ev.m ? { manual: true } : {}),
+            });
+          }
+        });
+      }
+
       const tdItems = Array.isArray(pl.td?.items) ? pl.td!.items! : [];
       tdItems.forEach((it) => {
-        if (!it.t) return;
+        if (!it || !it.t) return;
         hadLegacyData = true;
         const subjId = it.i != null ? indexToSubjId.get(it.i) : undefined;
-        const dup = ws.todos.some((td) => td.title === it.t && td.dueDate === (it.d || ''));
+        const cat =
+          it.c === 'exam' || it.c === 'hw' || it.c === 'oth' ? it.c : undefined;
+        const dup = ws.todos.some(
+          (td) =>
+            td.title === it.t &&
+            td.dueDate === (it.d || '') &&
+            (td.category || undefined) === cat
+        );
         if (!dup) {
+          const parsedSteps: TodoStepItem[] | undefined = Array.isArray(it.steps)
+            ? it.steps
+                .map((st): TodoStepItem | null => {
+                  if (typeof st === 'string') {
+                    return st.trim() ? { text: st.trim(), done: false } : null;
+                  }
+                  if (st && typeof st === 'object') {
+                    const txt = String(st.text || st.t || '').trim();
+                    return txt ? { text: txt, done: Boolean(st.done) } : null;
+                  }
+                  return null;
+                })
+                .filter((st): st is TodoStepItem => st !== null)
+            : undefined;
+          const validRepeat =
+            it.rep === 'daily' ||
+            it.rep === 'weekdays' ||
+            it.rep === 'weekly' ||
+            it.rep === 'monthly'
+              ? it.rep
+              : undefined;
+          const priority: 0 | 1 | 2 | 3 =
+            it.pri === 0 || it.pri === 1 || it.pri === 2 || it.pri === 3 ? it.pri : 2;
           ws.todos.push({
             id: makeId('todo'),
             title: it.t,
-            subjectId: subjId,
+            ...(subjId ? { subjectId: subjId } : {}),
             dueDate: it.d || '',
-            priority: it.pri === 3 ? 3 : it.pri === 1 ? 1 : 2,
+            priority,
             done: Boolean(it.done),
-            createdAt: new Date().toISOString(),
+            ...(it.da && /^\d{4}-\d{2}-\d{2}$/.test(it.da) ? { doneAt: it.da } : {}),
+            ...(cat ? { category: cat } : {}),
+            ...(it.st ? { starred: true } : {}),
+            ...(it.td && /^\d{4}-\d{2}-\d{2}$/.test(it.td) ? { addedToday: it.td } : {}),
+            ...(Array.isArray(it.tg) && it.tg.length > 0
+              ? { tags: it.tg.map(String).filter(Boolean) }
+              : {}),
+            ...(typeof it.est === 'number' && it.est > 0 ? { estMins: it.est } : {}),
+            ...(validRepeat ? { repeat: validRepeat } : {}),
+            ...(parsedSteps && parsedSteps.length > 0 ? { steps: parsedSteps } : {}),
+            ...(typeof it.note === 'string' && it.note.trim() ? { note: it.note.trim() } : {}),
+            createdAt:
+              typeof it.cr === 'number' && Number.isFinite(it.cr) && it.cr > 0
+                ? new Date(it.cr).toISOString()
+                : new Date().toISOString(),
           });
         }
       });
@@ -706,7 +980,7 @@ export function convertLegacyEntriesToWorkspace(
               title: it.text,
               subjectId: subj?.id,
               dueDate: it.due || '',
-              priority: it.pri === 3 ? 3 : it.pri === 1 ? 1 : 2,
+              priority: it.pri === 0 || it.pri === 1 || it.pri === 2 || it.pri === 3 ? it.pri : 2,
               done: Boolean(it.done),
               createdAt: new Date().toISOString(),
             });
@@ -737,12 +1011,144 @@ export function convertLegacyEntriesToWorkspace(
         });
       }
 
-      if (pl.hist && typeof pl.hist === 'object') {
-        let mins = 0;
-        Object.values(pl.hist).forEach((entry) => {
-          mins += Number(entry?.mins || 0);
+      if (Array.isArray(pl.log)) {
+        const nextLog = [...(ws.studyLog || [])];
+        const existingLogKeys = new Set(
+          nextLog.map(
+            (l) => `${l.date}::${l.time || ''}::${l.mins}::${l.subjectId || ''}::${(l.note || '').trim()}`
+          )
+        );
+        pl.log.forEach((entry) => {
+          if (!entry || !entry.d || !/^\d{4}-\d{2}-\d{2}$/.test(entry.d)) return;
+          const mins = Math.max(0, Math.round(Number(entry.m) || 0));
+          const note = typeof entry.x === 'string' && entry.x.trim() ? entry.x.trim() : undefined;
+          if (mins <= 0 && !note) return;
+          hadLegacyData = true;
+          const subjId = entry.i != null ? indexToSubjId.get(entry.i) : undefined;
+          const time =
+            typeof entry.h === 'string' && /^\d{2}:\d{2}$/.test(entry.h) ? entry.h : undefined;
+          const kind: StudyLogEntry['kind'] =
+            entry.k === 'pomo'
+              ? 'pomo'
+              : entry.k === 'manual'
+              ? 'manual'
+              : entry.k === 'recall'
+              ? 'recall'
+              : 'timer';
+          const dedupKey = `${entry.d}::${time || ''}::${mins}::${subjId || ''}::${note || ''}`;
+          if (existingLogKeys.has(dedupKey)) return;
+          existingLogKeys.add(dedupKey);
+          nextLog.push({
+            id: makeId('log'),
+            date: entry.d,
+            ...(time ? { time } : {}),
+            mins,
+            ...(subjId ? { subjectId: subjId } : {}),
+            kind,
+            ...(note ? { note } : {}),
+          });
         });
-        if (mins > ws.studyMinutesLogged) ws.studyMinutesLogged = mins;
+        ws.studyLog = nextLog;
+      }
+
+      if (Array.isArray(pl.scores)) {
+        const nextScores: PastPaperScore[] = [...(ws.paperScores || [])];
+        pl.scores.forEach((sc) => {
+          if (!sc || typeof sc !== 'object') return;
+          const paper = String(sc.paper || sc.p || '').trim();
+          const mark = Number(sc.mark ?? sc.m ?? 0);
+          const total = Number(sc.total ?? sc.t ?? 0);
+          const date = String(sc.date || sc.d || '').trim();
+          if (!paper && total <= 0) return;
+          hadLegacyData = true;
+          const subjId =
+            sc.i != null
+              ? indexToSubjId.get(sc.i)
+              : sc.subj
+              ? findOrAddSubject(ws, sc.subj).id
+              : undefined;
+          const dup = nextScores.some(
+            (x) =>
+              x.paper === paper &&
+              x.date === date &&
+              x.mark === mark &&
+              x.total === total &&
+              x.subjectId === subjId
+          );
+          if (!dup) {
+            nextScores.push({
+              id: makeId('score'),
+              ...(subjId ? { subjectId: subjId } : {}),
+              paper: paper || 'Past Paper',
+              mark,
+              total,
+              date,
+            });
+          }
+        });
+        ws.paperScores = nextScores;
+      }
+
+      if (pl.today && typeof pl.today.d === 'string' && Array.isArray(pl.today.items)) {
+        hadLegacyData = true;
+        const mappedItems: DailyStudyTaskItem[] = [];
+        pl.today.items.forEach((it) => {
+          const subjId = it.i != null ? indexToSubjId.get(it.i) : undefined;
+          if (!subjId) return;
+          const topicObj =
+            it.i != null && typeof it.j === 'number' && it.j >= 0
+              ? subjTopicsByIdx.get(it.i)?.[it.j]
+              : undefined;
+          mappedItems.push({
+            id: makeId('dt'),
+            subjectId: subjId,
+            ...(topicObj ? { topicId: topicObj.id } : {}),
+            kind: it.p || it.k === 'paper' ? 'paper' : 'recall',
+            done: Number(it.done) || 0,
+          });
+        });
+        ws.dailyStudyTasks = {
+          date: pl.today.d,
+          items: mappedItems,
+        };
+      }
+
+      const logTotalMins = (ws.studyLog || []).reduce((acc, l) => acc + (Number(l.mins) || 0), 0);
+      let histMins = 0;
+      const studyDateSet = new Set<string>();
+      (ws.studyLog || []).forEach((l) => {
+        if (l.mins > 0 && /^\d{4}-\d{2}-\d{2}$/.test(l.date)) studyDateSet.add(l.date);
+      });
+      if (pl.hist && typeof pl.hist === 'object') {
+        Object.entries(pl.hist).forEach(([dt, entry]) => {
+          if (/^\d{4}-\d{2}-\d{2}$/.test(dt) && ((typeof entry === 'number' && entry > 0) || (typeof entry === 'object' && Number(entry?.mins || 0) > 0))) {
+            studyDateSet.add(dt);
+          }
+          if (entry && typeof entry === 'object') {
+            histMins += Number(entry.mins || 0);
+          }
+        });
+      }
+      const bestTotalMins = Math.max(ws.studyMinutesLogged, logTotalMins, histMins);
+      if (bestTotalMins > ws.studyMinutesLogged) ws.studyMinutesLogged = bestTotalMins;
+
+      if (studyDateSet.size > 0) {
+        const sortedAsc = [...studyDateSet].sort();
+        const latestDt = sortedAsc[sortedAsc.length - 1];
+        if (!ws.lastStudyDate || latestDt > ws.lastStudyDate) {
+          ws.lastStudyDate = latestDt;
+        }
+        let streak = 1;
+        for (let idx = sortedAsc.length - 2; idx >= 0; idx--) {
+          const curMs = new Date(`${sortedAsc[idx + 1]}T12:00:00Z`).getTime();
+          const prevMs = new Date(`${sortedAsc[idx]}T12:00:00Z`).getTime();
+          if (Math.round((curMs - prevMs) / 86400000) === 1) {
+            streak += 1;
+          } else {
+            break;
+          }
+        }
+        if (streak > ws.studyStreakDays) ws.studyStreakDays = streak;
       }
     } catch {
       // ignore invalid planner JSON
@@ -1058,6 +1464,12 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
           rawIncomingParentId: t.parentTopicId,
         });
       }
+      if (match.confidence === undefined && t.confidence !== undefined) {
+        match.confidence = t.confidence;
+        if (t.completed) match.completed = true;
+      } else if (!match.completed && t.completed) {
+        match.completed = true;
+      }
       if (!match.notes.summary && t.notes.summary) match.notes.summary = t.notes.summary;
       if (!match.notes.workedExample && t.notes.workedExample) {
         match.notes.workedExample = t.notes.workedExample;
@@ -1186,10 +1598,39 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
     }
   }
 
+  for (const ref of incoming.sharedFlashcardRefs || []) {
+    const mappedSubjId = subjIdRemap.get(ref.subjectId) || ref.subjectId;
+    const mappedTopicIds = Array.isArray(ref.topicIds)
+      ? Array.from(new Set(ref.topicIds.map((tid) => topicIdRemap.get(tid) || tid).filter(Boolean)))
+      : undefined;
+    const mappedScopeKey = ref.scopeKey.startsWith('subject::')
+      ? `subject::${mappedSubjId}`
+      : ref.scopeKey.startsWith('topic::')
+      ? `topic::${topicIdRemap.get(ref.scopeKey.slice(7)) || ref.scopeKey.slice(7)}`
+      : ref.scopeKey.startsWith('section::')
+      ? `section::${mappedSubjId}::${ref.scopeKey.split('::').slice(2).join('::')}`
+      : ref.scopeKey;
+    const existingRefs = next.sharedFlashcardRefs || [];
+    if (!existingRefs.some((x) => x.shareId === ref.shareId || x.scopeKey === mappedScopeKey)) {
+      next.sharedFlashcardRefs = [
+        ...existingRefs,
+        {
+          ...ref,
+          subjectId: mappedSubjId,
+          scopeKey: mappedScopeKey,
+          ...(mappedTopicIds && mappedTopicIds.length > 0 ? { topicIds: mappedTopicIds } : {}),
+        },
+      ];
+    }
+  }
+
   for (const td of incoming.todos) {
     const mappedSubjId = td.subjectId ? subjIdRemap.get(td.subjectId) || td.subjectId : undefined;
     const dup = next.todos.some(
-      (x) => x.title.trim().toLowerCase() === td.title.trim().toLowerCase() && x.dueDate === td.dueDate
+      (x) =>
+        x.title.trim().toLowerCase() === td.title.trim().toLowerCase() &&
+        x.dueDate === td.dueDate &&
+        (x.category || undefined) === (td.category || undefined)
     );
     if (!dup) {
       next.todos.push({ ...td, id: makeId('todo'), subjectId: mappedSubjId });
@@ -1210,6 +1651,96 @@ export function mergeWorkspaces(base: WorkspaceData, incoming: WorkspaceData): W
         topicId: mappedTopicId,
       });
     }
+  }
+
+  if (incoming.studyLog && incoming.studyLog.length > 0) {
+    const curLog = [...(next.studyLog || [])];
+    const logKeys = new Set(
+      curLog.map(
+        (l) => `${l.date}::${l.time || ''}::${l.mins}::${l.subjectId || ''}::${(l.note || '').trim()}`
+      )
+    );
+    for (const l of incoming.studyLog) {
+      const mappedSubjId = l.subjectId ? subjIdRemap.get(l.subjectId) || l.subjectId : undefined;
+      const key = `${l.date}::${l.time || ''}::${l.mins}::${mappedSubjId || ''}::${(l.note || '').trim()}`;
+      if (!logKeys.has(key)) {
+        logKeys.add(key);
+        curLog.push({
+          ...l,
+          id: makeId('log'),
+          ...(mappedSubjId ? { subjectId: mappedSubjId } : {}),
+        });
+      }
+    }
+    next.studyLog = curLog;
+  }
+
+  if (incoming.paperScores && incoming.paperScores.length > 0) {
+    const curScores = [...(next.paperScores || [])];
+    for (const sc of incoming.paperScores) {
+      const mappedSubjId = sc.subjectId ? subjIdRemap.get(sc.subjectId) || sc.subjectId : undefined;
+      const dup = curScores.some(
+        (x) =>
+          x.paper === sc.paper &&
+          x.date === sc.date &&
+          x.mark === sc.mark &&
+          x.total === sc.total &&
+          x.subjectId === mappedSubjId
+      );
+      if (!dup) {
+        curScores.push({
+          ...sc,
+          id: makeId('score'),
+          ...(mappedSubjId ? { subjectId: mappedSubjId } : {}),
+        });
+      }
+    }
+    next.paperScores = curScores;
+  }
+
+  if (incoming.customCountdowns && incoming.customCountdowns.length > 0) {
+    const curCountdowns: CustomCountdownItem[] = [...(next.customCountdowns || [])];
+    for (const cd of incoming.customCountdowns) {
+      if (!curCountdowns.some((x) => x.title === cd.title && x.date === cd.date)) {
+        curCountdowns.push({ ...cd, id: makeId('cd') });
+      }
+    }
+    next.customCountdowns = curCountdowns;
+  }
+
+  if (incoming.dailyStudyTasks && incoming.dailyStudyTasks.items.length > 0) {
+    const mappedItems = incoming.dailyStudyTasks.items.map((it) => ({
+      ...it,
+      id: makeId('dt'),
+      subjectId: subjIdRemap.get(it.subjectId) || it.subjectId,
+      ...(it.topicId ? { topicId: topicIdRemap.get(it.topicId) || it.topicId } : {}),
+    }));
+    if (!next.dailyStudyTasks || next.dailyStudyTasks.date <= incoming.dailyStudyTasks.date) {
+      next.dailyStudyTasks = {
+        date: incoming.dailyStudyTasks.date,
+        items: mappedItems,
+      };
+    }
+  }
+
+  if (incoming.plannerPrefs) {
+    const basePrefs = next.plannerPrefs;
+    const baseIsDefault =
+      !basePrefs ||
+      (basePrefs.weekdayStart === DEFAULT_PLANNER_PREFS.weekdayStart &&
+        basePrefs.weekendStart === DEFAULT_PLANNER_PREFS.weekendStart &&
+        JSON.stringify(basePrefs.availHours) === JSON.stringify(DEFAULT_PLANNER_PREFS.availHours));
+    if (baseIsDefault) {
+      next.plannerPrefs = {
+        weekdayStart: incoming.plannerPrefs.weekdayStart,
+        weekendStart: incoming.plannerPrefs.weekendStart,
+        availHours: [...incoming.plannerPrefs.availHours],
+      };
+    }
+  }
+
+  if (incoming.lastStudyDate && (!next.lastStudyDate || incoming.lastStudyDate > next.lastStudyDate)) {
+    next.lastStudyDate = incoming.lastStudyDate;
   }
 
   next.studyMinutesLogged = Math.max(next.studyMinutesLogged, incoming.studyMinutesLogged);

@@ -32,6 +32,8 @@ export interface ShareTargetConfig {
   defaultSummary: string;
   itemCount: number;
   rootTopicOldId?: string;
+  subjectId?: string;
+  shareScopeKey?: string;
   existingShare?: SharedStudyItem;
   subTopicShareOptions?: SubTopicShareOption[];
   initialFlashcardTopicId?: string;
@@ -41,6 +43,13 @@ export interface ShareTargetConfig {
   subjectPayload?: SharedSubjectPayload;
 }
 
+export interface FlashcardPublishContext {
+  subjectId?: string;
+  scopeKey?: string;
+  topicIds?: string[];
+  sectionNames?: string[];
+}
+
 interface ShareItemModalProps {
   open: boolean;
   onClose: () => void;
@@ -48,7 +57,11 @@ interface ShareItemModalProps {
   firebaseUser: User | null;
   authorName: string;
   onOpenAuth: () => void;
-  onPublished: (item: SharedStudyItem, topicId?: string) => void;
+  onPublished: (
+    item: SharedStudyItem,
+    topicId?: string,
+    flashcardCtx?: FlashcardPublishContext
+  ) => void;
 }
 
 const MAX_SHARE_PAYLOAD_BYTES = 390_000;
@@ -97,8 +110,8 @@ export function ShareItemModal({
       setPublishMode(existing ? 'update' : 'new');
       setTitle(existing?.title || target.defaultTitle);
       setSummary(existing?.summary || target.defaultSummary);
-      setTitleEdited(false);
-      setSummaryEdited(false);
+      setTitleEdited(Boolean(existing?.title));
+      setSummaryEdited(Boolean(existing?.summary));
       setVisibility(existing?.visibility || 'public');
 
       if (existing && target.type === 'notes') {
@@ -130,6 +143,29 @@ export function ShareItemModal({
       ) {
         setFlashcardScopeMode('topics');
         setSelectedFlashcardTopicIds(new Set([initTopicId]));
+      } else if (
+        target.type === 'flashcards' &&
+        existing &&
+        existing.flashcardsPayload?.cards.length
+      ) {
+        // Pre-select decks matching existing published share if partial
+        const prevSecs = new Set(
+          existing.flashcardsPayload.cards
+            .map((c) => (c.sectionName || 'Core Deck').trim().toLowerCase())
+            .filter(Boolean)
+        );
+        const matchingOptIds = fcOpts
+          .filter((o) =>
+            o.cards.some((c) => prevSecs.has((c.sectionName || 'Core Deck').trim().toLowerCase()))
+          )
+          .map((o) => o.topicId);
+        if (matchingOptIds.length > 0 && matchingOptIds.length < fcOpts.length) {
+          setFlashcardScopeMode('topics');
+          setSelectedFlashcardTopicIds(new Set(matchingOptIds));
+        } else {
+          setFlashcardScopeMode('all');
+          setSelectedFlashcardTopicIds(new Set(fcOpts.map((o) => o.topicId)));
+        }
       } else {
         setFlashcardScopeMode('all');
         setSelectedFlashcardTopicIds(new Set(fcOpts.map((o) => o.topicId)));
@@ -335,7 +371,22 @@ export function ShareItemModal({
           });
       setWasUpdated(canUpdateExisting);
       setPublishedItem(item);
-      onPublished(item, target.rootTopicOldId);
+      const fcCtx: FlashcardPublishContext | undefined =
+        target.type === 'flashcards'
+          ? {
+              subjectId: target.subjectId,
+              scopeKey: target.shareScopeKey,
+              topicIds: selectedFlashcardTopics.map((o) => o.topicId),
+              sectionNames: Array.from(
+                new Set(
+                  (resolvedFlashcardsPayload?.cards || [])
+                    .map((c) => (c.sectionName || 'Core Deck').trim())
+                    .filter(Boolean)
+                )
+              ),
+            }
+          : undefined;
+      onPublished(item, target.rootTopicOldId, fcCtx);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to share right now.');
     } finally {
@@ -373,7 +424,11 @@ export function ShareItemModal({
                   ? 'Shared Link Updated!'
                   : 'Ready to Share!'
                 : hasExistingOwnShare && publishMode === 'update'
-                ? 'Update Shared Notes'
+                ? target.type === 'notes'
+                  ? 'Update Shared Notes'
+                  : target.type === 'flashcards'
+                  ? 'Update Shared Flashcards'
+                  : 'Update Shared Subject'
                 : `Share ${
                     target.type === 'notes'
                       ? 'Topic Notes'
@@ -494,7 +549,9 @@ export function ShareItemModal({
                   </div>
                   <p className="mt-1 text-[11px] text-[var(--mute)]">
                     {publishMode === 'update'
-                      ? `Publishing changes updates link #${target.existingShare.shareCode} with your newest notes in Community Share.`
+                      ? `Publishing changes updates link #${target.existingShare.shareCode} with your newest ${
+                          target.type === 'flashcards' ? 'flashcards' : 'notes'
+                        } in Community Share.`
                       : 'Creating a new link leaves your previous share unchanged and generates a new 6-character code.'}
                   </p>
                 </div>

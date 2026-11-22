@@ -5,6 +5,7 @@ import {
   isNoteEmpty,
   parseTextIntoStructuredNote,
 } from './noteFormat';
+import { isNoteImagePoint } from './imageUtils';
 import { normalizeStudySymbols } from './noteSymbols';
 import { convertLegacyEntriesToWorkspace, normalizeWorkspace } from './workspaceStore';
 import { StructuredNoteData, TimelineEventItem, WorkspaceData } from '../types';
@@ -49,6 +50,7 @@ export interface BackupImportCounts {
   timelines: number;
   timelineTopics: number;
   planner: number;
+  studyLogs: number;
 }
 
 export interface ParsedBackupBundle {
@@ -977,7 +979,8 @@ export function parseUniversalStudyImport(
         }
       }
 
-      if (/^\|.+\|$/.test(t)) {
+      if (/^\|.+\|$/.test(t) || isNoteImagePoint(t)) {
+        if (isNoteImagePoint(t)) skippedDeckMetaLines++;
         continue;
       }
 
@@ -1099,7 +1102,7 @@ export function parseUniversalStudyImport(
           if (idx === 0 && (/^#{1,3}\s+/.test(l) || /^(?:deck|set|flashcards?)\s*:/i.test(l))) {
             return false;
           }
-          if (csvHeaderRe.test(l)) return false;
+          if (csvHeaderRe.test(l) || isNoteImagePoint(l)) return false;
           return true;
         });
 
@@ -1264,6 +1267,7 @@ export function parseUniversalStudyImport(
         continue;
       }
       inTable = false;
+      if (isNoteImagePoint(t)) continue;
       if (t.startsWith('### ')) subheadings++;
       else if (t.startsWith('↳ ')) subBullets++;
       else if (!t.startsWith('¶ ')) bullets++;
@@ -1347,9 +1351,11 @@ export function parseBackupJsonToWorkspace(rawJson: string): ParsedBackupBundle 
         Array.isArray(obj.subs) ||
         Array.isArray(obj.todos) ||
         Array.isArray(obj.blocks) ||
+        Array.isArray(obj.log) ||
+        (obj.cal && typeof obj.cal === 'object') ||
         (obj.td && typeof obj.td === 'object')
       ) {
-        formatLabel = 'Planner Backup';
+        formatLabel = 'Revision Planner Backup';
         pln['mockplanner.v1'] = JSON.stringify(obj);
       }
 
@@ -1379,6 +1385,7 @@ export function parseBackupJsonToWorkspace(rawJson: string): ParsedBackupBundle 
         timelines: timelinesCount,
         timelineTopics,
         planner: parsedWs.todos.length + parsedWs.calendarBlocks.length,
+        studyLogs: parsedWs.studyLog?.length || 0,
       },
     };
   } catch {

@@ -1,4 +1,5 @@
 import {
+  ChangeEvent,
   ClipboardEvent,
   DragEvent,
   FocusEvent,
@@ -20,15 +21,18 @@ import {
   Code,
   Copy,
   Eraser,
+  FileText,
   GitBranch,
   GripVertical,
   Heading2,
   Heading3,
   Highlighter,
+  ImagePlus,
   Indent,
   Italic,
   Layers,
   List,
+  Loader2,
   Outdent,
   Palette,
   Quote,
@@ -38,6 +42,7 @@ import {
   Type,
   Underline,
   Undo2,
+  Upload,
   X,
 } from 'lucide-react';
 import {
@@ -48,9 +53,17 @@ import {
   NOTE_SURFACE_COLORS,
   NOTE_TEXT_COLORS,
 } from '../lib/inlineRichText';
+import {
+  encodeNoteImagePoint,
+  extractClipboardImageFiles,
+  extractHtmlImageSrcs,
+  fileToOptimizedDataUrl,
+  NoteImageWidth,
+} from '../lib/imageUtils';
 import { NOTE_COLOR_OPTIONS, NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints, makeNoteId } from '../lib/noteFormat';
 import { countRightArrows, normalizeStudySymbols, splitRightArrowSteps } from '../lib/noteSymbols';
+import { parsePdfFile } from '../lib/pdfImporter';
 import { NoteAccentColor, NotePartRole, NoteSectionBlock, StructuredNoteData } from '../types';
 
 export type NotionBlockType =
@@ -62,9 +75,12 @@ export type NotionBlockType =
   | 'factbox'
   | 'flow'
   | 'table'
+  | 'image'
   | 'key_term'
   | 'worked_example'
   | 'exam_tip';
+
+type SlashActionType = NotionBlockType | 'pdf_pages';
 
 export interface NotionBlock {
   id: string;
@@ -74,13 +90,15 @@ export interface NotionBlock {
   indent?: number;
   steps?: string[];
   rows?: string[][];
+  src?: string;
+  imageWidth?: NoteImageWidth;
   accentColor?: NoteAccentColor;
   partRole?: NotePartRole;
   tableColor?: string;
 }
 
 const SLASH_OPTIONS: Array<{
-  type: NotionBlockType;
+  type: SlashActionType;
   label: string;
   hint: string;
   keywords: string;
@@ -108,6 +126,18 @@ const SLASH_OPTIONS: Array<{
     label: 'Bullet List',
     hint: 'Indented bullet item (shortcut: - , Tab to indent)',
     keywords: 'bullet list point fact item',
+  },
+  {
+    type: 'image',
+    label: 'Image / Diagram',
+    hint: 'Insert picture from files or press Ctrl+V anywhere',
+    keywords: 'image photo picture diagram figure screenshot paste ctrl v',
+  },
+  {
+    type: 'pdf_pages',
+    label: 'PDF Document Pages',
+    hint: 'Embed visual PDF pages directly inside your notes',
+    keywords: 'pdf document file handout worksheet pages',
   },
   {
     type: 'table',
@@ -153,7 +183,7 @@ const SLASH_OPTIONS: Array<{
   },
 ];
 
-function blockTypeIcon(type: NotionBlockType) {
+function blockTypeIcon(type: SlashActionType) {
   switch (type) {
     case 'heading':
       return <Heading2 className="h-3.5 w-3.5" aria-hidden="true" />;
@@ -163,6 +193,10 @@ function blockTypeIcon(type: NotionBlockType) {
       return <List className="h-3.5 w-3.5" aria-hidden="true" />;
     case 'paragraph':
       return <Type className="h-3.5 w-3.5" aria-hidden="true" />;
+    case 'image':
+      return <ImagePlus className="h-3.5 w-3.5" aria-hidden="true" />;
+    case 'pdf_pages':
+      return <FileText className="h-3.5 w-3.5" aria-hidden="true" />;
     case 'factbox':
       return <Quote className="h-3.5 w-3.5" aria-hidden="true" />;
     case 'flow':
@@ -237,6 +271,14 @@ export function structuredNoteToBlocks(note: StructuredNoteData): NotionBlock[] 
           text: '',
           extra: item.label || '',
           steps: item.steps.length ? [...item.steps] : ['', ''],
+        });
+      } else if (item.kind === 'image') {
+        blocks.push({
+          id: makeNoteId('blk'),
+          type: 'image',
+          text: item.caption || '',
+          src: item.src,
+          imageWidth: item.width || 'wide',
         });
       } else if (item.kind === 'table') {
         const rows = [[...item.headers], ...item.rows.map((r) => [...r])].filter((r) =>
@@ -379,6 +421,16 @@ export function blocksToStructuredNote(
             sec.points.push(normRow(rawRows[r]));
           }
         }
+      }
+    } else if (b.type === 'image') {
+      if (b.src && b.src.trim()) {
+        ensureSection().points.push(
+          encodeNoteImagePoint({
+            src: b.src,
+            caption: b.text,
+            width: b.imageWidth || 'wide',
+          })
+        );
       }
     } else if (b.type === 'key_term') {
       if (b.text.trim() || (b.extra || '').trim()) {
@@ -626,8 +678,11 @@ export function NotionTopicEditor({
   const [slashHighlightIdx, setSlashHighlightIdx] = useState(0);
   const [dragBlockId, setDragBlockId] = useState<string | null>(null);
   const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+  const [fileDropActive, setFileDropActive] = useState<boolean>(false);
   const [textColorOpen, setTextColorOpen] = useState(false);
   const [highlightOpen, setHighlightOpen] = useState(false);
+  const [mediaBusyMsg, setMediaBusyMsg] = useState<string | null>(null);
+  const [mediaErrorMsg, setMediaErrorMsg] = useState<string | null>(null);
 
   const historyRef = useRef<NotionBlock[][]>([blocks]);
   const historyIdxRef = useRef<number>(0);
@@ -638,6 +693,13 @@ export function NotionTopicEditor({
   const activeEditableCommitRef = useRef<((el: HTMLDivElement) => void) | null>(null);
   const textColorRef = useRef<HTMLDivElement | null>(null);
   const highlightMenuRef = useRef<HTMLDivElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingImageTargetRef = useRef<{
+    replaceBlockId?: string;
+    afterIdx?: number;
+  } | null>(null);
+  const pendingPdfAfterIdxRef = useRef<number | null>(null);
   const latestNotesRef = useRef(notes);
   latestNotesRef.current = notes;
 
@@ -751,11 +813,174 @@ export function NotionTopicEditor({
     return created.id;
   };
 
-  const insertFromRibbon = (type: NotionBlockType) => {
+  const insertMediaBlocksAt = (
+    mediaBlocks: NotionBlock[],
+    opts?: { afterIdx?: number; replaceBlockId?: string }
+  ) => {
+    if (mediaBlocks.length === 0) return;
+    let next: NotionBlock[];
+    if (opts?.replaceBlockId) {
+      const rIdx = blocks.findIndex((b) => b.id === opts.replaceBlockId);
+      if (rIdx >= 0) {
+        const cur = blocks[rIdx];
+        if (mediaBlocks.length === 1 && cur.type === 'image') {
+          mediaBlocks[0] = {
+            ...mediaBlocks[0],
+            id: cur.id,
+            text: cur.text || mediaBlocks[0].text,
+            imageWidth: cur.imageWidth || mediaBlocks[0].imageWidth || 'wide',
+          };
+        }
+        next = [...blocks.slice(0, rIdx), ...mediaBlocks, ...blocks.slice(rIdx + 1)];
+      } else {
+        next = [...blocks, ...mediaBlocks];
+      }
+    } else {
+      const focusedIdx = focusedBlockId
+        ? blocks.findIndex((b) => b.id === focusedBlockId)
+        : -1;
+      const targetIdx =
+        opts?.afterIdx !== undefined && opts.afterIdx >= 0
+          ? opts.afterIdx
+          : focusedIdx >= 0
+          ? focusedIdx
+          : blocks.length - 1;
+      const target = blocks[targetIdx];
+      if (
+        target &&
+        target.type === 'paragraph' &&
+        !target.text.replace(/^\//, '').trim()
+      ) {
+        next = [...blocks.slice(0, targetIdx), ...mediaBlocks, ...blocks.slice(targetIdx + 1)];
+      } else {
+        next = [...blocks.slice(0, targetIdx + 1), ...mediaBlocks, ...blocks.slice(targetIdx + 1)];
+      }
+    }
+    commitBlocks(next, true, true);
+    setSlashBlockId(null);
+    setOpenMenuBlockId(null);
+  };
+
+  const insertImageFilesAt = async (
+    files: File[],
+    opts?: { afterIdx?: number; replaceBlockId?: string }
+  ) => {
+    const imgFiles = files.filter(
+      (f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name)
+    );
+    if (imgFiles.length === 0) return;
+    setMediaErrorMsg(null);
+    setMediaBusyMsg(
+      imgFiles.length === 1 ? 'Optimizing image…' : `Optimizing ${imgFiles.length} images…`
+    );
+    try {
+      const newBlocks: NotionBlock[] = [];
+      for (const file of imgFiles) {
+        const opt = await fileToOptimizedDataUrl(file);
+        newBlocks.push({
+          ...makeDefaultBlock('image', ''),
+          src: opt.dataUrl,
+          imageWidth: 'wide',
+        });
+      }
+      insertMediaBlocksAt(newBlocks, opts);
+    } catch (err) {
+      setMediaErrorMsg(
+        err instanceof Error ? err.message : 'Could not insert the selected image.'
+      );
+    } finally {
+      setMediaBusyMsg(null);
+    }
+  };
+
+  const insertPdfFileAt = async (file: File, afterIdx?: number) => {
+    setMediaErrorMsg(null);
+    setMediaBusyMsg(`Rendering PDF pages from ${file.name}…`);
+    try {
+      const ab = await file.arrayBuffer();
+      const res = await parsePdfFile(ab);
+      const docTitle = file.name.replace(/\.[^.]+$/, '');
+      const created: NotionBlock[] = [];
+
+      if (res.pageImages.length > 0) {
+        for (const pImg of res.pageImages) {
+          created.push({
+            ...makeDefaultBlock(
+              'image',
+              res.pageCount > 1 ? `${docTitle} — Page ${pImg.pageNum} of ${res.pageCount}` : docTitle
+            ),
+            src: pImg.dataUrl,
+            imageWidth: 'wide',
+          });
+        }
+      } else if (res.text.trim()) {
+        for (const line of res.text.split('\n').slice(0, 60)) {
+          const clean = line.trim();
+          if (!clean) continue;
+          if (/^#\s+/.test(clean)) {
+            created.push(makeDefaultBlock('heading', clean.replace(/^#\s+/, '')));
+          } else if (/^#{2,3}\s+/.test(clean)) {
+            created.push(makeDefaultBlock('subheading', clean.replace(/^#{2,3}\s+/, '')));
+          } else if (/^-\s+/.test(clean)) {
+            created.push(makeDefaultBlock('bullet', clean.replace(/^-\s+/, '')));
+          } else {
+            created.push(makeDefaultBlock('paragraph', clean));
+          }
+        }
+      }
+
+      if (created.length === 0) {
+        setMediaErrorMsg('No pages or readable content found in this PDF.');
+        return;
+      }
+
+      insertMediaBlocksAt(created, { afterIdx });
+    } catch (err) {
+      setMediaErrorMsg(err instanceof Error ? err.message : 'Could not parse the PDF file.');
+    } finally {
+      setMediaBusyMsg(null);
+    }
+  };
+
+  const openImagePickerForBlock = (opts?: { replaceBlockId?: string; afterIdx?: number }) => {
+    pendingImageTargetRef.current = opts || null;
+    imageInputRef.current?.click();
+  };
+
+  const openPdfPicker = (afterIdx?: number) => {
+    pendingPdfAfterIdxRef.current = afterIdx !== undefined ? afterIdx : null;
+    pdfInputRef.current?.click();
+  };
+
+  const handleImageInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    const target = pendingImageTargetRef.current || undefined;
+    pendingImageTargetRef.current = null;
+    if (files.length > 0) {
+      void insertImageFilesAt(files, target);
+    }
+  };
+
+  const handlePdfInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const afterIdx = pendingPdfAfterIdxRef.current ?? undefined;
+    pendingPdfAfterIdxRef.current = null;
+    if (file) {
+      void insertPdfFileAt(file, afterIdx);
+    }
+  };
+
+  const insertFromRibbon = (type: SlashActionType) => {
     const focusedIdx = focusedBlockId
       ? blocks.findIndex((b) => b.id === focusedBlockId)
       : -1;
     const targetIdx = focusedIdx >= 0 ? focusedIdx : blocks.length - 1;
+    if (type === 'pdf_pages') {
+      openPdfPicker(targetIdx);
+      return;
+    }
     const cur = blocks[targetIdx];
     if (
       cur &&
@@ -764,6 +989,10 @@ export function NotionTopicEditor({
       focusedIdx >= 0
     ) {
       changeBlockType(cur.id, type, true);
+      return;
+    }
+    if (type === 'image') {
+      openImagePickerForBlock({ afterIdx: targetIdx });
       return;
     }
     insertBlockAfter(targetIdx, type);
@@ -789,7 +1018,31 @@ export function NotionTopicEditor({
     focusBlock(clone.id);
   };
 
-  const changeBlockType = (id: string, nextType: NotionBlockType, clearSlash = false) => {
+  const changeBlockType = (id: string, nextType: SlashActionType, clearSlash = false) => {
+    if (nextType === 'pdf_pages') {
+      const idx = blocks.findIndex((b) => b.id === id);
+      if (clearSlash) {
+        updateBlock(id, { text: '' }, true);
+      }
+      setSlashBlockId(null);
+      setOpenMenuBlockId(null);
+      openPdfPicker(idx >= 0 ? idx : undefined);
+      return;
+    }
+
+    if (nextType === 'image') {
+      const targetBlock = blocks.find((b) => b.id === id);
+      if (targetBlock && !targetBlock.src) {
+        if (clearSlash && targetBlock.text.startsWith('/')) {
+          updateBlock(id, { text: '' }, true);
+        }
+        setSlashBlockId(null);
+        setOpenMenuBlockId(null);
+        openImagePickerForBlock({ replaceBlockId: id });
+        return;
+      }
+    }
+
     const next = blocks.map((b) => {
       if (b.id !== id) return b;
       const cleanedText = clearSlash && b.text.startsWith('/') ? '' : b.text;
@@ -853,7 +1106,7 @@ export function NotionTopicEditor({
     commitBlocks(next, true, true);
     setSlashBlockId(null);
     setOpenMenuBlockId(null);
-    if (nextType !== 'table' && nextType !== 'flow') {
+    if (nextType !== 'table' && nextType !== 'flow' && nextType !== 'image') {
       focusBlock(id);
     }
   };
@@ -1057,7 +1310,42 @@ export function NotionTopicEditor({
     block: NotionBlock,
     idx: number
   ) => {
+    // 1. Intercept pasted images (Ctrl+V screenshots, copied images, image files)
+    const clipImgFiles = extractClipboardImageFiles(e.clipboardData);
+    if (clipImgFiles.length > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      const { before, after } = splitEditableAtCaret(el);
+      const onEmptyBlock = !before.trim() && !after.trim() && block.type === 'paragraph';
+      void insertImageFilesAt(
+        clipImgFiles,
+        onEmptyBlock ? { replaceBlockId: block.id } : { afterIdx: idx }
+      );
+      return;
+    }
+
     const rawPasted = e.clipboardData?.getData('text/plain') || '';
+    const htmlPasted = e.clipboardData?.getData('text/html') || '';
+    if (!rawPasted.trim() && htmlPasted) {
+      const htmlImgs = extractHtmlImageSrcs(htmlPasted);
+      if (htmlImgs.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        const { before, after } = splitEditableAtCaret(el);
+        const onEmptyBlock = !before.trim() && !after.trim() && block.type === 'paragraph';
+        const imgBlocks: NotionBlock[] = htmlImgs.map((src) => ({
+          ...makeDefaultBlock('image', ''),
+          src,
+          imageWidth: 'wide',
+        }));
+        insertMediaBlocksAt(
+          imgBlocks,
+          onEmptyBlock ? { replaceBlockId: block.id } : { afterIdx: idx }
+        );
+        return;
+      }
+    }
+
     const pasted = normalizeStudySymbols(rawPasted, { preserveLeadingFlowMarker: true });
     const lines = pasted.replace(/\r/g, '').split('\n');
     const canConvertBlock =
@@ -1453,13 +1741,63 @@ export function NotionTopicEditor({
     setDropTargetIdx(null);
   };
 
+  const handleContainerPaste = (e: ClipboardEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented) return;
+    const clipImgFiles = extractClipboardImageFiles(e.clipboardData);
+    if (clipImgFiles.length > 0) {
+      e.preventDefault();
+      void insertImageFilesAt(clipImgFiles);
+      return;
+    }
+    const rawPlain = e.clipboardData?.getData('text/plain') || '';
+    const rawHtml = e.clipboardData?.getData('text/html') || '';
+    if (!rawPlain.trim() && rawHtml) {
+      const htmlImgs = extractHtmlImageSrcs(rawHtml);
+      if (htmlImgs.length > 0) {
+        e.preventDefault();
+        insertMediaBlocksAt(
+          htmlImgs.map((src) => ({
+            ...makeDefaultBlock('image', ''),
+            src,
+            imageWidth: 'wide',
+          }))
+        );
+      }
+    }
+  };
+
+  const handleContainerFileDrop = async (e: DragEvent<HTMLDivElement>) => {
+    if (dragBlockId) return;
+    const dropped = Array.from(e.dataTransfer.files || []);
+    if (dropped.length === 0) return;
+    const imgFiles = dropped.filter(
+      (f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name)
+    );
+    const pdfFiles = dropped.filter(
+      (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+    );
+    if (imgFiles.length === 0 && pdfFiles.length === 0) return;
+    e.preventDefault();
+    setFileDropActive(false);
+    if (imgFiles.length > 0) {
+      await insertImageFilesAt(imgFiles);
+    }
+    for (const pdf of pdfFiles) {
+      await insertPdfFileAt(pdf);
+    }
+  };
+
   const validTermsCount = blocks.filter(
     (b) => b.type === 'key_term' && b.text.trim() && (b.extra || '').trim()
   ).length;
 
   const wordCount = useMemo(() => {
     const allText = blocks
-      .flatMap((b) => [b.text, b.extra || '', ...(b.steps || []), ...(b.rows?.flat() || [])])
+      .flatMap((b) =>
+        b.type === 'image'
+          ? [b.text]
+          : [b.text, b.extra || '', ...(b.steps || []), ...(b.rows?.flat() || [])]
+      )
       .join(' ')
       .replace(/<[^>]+>/g, ' ')
       .trim();
@@ -1467,7 +1805,38 @@ export function NotionTopicEditor({
   }, [blocks]);
 
   return (
-    <div className="space-y-4">
+    <div
+      className="space-y-4"
+      onPaste={handleContainerPaste}
+      onDragOver={(e) => {
+        if (!dragBlockId && e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault();
+          setFileDropActive(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setFileDropActive(false);
+        }
+      }}
+      onDrop={(e) => void handleContainerFileDrop(e)}
+    >
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*,.png,.jpg,.jpeg,.webp,.gif"
+        multiple
+        onChange={handleImageInputChange}
+        className="hidden"
+      />
+      <input
+        ref={pdfInputRef}
+        type="file"
+        accept=".pdf,application/pdf"
+        onChange={handlePdfInputChange}
+        className="hidden"
+      />
+
       {/* Word-Like Sticky Top Formatting & One-Click Study Ribbon */}
       <div className="sd-card sticky top-2 z-20 space-y-2 px-3.5 py-2.5 backdrop-blur">
         {/* Row 1: Undo/Redo, Rich Formatting, Text/Highlight Colour, Hierarchy */}
@@ -1720,6 +2089,8 @@ export function NotionTopicEditor({
           </span>
           {(
             [
+              ['image', 'Image', ImagePlus],
+              ['pdf_pages', 'PDF', FileText],
               ['table', 'Table', Table2],
               ['exam_tip', 'Examiner Tip', AlertCircle],
               ['worked_example', 'Worked Example', CheckCircle2],
@@ -1739,11 +2110,47 @@ export function NotionTopicEditor({
               <span>+ {label}</span>
             </button>
           ))}
+          <span className="ml-auto hidden text-[11px] text-[var(--mute)] md:inline">
+            Tip: Ctrl+V pastes images directly
+          </span>
         </div>
       </div>
 
+      {(mediaBusyMsg || mediaErrorMsg || fileDropActive) && (
+        <div
+          role="status"
+          className={`flex items-center justify-between gap-2 rounded-xl border px-4 py-2 text-xs font-semibold ${
+            mediaErrorMsg
+              ? 'border-[var(--bad)] bg-[var(--card)] text-[var(--bad)]'
+              : 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))] text-[var(--ink)]'
+          }`}
+        >
+          <span className="inline-flex items-center gap-2">
+            {mediaBusyMsg && <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--e3)]" aria-hidden="true" />}
+            <span>
+              {mediaErrorMsg ||
+                mediaBusyMsg ||
+                'Drop images or PDF files anywhere to integrate them into your notes'}
+            </span>
+          </span>
+          {mediaErrorMsg && (
+            <button
+              type="button"
+              onClick={() => setMediaErrorMsg(null)}
+              className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)]"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Seamless Flowing Word-Style Document Sheet */}
-      <div className="sd-card px-5 py-7 sm:px-10 sm:py-9">
+      <div
+        className={`sd-card px-5 py-7 transition-colors sm:px-10 sm:py-9 ${
+          fileDropActive ? 'ring-2 ring-[var(--e3)] ring-offset-2 ring-offset-[var(--bg)]' : ''
+        }`}
+      >
         {/* Document Header */}
         <div className="mb-6 space-y-2.5 border-b border-[var(--line)] pb-5">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
@@ -1872,7 +2279,7 @@ export function NotionTopicEditor({
                       <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
                         Turn into
                       </div>
-                      {SLASH_OPTIONS.map((opt) => (
+                      {SLASH_OPTIONS.filter((opt) => opt.type !== 'pdf_pages').map((opt) => (
                         <button
                           key={opt.type}
                           type="button"
@@ -2086,12 +2493,111 @@ export function NotionTopicEditor({
                         onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
                         placeholder={
                           idx === 0
-                            ? 'Start typing your notes cleanly like a Word document… (or use Insert buttons above)'
-                            : 'Continue typing…'
+                            ? 'Start typing your notes, press Ctrl+V to paste an image, or use Insert above…'
+                            : 'Continue typing… (/ for blocks, Ctrl+V for images)'
                         }
                         className="min-h-[28px] py-0.5 text-[16px] leading-[1.72] text-[var(--ink)]"
                       />
                     )}
+
+                    {block.type === 'image' && (() => {
+                      const imgWidth = block.imageWidth || 'wide';
+                      const widthClass =
+                        imgWidth === 'compact'
+                          ? 'max-w-sm mx-auto'
+                          : imgWidth === 'medium'
+                          ? 'max-w-lg mx-auto'
+                          : imgWidth === 'full'
+                          ? 'w-full'
+                          : 'max-w-3xl mx-auto';
+                      return (
+                        <figure
+                          className={`group/img relative my-3 ${widthClass}`}
+                          onClick={() => setFocusedBlockId(block.id)}
+                        >
+                          {block.src ? (
+                            <div className="relative overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--card)]">
+                              <img
+                                src={block.src}
+                                alt={block.text || 'Integrated note image'}
+                                className="block h-auto w-full object-contain"
+                              />
+                              <div className="absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--card)]/92 p-1 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover/img:opacity-100 group-focus-within/img:opacity-100">
+                                {(
+                                  [
+                                    ['compact', 'S'],
+                                    ['medium', 'M'],
+                                    ['wide', 'W'],
+                                    ['full', 'Full'],
+                                  ] as const
+                                ).map(([sz, label]) => (
+                                  <button
+                                    key={sz}
+                                    type="button"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      updateBlock(block.id, { imageWidth: sz });
+                                    }}
+                                    title={`Image width: ${sz}`}
+                                    className={`cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-bold ${
+                                      imgWidth === sz
+                                        ? 'bg-[var(--e3)] text-white'
+                                        : 'text-[var(--ink)] hover:bg-[var(--bg)]'
+                                    }`}
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                                <span className="mx-0.5 h-3.5 w-px bg-[var(--line)]" aria-hidden="true" />
+                                <button
+                                  type="button"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    openImagePickerForBlock({ replaceBlockId: block.id });
+                                  }}
+                                  title="Replace image"
+                                  className="cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-semibold text-[var(--ink)] hover:bg-[var(--bg)]"
+                                >
+                                  Replace
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    deleteBlockAt(idx);
+                                  }}
+                                  aria-label="Remove image"
+                                  className="cursor-pointer rounded p-0.5 text-[var(--mute)] hover:text-[var(--bad)]"
+                                >
+                                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openImagePickerForBlock({ replaceBlockId: block.id })}
+                              className="flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-8 text-center transition-colors hover:border-[var(--e3)]"
+                            >
+                              <Upload className="h-5 w-5 text-[var(--e3)]" aria-hidden="true" />
+                              <span className="mt-2 text-xs font-semibold text-[var(--ink)]">
+                                Choose an image file or press Ctrl+V
+                              </span>
+                            </button>
+                          )}
+                          <figcaption className="mt-1.5">
+                            <input
+                              type="text"
+                              value={block.text}
+                              onFocus={() => setFocusedBlockId(block.id)}
+                              onChange={(ev) => updateBlock(block.id, { text: ev.target.value })}
+                              placeholder="Add caption (optional)…"
+                              className="w-full border-0 bg-transparent text-center text-xs text-[var(--mute)] outline-none placeholder:opacity-55 focus:text-[var(--ink)]"
+                            />
+                          </figcaption>
+                        </figure>
+                      );
+                    })()}
 
                     {block.type === 'factbox' && (() => {
                       const boxStyle = getTableSurfaceStyles(block.tableColor);

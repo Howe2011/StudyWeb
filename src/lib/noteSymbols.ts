@@ -54,7 +54,7 @@ export function normalizeStudySymbols(
   };
 
   s = s.replace(
-    /(`[^`\n]+`|<!--[\s\S]*?-->|<\/?(?:span|mark|u|strong|em|b|i|code|br|a|sub|sup|p|div|table|thead|tbody|tr|th|td|ul|ol|li|h[1-6]|blockquote)\b[^>]*>|https?:\/\/[^\s)>\]"']+)/gi,
+    /(@image:\{[^\n]+\}|`[^`\n]+`|<!--[\s\S]*?-->|<\/?(?:span|mark|u|strong|em|b|i|code|br|a|sub|sup|p|div|table|thead|tbody|tr|th|td|ul|ol|li|h[1-6]|blockquote)\b[^>]*>|https?:\/\/[^\s)>\]"']+)/gi,
     (m) => protect(m)
   );
 

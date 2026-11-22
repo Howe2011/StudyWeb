@@ -18,6 +18,7 @@ import {
   MoreHorizontal,
   Play,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Share2,
@@ -32,7 +33,13 @@ import { getByokConfig } from '../lib/byokStore';
 import { gradeAnswerViaVercelOrLocal } from '../lib/liveQuizCloud';
 import { smartSemanticFallbackCheck } from '../lib/quizGrader';
 import { applyFlashcardReview, makeId } from '../lib/workspaceStore';
-import { DeckGroup, StudyFlashcard, WorkspaceData, WorkspaceTab } from '../types';
+import {
+  DeckGroup,
+  SharedStudyItem,
+  StudyFlashcard,
+  WorkspaceData,
+  WorkspaceTab,
+} from '../types';
 
 interface FlashcardsViewProps {
   workspace: WorkspaceData;
@@ -41,6 +48,16 @@ interface FlashcardsViewProps {
   onUpdateWorkspace: (updater: (prev: WorkspaceData) => WorkspaceData) => void;
   onOpenImport: () => void;
   onShareDeck: (subjectId: string, sectionName: string, topicId?: string) => void;
+  getExistingDeckShare?: (
+    subjectId: string,
+    sectionName?: string,
+    topicId?: string
+  ) => SharedStudyItem | null;
+  onPublishDeckChanges?: (
+    subjectId: string,
+    sectionName?: string,
+    topicId?: string
+  ) => Promise<{ ok: boolean; shareCode?: string; error?: string }>;
   onNavigate: (tab: WorkspaceTab) => void;
 }
 
@@ -178,6 +195,8 @@ export function FlashcardsView({
   onUpdateWorkspace,
   onOpenImport,
   onShareDeck,
+  getExistingDeckShare,
+  onPublishDeckChanges,
   onNavigate,
 }: FlashcardsViewProps) {
   const [screen, setScreen] = useState<ViewScreen>('setup');
@@ -248,6 +267,11 @@ export function FlashcardsView({
   const [moveTargetTopicId, setMoveTargetTopicId] = useState<string>('__keep__');
   const [moveTargetSection, setMoveTargetSection] = useState<string>('');
   const [moveFeedback, setMoveFeedback] = useState<string | null>(null);
+  const [deckPublishBusyKey, setDeckPublishBusyKey] = useState<string | null>(null);
+  const [deckPublishNotice, setDeckPublishNotice] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
 
   // Folder / Deck Group management state
   const [folderModalOpen, setFolderModalOpen] = useState<boolean>(false);
@@ -1652,41 +1676,102 @@ export function FlashcardsView({
                   <Upload className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Import</span>
                 </button>
-                {subjectCards.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const activeTopicObj =
-                        selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
-                          ? topicById.get(selectedTopicFilter)
-                          : undefined;
-                      const shareSubjId =
-                        selectedSubjectId && selectedSubjectId !== 'ALL'
-                          ? selectedSubjectId
-                          : activeTopicObj?.subjectId ||
-                            subjectCards[0]?.subjectId ||
-                            workspace.subjects[0]?.id ||
-                            '';
-                      onShareDeck(
-                        shareSubjId,
-                        'ALL',
-                        selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
-                          ? selectedTopicFilter
-                          : 'ALL'
-                      );
-                    }}
-                    className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
-                  >
-                    <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>
-                      {selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
-                        ? 'Share Linked'
-                        : 'Share'}
-                    </span>
-                  </button>
-                )}
+                {subjectCards.length > 0 && (() => {
+                  const activeTopicObj =
+                    selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
+                      ? topicById.get(selectedTopicFilter)
+                      : undefined;
+                  const shareSubjId =
+                    selectedSubjectId && selectedSubjectId !== 'ALL'
+                      ? selectedSubjectId
+                      : activeTopicObj?.subjectId ||
+                        subjectCards[0]?.subjectId ||
+                        workspace.subjects[0]?.id ||
+                        '';
+                  const scopeTopicId =
+                    selectedTopicFilter !== 'ALL' && selectedTopicFilter !== '__unlinked__'
+                      ? selectedTopicFilter
+                      : 'ALL';
+                  const existingShare =
+                    shareSubjId && getExistingDeckShare
+                      ? getExistingDeckShare(shareSubjId, 'ALL', scopeTopicId)
+                      : null;
+                  const topBusy = deckPublishBusyKey === 'setup-top';
+
+                  return (
+                    <>
+                      {existingShare && onPublishDeckChanges && (
+                        <button
+                          type="button"
+                          disabled={topBusy}
+                          onClick={() => {
+                            setDeckPublishBusyKey('setup-top');
+                            setDeckPublishNotice(null);
+                            void onPublishDeckChanges(shareSubjId, 'ALL', scopeTopicId).then(
+                              (res) => {
+                                setDeckPublishBusyKey(null);
+                                if (res.ok) {
+                                  setDeckPublishNotice({
+                                    ok: true,
+                                    text: `Published deck updates to shared link #${res.shareCode || existingShare.shareCode}.`,
+                                  });
+                                  window.setTimeout(() => setDeckPublishNotice(null), 5000);
+                                } else if (res.error) {
+                                  setDeckPublishNotice({ ok: false, text: res.error });
+                                }
+                              }
+                            );
+                          }}
+                          title={`Update Community Share #${existingShare.shareCode} with your newest flashcards`}
+                          className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+                        >
+                          <RefreshCw
+                            className={`h-3.5 w-3.5 ${topBusy ? 'animate-spin' : ''}`}
+                            aria-hidden="true"
+                          />
+                          <span>{topBusy ? 'Publishing…' : 'Publish Changes'}</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onShareDeck(shareSubjId, 'ALL', scopeTopicId)}
+                        className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                      >
+                        <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>
+                          {existingShare
+                            ? `Share #${existingShare.shareCode}`
+                            : scopeTopicId !== 'ALL'
+                            ? 'Share Linked'
+                            : 'Share'}
+                        </span>
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
             </div>
+
+            {deckPublishNotice && (
+              <div
+                role="status"
+                className={`flex items-center justify-between gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold ${
+                  deckPublishNotice.ok
+                    ? 'border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] text-[var(--ink)]'
+                    : 'border-[var(--bad)] bg-[var(--card)] text-[var(--bad)]'
+                }`}
+              >
+                <span>{deckPublishNotice.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setDeckPublishNotice(null)}
+                  aria-label="Dismiss publish status"
+                  className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)]"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            )}
 
             {subjectCards.length === 0 ? (
               <div className="sd-card p-8 text-center">
@@ -2146,14 +2231,71 @@ export function FlashcardsView({
                                 {allGroupSelected ? 'Deselect' : 'Select'}
                               </button>
                               <span className="text-[var(--line)]">·</span>
-                              <button
-                                type="button"
-                                onClick={() => onShareDeck(grp.subjectId, 'ALL', 'ALL')}
-                                className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-[var(--mute)] hover:text-[var(--e3)] whitespace-nowrap"
-                              >
-                                <Share2 className="h-3 w-3" aria-hidden="true" />
-                                <span>Share</span>
-                              </button>
+                              {(() => {
+                                const subjShare = getExistingDeckShare
+                                  ? getExistingDeckShare(grp.subjectId, 'ALL', 'ALL')
+                                  : null;
+                                const busyKey = `subj::${grp.subjectId}`;
+                                const isBusy = deckPublishBusyKey === busyKey;
+                                return (
+                                  <>
+                                    {subjShare && onPublishDeckChanges && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() => {
+                                            setDeckPublishBusyKey(busyKey);
+                                            setDeckPublishNotice(null);
+                                            void onPublishDeckChanges(
+                                              grp.subjectId,
+                                              'ALL',
+                                              'ALL'
+                                            ).then((res) => {
+                                              setDeckPublishBusyKey(null);
+                                              if (res.ok) {
+                                                setDeckPublishNotice({
+                                                  ok: true,
+                                                  text: `Published ${grp.subjectName} deck updates to #${
+                                                    res.shareCode || subjShare.shareCode
+                                                  }.`,
+                                                });
+                                                window.setTimeout(
+                                                  () => setDeckPublishNotice(null),
+                                                  5000
+                                                );
+                                              } else if (res.error) {
+                                                setDeckPublishNotice({
+                                                  ok: false,
+                                                  text: res.error,
+                                                });
+                                              }
+                                            });
+                                          }}
+                                          className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                                        >
+                                          <RefreshCw
+                                            className={`h-3 w-3 ${isBusy ? 'animate-spin' : ''}`}
+                                            aria-hidden="true"
+                                          />
+                                          <span>{isBusy ? 'Publishing…' : 'Publish Changes'}</span>
+                                        </button>
+                                        <span className="text-[var(--line)]">·</span>
+                                      </>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => onShareDeck(grp.subjectId, 'ALL', 'ALL')}
+                                      className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-[var(--mute)] hover:text-[var(--e3)] whitespace-nowrap"
+                                    >
+                                      <Share2 className="h-3 w-3" aria-hidden="true" />
+                                      <span>
+                                        {subjShare ? `Share #${subjShare.shareCode}` : 'Share'}
+                                      </span>
+                                    </button>
+                                  </>
+                                );
+                              })()}
                             </div>
                           </div>
 
@@ -3221,6 +3363,57 @@ export function FlashcardsView({
                       <span>Export TSV</span>
                     </button>
                   )}
+
+                  {(() => {
+                    const manageSubjId =
+                      selectedSubjectId && selectedSubjectId !== 'ALL'
+                        ? selectedSubjectId
+                        : subjectCards[0]?.subjectId || workspace.subjects[0]?.id || '';
+                    const manageSec =
+                      manageSectionFilter !== 'ALL' ? manageSectionFilter : 'ALL';
+                    const manageTopic =
+                      manageTopicFilter !== 'ALL' && manageTopicFilter !== '__unlinked__'
+                        ? manageTopicFilter
+                        : 'ALL';
+                    const manageShare =
+                      manageSubjId && getExistingDeckShare
+                        ? getExistingDeckShare(manageSubjId, manageSec, manageTopic)
+                        : null;
+                    const busyKey = 'manage-top';
+                    const isBusy = deckPublishBusyKey === busyKey;
+                    if (!manageShare || !onPublishDeckChanges) return null;
+                    return (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => {
+                          setDeckPublishBusyKey(busyKey);
+                          void onPublishDeckChanges(manageSubjId, manageSec, manageTopic).then(
+                            (res) => {
+                              setDeckPublishBusyKey(null);
+                              if (res.ok) {
+                                setMoveFeedback(
+                                  `Published updated deck to Community Share #${
+                                    res.shareCode || manageShare.shareCode
+                                  }.`
+                                );
+                              } else if (res.error) {
+                                setMoveFeedback(res.error);
+                              }
+                            }
+                          );
+                        }}
+                        title={`Update Community Share #${manageShare.shareCode}`}
+                        className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap"
+                      >
+                        <RefreshCw
+                          className={`h-3.5 w-3.5 ${isBusy ? 'animate-spin' : ''}`}
+                          aria-hidden="true"
+                        />
+                        <span>{isBusy ? 'Publishing…' : 'Publish Changes'}</span>
+                      </button>
+                    );
+                  })()}
 
                   <button
                     type="button"

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ClipboardEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlignCenter,
@@ -24,6 +24,7 @@ import {
   Eye,
   EyeOff,
   FileCheck2,
+  FileText,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -33,6 +34,7 @@ import {
   Heading2,
   Heading3,
   Highlighter,
+  ImagePlus,
   Italic,
   Layers,
   List,
@@ -56,8 +58,16 @@ import {
   Undo2,
   Upload,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import { sanitizeDocumentHtml } from '../lib/documentRenderer';
+import {
+  encodeNoteImagePoint,
+  extractClipboardImageFiles,
+  extractHtmlImageSrcs,
+  fileToOptimizedDataUrl,
+} from '../lib/imageUtils';
+import { parsePdfFile } from '../lib/pdfImporter';
 import {
   getTableSurfaceStyles,
   NOTE_HIGHLIGHT_COLORS,
@@ -296,6 +306,15 @@ export function NotesStudioView({
     ok: boolean;
     text: string;
   } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; caption?: string } | null>(
+    null
+  );
+  const [readDragActive, setReadDragActive] = useState(false);
+  const [busyMediaNotice, setBusyMediaNotice] = useState<string | null>(null);
+  const docImageInputRef = useRef<HTMLInputElement | null>(null);
+  const docPdfInputRef = useRef<HTMLInputElement | null>(null);
+  const noteImageInputRef = useRef<HTMLInputElement | null>(null);
+  const notePdfInputRef = useRef<HTMLInputElement | null>(null);
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
   const [docTextColorOpen, setDocTextColorOpen] = useState(false);
   const [docHighlightOpen, setDocHighlightOpen] = useState(false);
@@ -306,7 +325,17 @@ export function NotesStudioView({
 
   useEffect(() => {
     setPublishShareNotice(null);
+    setLightboxImage(null);
   }, [selectedTopicId]);
+
+  useEffect(() => {
+    if (!lightboxImage) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxImage(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxImage]);
 
   useEffect(() => {
     if (!colorMenuOpen && !docTextColorOpen && !docHighlightOpen) return;
@@ -700,16 +729,253 @@ export function NotesStudioView({
     }));
   };
 
-  const replaceActiveNote = (nextNotes: StructuredNoteData) => {
-    if (!activeTopic) return;
-    updateTopic(activeTopic.id, (t) => ({
-      ...t,
-      notes: {
-        ...nextNotes,
+  const replaceActiveNote = useCallback(
+    (nextNotes: StructuredNoteData) => {
+      if (!activeTopic) return;
+      onUpdateWorkspace((prev) => ({
+        ...prev,
+        topics: prev.topics.map((t) =>
+          t.id === activeTopic.id
+            ? {
+                ...t,
+                notes: {
+                  ...nextNotes,
+                  updatedAt: new Date().toISOString(),
+                },
+              }
+            : t
+        ),
         updatedAt: new Date().toISOString(),
-      },
-    }));
-  };
+      }));
+    },
+    [activeTopic, onUpdateWorkspace]
+  );
+
+  const insertImageFilesIntoDoc = useCallback(
+    async (files: File[]) => {
+      if (!files.length || !activeTopic) return;
+      setBusyMediaNotice(`Optimizing ${files.length} image${files.length === 1 ? '' : 's'}…`);
+      try {
+        const snippets: string[] = [];
+        for (const f of files) {
+          const { dataUrl } = await fileToOptimizedDataUrl(f);
+          const safeAlt = (f.name.replace(/\.[^.]+$/, '') || 'Note image')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;');
+          snippets.push(
+            `<figure class="sd-note-figure"><img src="${dataUrl}" alt="${safeAlt}" class="sd-note-img" /></figure><p><br></p>`
+          );
+        }
+        const combined = snippets.join('');
+        if (editingDocHtml && docEditorRef.current) {
+          insertDocSnippet(combined);
+        } else {
+          const nextHtml = sanitizeDocumentHtml((activeDocHtml ? `${activeDocHtml}\n` : '') + combined);
+          replaceActiveNote({
+            ...activeTopic.notes,
+            originalHtml: nextHtml,
+            preferOriginalFormat: true,
+          });
+        }
+        setCardsFeedback(
+          `Inserted ${files.length} image${files.length === 1 ? '' : 's'} into "${activeTopic.name}".`
+        );
+      } catch (err) {
+        setCardsFeedback(err instanceof Error ? err.message : 'Could not insert image.');
+      } finally {
+        setBusyMediaNotice(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTopic, editingDocHtml, activeDocHtml, replaceActiveNote]
+  );
+
+  const appendImagePointsToStructuredNote = useCallback(
+    async (imageEntries: Array<{ src: string; caption?: string }>) => {
+      if (!activeTopic || !imageEntries.length) return;
+      const encoded = imageEntries.map((item) =>
+        encodeNoteImagePoint({
+          src: item.src,
+          caption: item.caption,
+          width: 'wide',
+        })
+      );
+      const currentSections = activeTopic.notes.sections;
+      const nextSections =
+        currentSections.length > 0
+          ? currentSections.map((sec, idx) =>
+              idx === currentSections.length - 1
+                ? { ...sec, points: [...sec.points, ...encoded] }
+                : sec
+            )
+          : [
+              {
+                id: makeId('sec'),
+                heading: 'Visual Notes',
+                points: encoded,
+              },
+            ];
+      replaceActiveNote({
+        ...activeTopic.notes,
+        sections: nextSections,
+      });
+      setCardsFeedback(
+        `Added ${imageEntries.length} image${imageEntries.length === 1 ? '' : 's'} to "${activeTopic.name}".`
+      );
+    },
+    [activeTopic, replaceActiveNote]
+  );
+
+  const handleInsertNoteImages = useCallback(
+    async (files: File[]) => {
+      if (!files.length || !activeTopic) return;
+      const showingDoc = hasDocHtml && activeTopic.notes.preferOriginalFormat !== false && !isPdfPageDoc;
+      if (showingDoc) {
+        await insertImageFilesIntoDoc(files);
+        return;
+      }
+      setBusyMediaNotice(`Optimizing ${files.length} image${files.length === 1 ? '' : 's'}…`);
+      try {
+        const entries: Array<{ src: string; caption?: string }> = [];
+        for (const f of files) {
+          const { dataUrl } = await fileToOptimizedDataUrl(f);
+          entries.push({ src: dataUrl });
+        }
+        await appendImagePointsToStructuredNote(entries);
+      } catch (err) {
+        setCardsFeedback(err instanceof Error ? err.message : 'Could not insert image.');
+      } finally {
+        setBusyMediaNotice(null);
+      }
+    },
+    [activeTopic, hasDocHtml, isPdfPageDoc, insertImageFilesIntoDoc, appendImagePointsToStructuredNote]
+  );
+
+  const handleInsertNotePdf = useCallback(
+    async (file: File) => {
+      if (!activeTopic) return;
+      setBusyMediaNotice(`Rendering PDF "${file.name}"…`);
+      try {
+        const ab = await file.arrayBuffer();
+        const res = await parsePdfFile(ab);
+        const showingDoc = hasDocHtml && activeTopic.notes.preferOriginalFormat !== false && !isPdfPageDoc;
+        if (showingDoc && res.html) {
+          const cleanPdf = sanitizeDocumentHtml(res.html);
+          if (editingDocHtml && docEditorRef.current) {
+            insertDocSnippet(cleanPdf);
+          } else {
+            replaceActiveNote({
+              ...activeTopic.notes,
+              originalHtml: sanitizeDocumentHtml((activeDocHtml ? `${activeDocHtml}\n` : '') + cleanPdf),
+              preferOriginalFormat: true,
+            });
+          }
+          setCardsFeedback(
+            `Inserted ${res.pageCount} PDF page${res.pageCount === 1 ? '' : 's'} from "${file.name}".`
+          );
+          return;
+        }
+
+        const pdfTitle = file.name.replace(/\.[^.]+$/, '') || 'PDF Pages';
+        const points: string[] = [];
+        if (res.pageImages.length > 0) {
+          for (const pg of res.pageImages) {
+            points.push(
+              encodeNoteImagePoint({
+                src: pg.dataUrl,
+                caption: `Page ${pg.pageNum}`,
+                width: 'full',
+              })
+            );
+          }
+        }
+        if (res.text.trim()) {
+          const textLines = res.text
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => l && !/^--\s*\d+\s*of\s*\d+\s*--$/i.test(l) && !/^page\s+\d+\b/i.test(l));
+          if (points.length === 0) {
+            points.push(...textLines.slice(0, 60));
+          }
+        }
+        if (points.length === 0) {
+          throw new Error('Could not extract pages or text from this PDF.');
+        }
+
+        const nextSections = [
+          ...activeTopic.notes.sections.filter((s) => s.points.length > 0 || s.heading.trim()),
+          {
+            id: makeId('sec'),
+            heading: pdfTitle,
+            points,
+          },
+        ];
+        replaceActiveNote({
+          ...activeTopic.notes,
+          sections: nextSections,
+          ...(res.html && !activeTopic.notes.originalHtml
+            ? { originalHtml: sanitizeDocumentHtml(res.html) }
+            : {}),
+        });
+        setCardsFeedback(
+          `Inserted ${res.pageCount} page${res.pageCount === 1 ? '' : 's'} from "${file.name}".`
+        );
+      } catch (err) {
+        setCardsFeedback(err instanceof Error ? err.message : 'Could not import PDF.');
+      } finally {
+        setBusyMediaNotice(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTopic, hasDocHtml, isPdfPageDoc, editingDocHtml, activeDocHtml, replaceActiveNote]
+  );
+
+  // Ctrl+V clipboard image paste in Read mode (ignored inside text inputs, modals, or NotionTopicEditor)
+  useEffect(() => {
+    if (
+      viewMode !== 'read' ||
+      editingDocHtml ||
+      lightboxImage ||
+      linkDecksModalOpen ||
+      !activeTopic
+    ) {
+      return;
+    }
+    const onWindowPaste = (e: globalThis.ClipboardEvent) => {
+      if (e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.closest('input, textarea, select, [contenteditable="true"]') ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const files = extractClipboardImageFiles(e.clipboardData);
+      if (files.length > 0) {
+        e.preventDefault();
+        void handleInsertNoteImages(files);
+        return;
+      }
+      const htmlData = e.clipboardData?.getData('text/html') || '';
+      const srcs = extractHtmlImageSrcs(htmlData);
+      if (srcs.length > 0) {
+        e.preventDefault();
+        void appendImagePointsToStructuredNote(srcs.map((src) => ({ src })));
+      }
+    };
+    window.addEventListener('paste', onWindowPaste);
+    return () => window.removeEventListener('paste', onWindowPaste);
+  }, [
+    viewMode,
+    editingDocHtml,
+    lightboxImage,
+    linkDecksModalOpen,
+    activeTopic,
+    handleInsertNoteImages,
+    appendImagePointsToStructuredNote,
+  ]);
 
   const toggleTopicCollapsed = (topicId: string) => {
     setCollapsedTopicIds((prev) => {
@@ -1996,6 +2262,29 @@ export function NotesStudioView({
                   </span>
                 </button>
 
+                {viewMode === 'read' && !isPdfPageDoc && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => noteImageInputRef.current?.click()}
+                      title="Insert an image from files (or press Ctrl+V anytime)"
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap shrink-0"
+                    >
+                      <ImagePlus className="h-3.5 w-3.5 text-[var(--note-accent)]" aria-hidden="true" />
+                      <span>+ Image</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => notePdfInputRef.current?.click()}
+                      title="Insert PDF pages into this note"
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap shrink-0"
+                    >
+                      <FileText className="h-3.5 w-3.5 text-[var(--note-accent)]" aria-hidden="true" />
+                      <span>+ PDF</span>
+                    </button>
+                  </>
+                )}
+
                 <button
                   type="button"
                   onClick={() => startAddingTopic(activeTopic.id)}
@@ -2183,6 +2472,15 @@ export function NotesStudioView({
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
+              </div>
+            )}
+
+            {busyMediaNotice && (
+              <div
+                role="status"
+                className="rounded-xl border border-[var(--e3)]/40 bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))] px-4 py-2 text-xs font-semibold text-[var(--ink)]"
+              >
+                {busyMediaNotice}
               </div>
             )}
 
@@ -2542,6 +2840,53 @@ export function NotesStudioView({
                             <GitBranch className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
                             <span>+ Flow Steps</span>
                           </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              docImageInputRef.current?.click();
+                            }}
+                            title="Insert image from file (or Ctrl+V in editor)"
+                            className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+                          >
+                            <ImagePlus className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
+                            <span>+ Image</span>
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              docPdfInputRef.current?.click();
+                            }}
+                            title="Insert PDF pages"
+                            className="sd-btn px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+                          >
+                            <FileText className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
+                            <span>+ PDF</span>
+                          </button>
+                          <input
+                            ref={docImageInputRef}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              const picked = Array.from(e.target.files || []);
+                              e.target.value = '';
+                              if (picked.length > 0) void insertImageFilesIntoDoc(picked);
+                            }}
+                          />
+                          <input
+                            ref={docPdfInputRef}
+                            type="file"
+                            accept=".pdf,application/pdf"
+                            className="hidden"
+                            onChange={(e) => {
+                              const picked = e.target.files?.[0];
+                              e.target.value = '';
+                              if (picked) void handleInsertNotePdf(picked);
+                            }}
+                          />
 
                           <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
                           <span className="text-[11px] font-bold text-[var(--mute)]">
@@ -2611,12 +2956,31 @@ export function NotesStudioView({
                             suppressContentEditableWarning
                             onClick={trackActiveDocTable}
                             onKeyUp={trackActiveDocTable}
+                            onPaste={(e: ClipboardEvent<HTMLDivElement>) => {
+                              const clipFiles = extractClipboardImageFiles(e.clipboardData);
+                              if (clipFiles.length > 0) {
+                                e.preventDefault();
+                                void insertImageFilesIntoDoc(clipFiles);
+                              }
+                            }}
                             onBlur={() => commitDocumentHtmlEdit(false)}
                             className="sd-doc-sheet ring-2 ring-[var(--e3)] outline-none"
                           />
                         ) : (
                           <div
                             className="sd-doc-sheet"
+                            onClick={(e) => {
+                              const target = e.target as HTMLElement | null;
+                              if (target && target.tagName === 'IMG') {
+                                const img = target as HTMLImageElement;
+                                if (img.src) {
+                                  setLightboxImage({
+                                    src: img.src,
+                                    caption: img.alt || undefined,
+                                  });
+                                }
+                              }
+                            }}
                             dangerouslySetInnerHTML={{ __html: activeDocHtml }}
                           />
                         )}
@@ -2670,7 +3034,35 @@ export function NotesStudioView({
               });
 
               return (
-                <div className="space-y-9 text-[16.5px] leading-[1.75] text-[var(--ink)]">
+                <div
+                  onDragOver={(e: DragEvent<HTMLDivElement>) => {
+                    if (
+                      e.dataTransfer?.types?.includes('Files') &&
+                      !draggedTopicId
+                    ) {
+                      e.preventDefault();
+                      setReadDragActive(true);
+                    }
+                  }}
+                  onDragLeave={() => setReadDragActive(false)}
+                  onDrop={(e: DragEvent<HTMLDivElement>) => {
+                    if (!e.dataTransfer?.files?.length || draggedTopicId) return;
+                    e.preventDefault();
+                    setReadDragActive(false);
+                    const dropped = Array.from(e.dataTransfer.files);
+                    const images = dropped.filter((f) => f.type.startsWith('image/'));
+                    const pdf = dropped.find(
+                      (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+                    );
+                    if (images.length > 0) void handleInsertNoteImages(images);
+                    if (pdf) void handleInsertNotePdf(pdf);
+                  }}
+                  className={`space-y-9 text-[16.5px] leading-[1.75] text-[var(--ink)] transition-colors ${
+                    readDragActive
+                      ? 'rounded-2xl ring-2 ring-[var(--e3)] ring-offset-4 ring-offset-[var(--bg)]'
+                      : ''
+                  }`}
+                >
 
                   {/* Quick Section Jump Index (TOC) */}
                   {populatedSections.length >= 2 && (
@@ -3006,6 +3398,51 @@ export function NotesStudioView({
                                     );
                                   }
 
+                                  if (blk.kind === 'image') {
+                                    const widthClass =
+                                      blk.width === 'compact'
+                                        ? 'max-w-[340px]'
+                                        : blk.width === 'medium'
+                                        ? 'max-w-[540px]'
+                                        : blk.width === 'full'
+                                        ? 'w-full'
+                                        : 'max-w-[760px]';
+                                    return (
+                                      <figure key={i} className={`my-5 ${widthClass}`}>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setLightboxImage({
+                                              src: blk.src,
+                                              caption: blk.caption,
+                                            })
+                                          }
+                                          title="Click to zoom"
+                                          className="group relative block w-full cursor-zoom-in overflow-hidden rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--card)_88%,var(--bg))] text-left shadow-xs transition-colors hover:border-[var(--note-accent)]"
+                                        >
+                                          <img
+                                            src={blk.src}
+                                            alt={blk.caption || 'Study note visual'}
+                                            loading="lazy"
+                                            className="block h-auto max-h-[680px] w-full object-contain"
+                                          />
+                                          <span
+                                            aria-hidden="true"
+                                            className="pointer-events-none absolute right-2.5 top-2.5 inline-flex items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--card)]/90 px-2 py-1 text-[11px] font-semibold text-[var(--ink)] opacity-0 shadow-xs backdrop-blur transition-opacity group-hover:opacity-100"
+                                          >
+                                            <ZoomIn className="h-3 w-3" />
+                                            <span>Zoom</span>
+                                          </span>
+                                        </button>
+                                        {blk.caption && (
+                                          <figcaption className="mt-2 px-0.5 text-[13px] italic leading-snug text-[var(--mute)]">
+                                            {blk.caption}
+                                          </figcaption>
+                                        )}
+                                      </figure>
+                                    );
+                                  }
+
                                   if (blk.kind === 'paragraph') {
                                     return (
                                       <p
@@ -3103,6 +3540,22 @@ export function NotesStudioView({
                         >
                           <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
                           <span>Write Notes</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => noteImageInputRef.current?.click()}
+                          className="sd-btn px-4 py-2 text-xs whitespace-nowrap"
+                        >
+                          <ImagePlus className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                          <span>Insert Image (or Ctrl+V)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => notePdfInputRef.current?.click()}
+                          className="sd-btn px-4 py-2 text-xs whitespace-nowrap"
+                        >
+                          <FileText className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                          <span>Insert PDF</span>
                         </button>
                         <button
                           type="button"
@@ -4524,6 +4977,66 @@ export function NotesStudioView({
                 Done
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden File Inputs for Read-mode + Image / + PDF */}
+      <input
+        ref={noteImageInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const picked = Array.from(e.target.files || []);
+          e.target.value = '';
+          if (picked.length > 0) void handleInsertNoteImages(picked);
+        }}
+      />
+      <input
+        ref={notePdfInputRef}
+        type="file"
+        accept=".pdf,application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const picked = e.target.files?.[0];
+          e.target.value = '';
+          if (picked) void handleInsertNotePdf(picked);
+        }}
+      />
+
+      {/* Click-to-Zoom Lightbox for Embedded Images & PDF Pages */}
+      {lightboxImage && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Expanded image preview"
+          onClick={() => setLightboxImage(null)}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 p-4 backdrop-blur-xs"
+        >
+          <button
+            type="button"
+            onClick={() => setLightboxImage(null)}
+            aria-label="Close image preview"
+            className="absolute right-4 top-4 cursor-pointer rounded-full border border-white/20 bg-black/60 p-2 text-white transition-colors hover:bg-black/85"
+          >
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[88vh] max-w-[92vw] flex-col items-center gap-3"
+          >
+            <img
+              src={lightboxImage.src}
+              alt={lightboxImage.caption || 'Expanded visual'}
+              className="max-h-[82vh] max-w-full rounded-xl border border-white/15 bg-white object-contain shadow-2xl"
+            />
+            {lightboxImage.caption && (
+              <div className="rounded-lg bg-black/70 px-3.5 py-1.5 text-center text-xs text-white/90">
+                {lightboxImage.caption}
+              </div>
+            )}
           </div>
         </div>
       )}

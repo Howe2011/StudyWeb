@@ -380,12 +380,25 @@ export interface DeckGroup {
   createdAt: string;
 }
 
+export interface SharedFlashcardLink {
+  shareId: string;
+  shareCode: string;
+  subjectId: string;
+  scopeKey: string; // 'subject::<subjectId>' | 'topic::<topicId>' | 'section::<subjectId>::<lowerSection>'
+  title: string;
+  visibility: SharedItemVisibility;
+  lastPublishedAt: string;
+  sectionNames?: string[];
+  topicIds?: string[];
+}
+
 export interface WorkspaceData {
   version: 2;
   subjects: StudySubject[];
   topics: StudyTopic[];
   flashcards: StudyFlashcard[];
   deckGroups?: DeckGroup[];
+  sharedFlashcardRefs?: SharedFlashcardLink[];
   todos: TodoTaskItem[];
   calendarBlocks: CalendarStudyBlock[];
   plannerPrefs?: PlannerSchedulePrefs;

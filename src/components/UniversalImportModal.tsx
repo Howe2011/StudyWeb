@@ -17,6 +17,7 @@ import {
   FileCheck2,
   FileText,
   Globe,
+  ImagePlus,
   Indent,
   KeyRound,
   Layers,
@@ -35,6 +36,13 @@ import {
   X,
 } from 'lucide-react';
 import { isRichFormattedHtml, sanitizeDocumentHtml } from '../lib/documentRenderer';
+import {
+  encodeNoteImagePoint,
+  extractClipboardImageFiles,
+  extractHtmlImageSrcs,
+  fileToOptimizedDataUrl,
+  parseNoteImagePoint,
+} from '../lib/imageUtils';
 import { saveByokConfig, useByokConfig } from '../lib/byokStore';
 import {
   downloadFlashcardsCsvTemplate,
@@ -201,6 +209,9 @@ export function UniversalImportModal({
   const [preExtractedCards, setPreExtractedCards] = useState<
     Array<{ q: string; a: string; sectionName: string }> | undefined
   >(undefined);
+  const [attachedImages, setAttachedImages] = useState<
+    Array<{ id: string; dataUrl: string; caption?: string }>
+  >([]);
 
   // Autoformatter & Quizlet/Gizmo options
   const [formatOptions, setFormatOptions] = useState<AutoFormatOptions>({
@@ -277,9 +288,16 @@ export function UniversalImportModal({
   );
 
   const parsedPreview = useMemo(() => {
-    if (!rawText.trim() && !preExtractedCards?.length && !originalHtml) return null;
+    if (
+      !rawText.trim() &&
+      !preExtractedCards?.length &&
+      !originalHtml &&
+      attachedImages.length === 0
+    ) {
+      return null;
+    }
     if (backupBundle) return null;
-    return parseUniversalStudyImport(rawText, {
+    const base = parseUniversalStudyImport(rawText, {
       sourceLabel,
       legacyHtml,
       originalHtml,
@@ -288,6 +306,41 @@ export function UniversalImportModal({
       deckDelimiter: sourceTab === 'quizlet' ? deckDelimiter : 'auto',
       preExtractedCards,
     });
+    if (attachedImages.length === 0) return base;
+    const imgPoints = attachedImages.map((img) =>
+      encodeNoteImagePoint({
+        src: img.dataUrl,
+        caption: img.caption?.trim() || undefined,
+        width: 'wide',
+      })
+    );
+    const existingSecs = base.note.sections.filter(
+      (s) => s.points.length > 0 || (s.heading && s.heading !== 'Key Points')
+    );
+    const nextSections =
+      existingSecs.length > 0
+        ? [
+            ...existingSecs.slice(0, -1),
+            {
+              ...existingSecs[existingSecs.length - 1],
+              points: [...existingSecs[existingSecs.length - 1].points, ...imgPoints],
+            },
+          ]
+        : [
+            {
+              id: makeNoteId('sec'),
+              heading: 'Visual Figures',
+              points: imgPoints,
+            },
+          ];
+    return {
+      ...base,
+      mode: 'notes' as const,
+      note: {
+        ...base.note,
+        sections: nextSections,
+      },
+    };
   }, [
     rawText,
     sourceLabel,
@@ -299,6 +352,7 @@ export function UniversalImportModal({
     sourceTab,
     deckDelimiter,
     preExtractedCards,
+    attachedImages,
   ]);
 
   // Keep Google Docs in-memory token synchronized with Firebase Auth sign-out
@@ -407,6 +461,30 @@ export function UniversalImportModal({
     .map((t) => t.trim().replace(/^#/, ''))
     .filter(Boolean);
 
+  const ingestImageFiles = async (files: File[], statusPrefix = 'Attached') => {
+    const added: Array<{ id: string; dataUrl: string; caption?: string }> = [];
+    for (const file of files) {
+      const { dataUrl } = await fileToOptimizedDataUrl(file);
+      added.push({
+        id: makeNoteId('img'),
+        dataUrl,
+      });
+    }
+    if (added.length === 0) return;
+    setAttachedImages((prev) => [...prev, ...added]);
+    if (!topicNameOverride.trim() && files[0]?.name) {
+      const stem = files[0].name.replace(/\.[^.]+$/, '').trim();
+      if (stem && !/^image$/i.test(stem)) {
+        setTopicNameOverride(stem);
+      }
+    }
+    setPreviewTab('notes');
+    setPreviewNotesMode('visual');
+    setStatusNote(
+      `${statusPrefix} ${added.length} image${added.length === 1 ? '' : 's'} — review integrated preview below.`
+    );
+  };
+
   const ingestFile = async (file: File) => {
     setErrorMsg(null);
     setStatusNote(null);
@@ -416,24 +494,48 @@ export function UniversalImportModal({
       setSourceLabel(file.name);
       const lower = file.name.toLowerCase();
 
+      if (
+        file.type.startsWith('image/') ||
+        /\.(?:png|jpe?g|webp|gif|bmp|avif)$/i.test(lower)
+      ) {
+        await ingestImageFiles([file], 'Loaded');
+        return;
+      }
+
       if (lower.endsWith('.pdf')) {
         if (!topicNameOverride.trim()) {
           setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
         }
         const ab = await file.arrayBuffer();
         const res = await parsePdfFile(ab);
-        if (!res.text.trim()) {
-          throw new Error('No selectable text found in this PDF (scanned image PDFs need OCR first).');
-        }
         const cleanPdfHtml = res.html ? sanitizeDocumentHtml(res.html) : '';
+        if (!res.text.trim() && res.pageImages.length === 0 && !cleanPdfHtml) {
+          throw new Error('Could not read any pages or text from this PDF.');
+        }
         setLegacyHtml(undefined);
         setOriginalHtml(cleanPdfHtml || undefined);
         setPreferOriginalFormat(Boolean(cleanPdfHtml));
-        if (cleanPdfHtml) setPreviewNotesMode('original');
-        setRawText(res.text);
-        setStatusNote(
-          `Parsed ${res.pageCount} PDF page${res.pageCount === 1 ? '' : 's'} with exact page formatting.`
-        );
+        if (!res.text.trim() && res.pageImages.length > 0) {
+          setAttachedImages(
+            res.pageImages.map((pg) => ({
+              id: makeNoteId('img'),
+              dataUrl: pg.dataUrl,
+              caption: `Page ${pg.pageNum}`,
+            }))
+          );
+          setRawText('');
+          setPreviewNotesMode(cleanPdfHtml ? 'original' : 'visual');
+          setStatusNote(
+            `Rendered ${res.pageCount} scanned PDF page${res.pageCount === 1 ? '' : 's'} as visual pages.`
+          );
+        } else {
+          setAttachedImages([]);
+          if (cleanPdfHtml) setPreviewNotesMode('original');
+          setRawText(res.text);
+          setStatusNote(
+            `Rendered ${res.pageCount} PDF page${res.pageCount === 1 ? '' : 's'} with exact visual formatting & extracted text.`
+          );
+        }
       } else if (lower.endsWith('.docx')) {
         if (!topicNameOverride.trim()) {
           setTopicNameOverride(file.name.replace(/\.[^.]+$/, ''));
@@ -482,19 +584,48 @@ export function UniversalImportModal({
   };
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!file) return;
-    await ingestFile(file);
+    if (files.length === 0) return;
+    const allImages = files.every(
+      (f) => f.type.startsWith('image/') || /\.(?:png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name)
+    );
+    if (allImages) {
+      setErrorMsg(null);
+      setReadingFile(true);
+      try {
+        await ingestImageFiles(files, 'Loaded');
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Could not load image.');
+      } finally {
+        setReadingFile(false);
+      }
+      return;
+    }
+    await ingestFile(files[0]);
   };
 
   const handleDropFile = async (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDragActive(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      await ingestFile(file);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+    const imageFiles = files.filter(
+      (f) => f.type.startsWith('image/') || /\.(?:png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name)
+    );
+    if (imageFiles.length > 0 && imageFiles.length === files.length) {
+      setErrorMsg(null);
+      setReadingFile(true);
+      try {
+        await ingestImageFiles(imageFiles, 'Dropped');
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Could not load dropped image.');
+      } finally {
+        setReadingFile(false);
+      }
+      return;
     }
+    await ingestFile(files[0]);
   };
 
   const parseJsonResponseSafe = async <T,>(res: Response, fallbackLabel: string): Promise<T> => {
@@ -674,18 +805,28 @@ export function UniversalImportModal({
         : matchingExisting?.id || firstIncoming?.id || workspace.subjects[0]?.id || '';
     const firstTopicId = incoming.topics[0]?.id || '';
 
+    const parts: string[] = [];
+    if (backupBundle.counts.subjects > 0) parts.push(`${backupBundle.counts.subjects} subjects`);
+    if (backupBundle.counts.topics > 0) parts.push(`${backupBundle.counts.topics} topics`);
+    if (backupBundle.counts.notes > 0) parts.push(`${backupBundle.counts.notes} notes`);
+    if (backupBundle.counts.flashcards > 0) parts.push(`${backupBundle.counts.flashcards} flashcards`);
+    if (backupBundle.counts.timelines > 0) parts.push(`${backupBundle.counts.timelines} timeline nodes`);
+    if (backupBundle.counts.planner > 0) parts.push(`${backupBundle.counts.planner} planner items`);
+    if (backupBundle.counts.studyLogs > 0) parts.push(`${backupBundle.counts.studyLogs} study logs`);
+
     onApplyImport(
       (prev) =>
         backupImportMode === 'replace'
           ? normalizeWorkspace(incoming)
           : mergeWorkspaces(prev, incoming),
-      `Imported all ${backupBundle.counts.notes} notes, ${backupBundle.counts.flashcards} flashcards, and ${backupBundle.counts.timelines} timeline nodes from ${sourceLabel}.`,
+      `Imported ${parts.join(', ') || 'backup data'} from ${sourceLabel}.`,
       firstSubjId,
       firstTopicId
     );
 
     setRawText('');
     setPreExtractedCards(undefined);
+    setAttachedImages([]);
     setTopicNameOverride('');
     setTagsInput('');
     setLegacyHtml(undefined);
@@ -911,6 +1052,7 @@ export function UniversalImportModal({
 
     setRawText('');
     setPreExtractedCards(undefined);
+    setAttachedImages([]);
     setTopicNameOverride('');
     setTargetParentTopicId('');
     setLinkToTopicId('');
@@ -960,9 +1102,12 @@ export function UniversalImportModal({
   }, [aiFormatting]);
 
   useEffect(() => {
-    if (!open && aiAbortRef.current) {
-      aiAbortRef.current.abort();
-      aiAbortRef.current = null;
+    if (!open) {
+      setAttachedImages([]);
+      if (aiAbortRef.current) {
+        aiAbortRef.current.abort();
+        aiAbortRef.current = null;
+      }
     }
   }, [open]);
 
@@ -1414,6 +1559,12 @@ export function UniversalImportModal({
                   rows={6}
                   value={rawText}
                   onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
+                    const clipImages = extractClipboardImageFiles(e.clipboardData);
+                    if (clipImages.length > 0) {
+                      e.preventDefault();
+                      void ingestImageFiles(clipImages, 'Pasted');
+                      return;
+                    }
                     const htmlData = e.clipboardData?.getData('text/html') || '';
                     if (htmlData && isRichFormattedHtml(htmlData)) {
                       const cleanClipHtml = sanitizeDocumentHtml(htmlData);
@@ -1425,6 +1576,20 @@ export function UniversalImportModal({
                           'Captured rich formatting (colors, highlights, headings, tables) from clipboard!'
                         );
                       }
+                      return;
+                    }
+                    const imgSrcs = extractHtmlImageSrcs(htmlData);
+                    if (imgSrcs.length > 0 && !e.clipboardData?.getData('text/plain')?.trim()) {
+                      e.preventDefault();
+                      setAttachedImages((prev) => [
+                        ...prev,
+                        ...imgSrcs.map((src) => ({ id: makeNoteId('img'), dataUrl: src })),
+                      ]);
+                      setPreviewTab('notes');
+                      setPreviewNotesMode('visual');
+                      setStatusNote(
+                        `Pasted ${imgSrcs.length} image${imgSrcs.length === 1 ? '' : 's'} into import preview.`
+                      );
                     }
                   }}
                   onChange={(e) => {
@@ -1433,10 +1598,70 @@ export function UniversalImportModal({
                     setErrorMsg(null);
                   }}
                   placeholder={
-                    'Paste raw lecture notes, Word/Google Docs copy (rich formatting preserved!), Markdown, Q:/A:, CSV, or a full .json backup:\n• Paste directly from Word, Google Docs, or webpages to keep exact layout & colors\n• Or type # Headings, ## Subsections, - Bullets, and Term: Definition'
+                    'Paste raw lecture notes, Ctrl+V screenshots/images, Word/Google Docs copy, Markdown, Q:/A:, CSV, or a .json backup:\n• Press Ctrl+V to attach copied images or rich formatted Word/Google Docs text\n• Or type # Headings, ## Subsections, - Bullets, and Term: Definition'
                   }
                   className="sd-input font-mono-num text-xs leading-relaxed"
                 />
+                {attachedImages.length > 0 && (
+                  <div className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                    <div className="flex items-center justify-between text-xs font-semibold text-[var(--ink)]">
+                      <span className="inline-flex items-center gap-1.5">
+                        <ImagePlus className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                        Attached Images ({attachedImages.length})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setAttachedImages([])}
+                        className="cursor-pointer text-[11px] font-semibold text-[var(--mute)] hover:text-[var(--bad)]"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+                      {attachedImages.map((img) => (
+                        <div
+                          key={img.id}
+                          className="relative flex flex-col gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--card)] p-2"
+                        >
+                          <img
+                            src={img.dataUrl}
+                            alt={img.caption || 'Attached figure'}
+                            className="h-24 w-full rounded object-contain bg-[var(--bg)]"
+                          />
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={img.caption || ''}
+                              onChange={(e) =>
+                                setAttachedImages((prev) =>
+                                  prev.map((item) =>
+                                    item.id === img.id
+                                      ? { ...item, caption: e.target.value }
+                                      : item
+                                  )
+                                )
+                              }
+                              placeholder="Caption (optional)…"
+                              className="sd-input flex-1 py-0.5 text-[11px]"
+                            />
+                            <button
+                              type="button"
+                              aria-label="Remove attached image"
+                              onClick={() =>
+                                setAttachedImages((prev) =>
+                                  prev.filter((item) => item.id !== img.id)
+                                )
+                              }
+                              className="sd-btn h-6 w-6 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                            >
+                              <X className="h-3 w-3" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {originalHtml && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color-mix(in_srgb,var(--e3)_35%,var(--line))] bg-[color-mix(in_srgb,var(--e3)_7%,var(--bg))] px-3 py-1.5 text-xs">
                     <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--ink)]">
@@ -1678,18 +1903,18 @@ export function UniversalImportModal({
                 )}
                 <p className="mt-2 text-sm font-semibold text-[var(--ink)]">
                   {readingFile
-                    ? 'Extracting exact document formatting, headings & tables…'
-                    : 'Drop a PDF, Word (.docx), HTML (.html), Markdown (.md), CSV, or Backup (.json) file'}
+                    ? 'Rendering PDF pages / optimizing files…'
+                    : 'Drop a PDF, image (PNG/JPG/WebP), Word (.docx), HTML, Markdown (.md), CSV, or Planner / Backup file'}
                 </p>
                 <p className="mt-1 text-xs text-[var(--mute)]">
-                  Preserves exact document layout, colors, highlights, tables, and headings — plus extracts revision flashcards.
+                  Renders PDF pages visually, integrates images seamlessly into notes, imports Revision Planner / StudyWeb backups (with or without .json extension), and extracts flashcards.
                 </p>
                 <label className="sd-btn-pri mt-3 cursor-pointer px-4 py-2 text-xs whitespace-nowrap">
                   <Upload className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Choose File</span>
                   <input
                     type="file"
-                    accept=".pdf,.docx,.html,.htm,.md,.txt,.csv,.json,application/pdf,application/json,text/html,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    multiple
                     onChange={(e) => void handleFileChange(e)}
                     className="hidden"
                   />
@@ -1874,14 +2099,28 @@ export function UniversalImportModal({
                 <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
                   <div className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-2.5">
                     <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--mute)]">
-                      <BookOpen className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                      <span>Notes</span>
+                      <FileText className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                      <span>Subjects &amp; Topics</span>
+                    </div>
+                    <div className="font-mono-num mt-1 text-lg font-bold text-[var(--ink)]">
+                      {backupBundle.counts.topics}
+                    </div>
+                    <div className="text-[11px] text-[var(--mute)]">
+                      across {backupBundle.counts.subjects} subject(s)
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-2.5">
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--mute)]">
+                      <BookOpen className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                      <span>Notes &amp; Timelines</span>
                     </div>
                     <div className="font-mono-num mt-1 text-lg font-bold text-[var(--ink)]">
                       {backupBundle.counts.notes}
                     </div>
                     <div className="text-[11px] text-[var(--mute)]">
-                      across {backupBundle.counts.subjects} subject(s)
+                      {backupBundle.counts.timelines > 0
+                        ? `+ ${backupBundle.counts.timelines} timeline node(s)`
+                        : 'structured note pages'}
                     </div>
                   </div>
                   <div className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-2.5">
@@ -1896,26 +2135,14 @@ export function UniversalImportModal({
                   </div>
                   <div className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-2.5">
                     <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--mute)]">
-                      <Calendar className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
-                      <span>Timeline Nodes</span>
+                      <Calendar className="h-3.5 w-3.5 text-[var(--mute)]" aria-hidden="true" />
+                      <span>Planner &amp; Logs</span>
                     </div>
                     <div className="font-mono-num mt-1 text-lg font-bold text-[var(--ink)]">
-                      {backupBundle.counts.timelines}
+                      {backupBundle.counts.planner}
                     </div>
                     <div className="text-[11px] text-[var(--mute)]">
-                      in {backupBundle.counts.timelineTopics} topic(s)
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-2.5">
-                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--mute)]">
-                      <FileText className="h-3.5 w-3.5 text-[var(--mute)]" aria-hidden="true" />
-                      <span>Topics &amp; Plan</span>
-                    </div>
-                    <div className="font-mono-num mt-1 text-lg font-bold text-[var(--ink)]">
-                      {backupBundle.counts.topics}
-                    </div>
-                    <div className="text-[11px] text-[var(--mute)]">
-                      +{backupBundle.counts.planner} planner items
+                      +{backupBundle.counts.studyLogs} study log(s)
                     </div>
                   </div>
                 </div>
@@ -1940,7 +2167,7 @@ export function UniversalImportModal({
                     className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
                   >
                     <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Import All Notes, Flashcards &amp; Timeline</span>
+                    <span>Import Full Backup</span>
                   </button>
                 </div>
               </div>
@@ -2589,6 +2816,33 @@ export function UniversalImportModal({
                                         />
                                       );
                                     }
+                                    if (blk.kind === 'image') {
+                                      const widthClass =
+                                        blk.width === 'compact'
+                                          ? 'max-w-[260px]'
+                                          : blk.width === 'medium'
+                                          ? 'max-w-[400px]'
+                                          : blk.width === 'full'
+                                          ? 'w-full'
+                                          : 'max-w-[540px]';
+                                      return (
+                                        <figure key={bi} className={`my-3 ${widthClass}`}>
+                                          <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--bg)] shadow-xs">
+                                            <img
+                                              src={blk.src}
+                                              alt={blk.caption || 'Imported visual'}
+                                              loading="lazy"
+                                              className="block h-auto max-h-80 w-full object-contain"
+                                            />
+                                          </div>
+                                          {blk.caption && (
+                                            <figcaption className="mt-1.5 px-0.5 text-xs italic text-[var(--mute)]">
+                                              {blk.caption}
+                                            </figcaption>
+                                          )}
+                                        </figure>
+                                      );
+                                    }
                                     if (blk.kind === 'paragraph') {
                                       return (
                                         <p key={bi} className="leading-[1.7] text-[var(--ink)]">
@@ -2674,6 +2928,65 @@ export function UniversalImportModal({
 
                               <div className="mt-2 space-y-1.5">
                                 {sec.points.map((pt, pIdx) => {
+                                  const imgData = parseNoteImagePoint(pt);
+                                  if (imgData) {
+                                    return (
+                                      <div
+                                        key={pIdx}
+                                        className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--bg)] p-2"
+                                      >
+                                        <img
+                                          src={imgData.src}
+                                          alt={imgData.caption || 'Attached image'}
+                                          className="h-12 w-16 shrink-0 rounded border border-[var(--line)] bg-[var(--card)] object-contain"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={imgData.caption || ''}
+                                          onChange={(e) => {
+                                            const nextPt = encodeNoteImagePoint({
+                                              src: imgData.src,
+                                              caption: e.target.value,
+                                              width: imgData.width,
+                                            });
+                                            setDraftSections((prev) =>
+                                              prev.map((item, idx) =>
+                                                idx === sIdx
+                                                  ? {
+                                                      ...item,
+                                                      points: item.points.map((x, j) =>
+                                                        j === pIdx ? nextPt : x
+                                                      ),
+                                                    }
+                                                  : item
+                                              )
+                                            );
+                                          }}
+                                          placeholder="Image caption (optional)…"
+                                          className="sd-input flex-1 py-1 text-xs"
+                                        />
+                                        <button
+                                          type="button"
+                                          title="Remove image"
+                                          onClick={() =>
+                                            setDraftSections((prev) =>
+                                              prev.map((item, idx) =>
+                                                idx === sIdx
+                                                  ? {
+                                                      ...item,
+                                                      points: item.points.filter((_, j) => j !== pIdx),
+                                                    }
+                                                  : item
+                                              )
+                                            )
+                                          }
+                                          className="sd-btn h-7 w-7 shrink-0 p-0 text-[var(--mute)] hover:text-[var(--bad)]"
+                                        >
+                                          <X className="h-3 w-3" aria-hidden="true" />
+                                        </button>
+                                      </div>
+                                    );
+                                  }
                                   const isSub = pt.startsWith('↳ ');
                                   return (
                                     <div key={pIdx} className="flex items-center gap-1.5">
@@ -3070,7 +3383,7 @@ export function UniversalImportModal({
               className="sd-btn-pri px-4 py-2 text-xs whitespace-nowrap"
             >
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Import All Notes, Flashcards &amp; Timeline</span>
+              <span>Import Full Backup</span>
             </button>
           ) : (
             <button

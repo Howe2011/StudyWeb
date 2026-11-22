@@ -136,6 +136,8 @@ function filterWorkspaceByCategories(
   }
   if (cats.flashcards) {
     next.flashcards = [...ws.flashcards];
+    if (ws.deckGroups) next.deckGroups = [...ws.deckGroups];
+    if (ws.sharedFlashcardRefs) next.sharedFlashcardRefs = [...ws.sharedFlashcardRefs];
   }
   if (cats.planner) {
     next.todos = [...ws.todos];
@@ -143,6 +145,21 @@ function filterWorkspaceByCategories(
     next.studyMinutesLogged = ws.studyMinutesLogged;
     next.studyStreakDays = ws.studyStreakDays;
     next.lastStudyDate = ws.lastStudyDate;
+    if (ws.plannerPrefs) {
+      next.plannerPrefs = {
+        ...ws.plannerPrefs,
+        availHours: [...ws.plannerPrefs.availHours],
+      };
+    }
+    if (ws.studyLog) next.studyLog = [...ws.studyLog];
+    if (ws.paperScores) next.paperScores = [...ws.paperScores];
+    if (ws.customCountdowns) next.customCountdowns = [...ws.customCountdowns];
+    if (ws.dailyStudyTasks) {
+      next.dailyStudyTasks = {
+        date: ws.dailyStudyTasks.date,
+        items: [...ws.dailyStudyTasks.items],
+      };
+    }
   }
   return next;
 }
@@ -472,7 +489,7 @@ export function ProfileVaultView({
       notes: bundle.counts.notes > 0,
       flashcards: bundle.counts.flashcards > 0,
       timelines: bundle.counts.timelines > 0,
-      planner: bundle.counts.planner > 0,
+      planner: bundle.counts.planner > 0 || bundle.counts.studyLogs > 0,
     };
 
     setParsedBackup({
@@ -515,7 +532,9 @@ export function ProfileVaultView({
       filtered.topics.length > 0 ||
       filtered.flashcards.length > 0 ||
       filtered.todos.length > 0 ||
-      filtered.calendarBlocks.length > 0;
+      filtered.calendarBlocks.length > 0 ||
+      (filtered.studyLog?.length || 0) > 0 ||
+      (filtered.paperScores?.length || 0) > 0;
     if (!hasAny) {
       setImportStatus({ ok: false, msg: 'Select at least one section to restore.' });
       return;
@@ -526,10 +545,18 @@ export function ProfileVaultView({
     try {
       await onImportWorkspaceData(filtered, importMode);
       const { counts } = parsedBackup;
+      const summaryParts: string[] = [];
+      if (counts.subjects > 0) summaryParts.push(`${counts.subjects} subjects`);
+      if (counts.topics > 0) summaryParts.push(`${counts.topics} topics`);
+      if (counts.notes > 0) summaryParts.push(`${counts.notes} notes`);
+      if (counts.flashcards > 0) summaryParts.push(`${counts.flashcards} flashcards`);
+      if (counts.timelines > 0) summaryParts.push(`${counts.timelines} timeline nodes`);
+      if (counts.planner > 0) summaryParts.push(`${counts.planner} planner items`);
+      if (counts.studyLogs > 0) summaryParts.push(`${counts.studyLogs} study logs`);
       setImportStatus({
         ok: true,
         msg: importEverything
-          ? `Imported all ${counts.notes} notes, ${counts.flashcards} flashcards, and ${counts.timelines} timeline nodes from ${parsedBackup.fileName} (${importMode} mode).`
+          ? `Imported ${summaryParts.join(', ') || 'backup data'} from ${parsedBackup.fileName} (${importMode} mode).`
           : `Restored selected sections from ${parsedBackup.fileName} (${importMode} mode).`,
       });
       setParsedBackup(null);
@@ -1249,14 +1276,13 @@ export function ProfileVaultView({
                     <label className="mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-6 text-center transition-colors hover:border-[var(--e3)]">
                       <Upload className="h-5 w-5 text-[var(--e3)]" aria-hidden="true" />
                       <span className="text-sm font-bold text-[var(--ink)]">
-                        {parsedBackup ? parsedBackup.fileName : 'Choose .json backup file'}
+                        {parsedBackup ? parsedBackup.fileName : 'Choose .json or Revision Planner backup file'}
                       </span>
                       <span className="text-xs text-[var(--mute)]">
-                        Need to import Word (.docx), Markdown, or Quizlet CSV? Click &ldquo;Import Word / Notes / CSV&rdquo; above.
+                        Supports both .json files and extensionless planner exports. For Word (.docx), Markdown, or CSV, click &ldquo;Import Word / Notes / CSV&rdquo; above.
                       </span>
                       <input
                         type="file"
-                        accept=".json,application/json"
                         onChange={handleImportFileChange}
                         className="hidden"
                       />
@@ -1324,8 +1350,10 @@ export function ProfileVaultView({
                           {parsedBackup.formatLabel} · {parsedBackup.fileName}
                         </span>
                         <span className="font-mono-num text-[11px] font-semibold text-[var(--mute)]">
-                          {parsedBackup.counts.notes} notes · {parsedBackup.counts.flashcards} cards ·{' '}
-                          {parsedBackup.counts.timelines} nodes
+                          {parsedBackup.counts.subjects} subjects · {parsedBackup.counts.topics} topics ·{' '}
+                          {parsedBackup.counts.planner} planner · {parsedBackup.counts.studyLogs} logs
+                          {parsedBackup.counts.notes > 0 ? ` · ${parsedBackup.counts.notes} notes` : ''}
+                          {parsedBackup.counts.flashcards > 0 ? ` · ${parsedBackup.counts.flashcards} cards` : ''}
                         </span>
                       </div>
 
@@ -1340,7 +1368,7 @@ export function ProfileVaultView({
                               ? `${parsedBackup.counts.flashcards} cards`
                               : c.id === 'timelines'
                               ? `${parsedBackup.counts.timelines} nodes`
-                              : `${parsedBackup.counts.planner} items`;
+                              : `${parsedBackup.counts.planner} planner items, ${parsedBackup.counts.studyLogs} study logs`;
                           return (
                             <label
                               key={c.id}
@@ -1394,7 +1422,7 @@ export function ProfileVaultView({
                         >
                           <Check className="h-3.5 w-3.5" aria-hidden="true" />
                           <span>
-                            {importing ? 'Importing…' : 'Import All Notes, Flashcards & Timeline'}
+                            {importing ? 'Importing…' : 'Import Full Backup'}
                           </span>
                         </button>
                         <button

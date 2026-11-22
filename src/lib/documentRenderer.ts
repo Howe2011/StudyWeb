@@ -122,7 +122,12 @@ const ALLOWED_CLASSES = new Set([
   'sd-pdf-page-wrap',
   'sd-pdf-page-label',
   'sd-pdf-page',
+  'sd-pdf-page-card',
+  'sd-pdf-page-img',
   'sd-pdf-span',
+  'sd-note-figure',
+  'sd-note-img',
+  'sd-note-figcaption',
 ]);
 
 function sanitizeInlineStyle(rawStyle: string, isPdfElement: boolean): string {
@@ -186,7 +191,7 @@ function isSafeUrl(url: string, allowDataImage = false): boolean {
   const clean = url.trim();
   if (!clean) return false;
   if (/^https?:\/\//i.test(clean) || /^mailto:/i.test(clean)) return true;
-  if (allowDataImage && /^data:image\/(?:png|jpe?g|gif|webp|svg\+xml);base64,/i.test(clean)) {
+  if (allowDataImage && /^data:image\/[a-z0-9.+-]+;base64,/i.test(clean)) {
     return true;
   }
   return false;

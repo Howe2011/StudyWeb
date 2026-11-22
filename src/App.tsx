@@ -70,6 +70,7 @@ import {
   DecryptedProfile,
   LiveTimerState,
   PlannerSubTab,
+  SharedFlashcardLink,
   SharedStudyItem,
   StopwatchState,
   StudyTopic,
@@ -1243,6 +1244,118 @@ export default function App() {
     ]
   );
 
+  const buildFlashcardScopeKey = useCallback(
+    (subjectId: string, sectionName = 'ALL', topicId?: string): string => {
+      if (topicId && topicId !== 'ALL' && topicId !== '__unlinked__') {
+        return `topic::${topicId}`;
+      }
+      if (sectionName && sectionName !== 'ALL') {
+        return `section::${subjectId}::${sectionName.trim().toLowerCase()}`;
+      }
+      return `subject::${subjectId}`;
+    },
+    []
+  );
+
+  const findExistingDeckShare = useCallback(
+    (subjectId: string, sectionName = 'ALL', topicId?: string): SharedStudyItem | null => {
+      if (!firebaseUser) return null;
+      const explicitTopic =
+        topicId && topicId !== 'ALL' && topicId !== '__unlinked__'
+          ? workspace.topics.find((t) => t.id === topicId)
+          : undefined;
+      const resolvedSubjId =
+        subjectId && subjectId !== 'ALL'
+          ? subjectId
+          : explicitTopic?.subjectId ||
+            workspace.flashcards[0]?.subjectId ||
+            workspace.subjects[0]?.id ||
+            '';
+      if (!resolvedSubjId) return null;
+
+      const scopeKey = buildFlashcardScopeKey(resolvedSubjId, sectionName, topicId);
+      const savedRef = (workspace.sharedFlashcardRefs || []).find(
+        (r) => r.scopeKey === scopeKey
+      );
+      const byShareId = new Map(userSharedItems.map((i) => [i.id, i]));
+      const loadedForUser = userSharedLoadedUid === firebaseUser.uid;
+
+      if (savedRef) {
+        const remote = byShareId.get(savedRef.shareId);
+        if (remote) return remote;
+        if (!loadedForUser) {
+          const subjObj = workspace.subjects.find((s) => s.id === resolvedSubjId);
+          return {
+            id: savedRef.shareId,
+            shareCode: savedRef.shareCode,
+            type: 'flashcards',
+            title: savedRef.title || `${subjObj?.name || 'Flashcard'} Deck`,
+            subjectName: subjObj?.name || 'Subject',
+            examBoard: subjObj?.examBoard || 'Revision',
+            summary: '',
+            visibility: savedRef.visibility,
+            ownerId: firebaseUser.uid,
+            ownerName: accountDisplayName,
+            itemCount: 1,
+            copyCount: 0,
+            createdAt: savedRef.lastPublishedAt,
+            updatedAt: savedRef.lastPublishedAt,
+          };
+        }
+      }
+
+      const subj = workspace.subjects.find((s) => s.id === resolvedSubjId);
+      if (!subj) return null;
+      const subjNameLower = subj.name.trim().toLowerCase();
+
+      if (explicitTopic) {
+        const topicLower = explicitTopic.name.trim().toLowerCase();
+        return (
+          userSharedItems.find(
+            (i) =>
+              i.type === 'flashcards' &&
+              i.subjectName.trim().toLowerCase() === subjNameLower &&
+              (i.flashcardsPayload?.sectionName || '').trim().toLowerCase() === topicLower
+          ) || null
+        );
+      }
+
+      if (sectionName && sectionName !== 'ALL') {
+        const secLower = sectionName.trim().toLowerCase();
+        return (
+          userSharedItems.find(
+            (i) =>
+              i.type === 'flashcards' &&
+              i.subjectName.trim().toLowerCase() === subjNameLower &&
+              (i.flashcardsPayload?.sectionName || '').trim().toLowerCase() === secLower
+          ) || null
+        );
+      }
+
+      return (
+        userSharedItems.find(
+          (i) =>
+            i.type === 'flashcards' &&
+            i.subjectName.trim().toLowerCase() === subjNameLower &&
+            (!i.flashcardsPayload?.sectionName ||
+              i.flashcardsPayload.sectionName.trim().toLowerCase() ===
+                `${subjNameLower} flashcards`)
+        ) || null
+      );
+    },
+    [
+      firebaseUser,
+      workspace.topics,
+      workspace.flashcards,
+      workspace.subjects,
+      workspace.sharedFlashcardRefs,
+      userSharedItems,
+      userSharedLoadedUid,
+      accountDisplayName,
+      buildFlashcardScopeKey,
+    ]
+  );
+
   const handleShareDeck = useCallback(
     (subjectId: string, sectionName: string, initialTopicId?: string) => {
       const explicitTopic =
@@ -1316,6 +1429,9 @@ export default function App() {
           ? `${subj.name} Flashcards`
           : sectionName;
 
+      const scopeKey = buildFlashcardScopeKey(subj.id, sectionName, resolvedInitTopic);
+      const existingShare = findExistingDeckShare(subj.id, sectionName, resolvedInitTopic);
+
       setShareTarget({
         type: 'flashcards',
         defaultTitle: label,
@@ -1325,6 +1441,9 @@ export default function App() {
           initialTopicName ? `${initialTopicName} (${subj.name})` : subj.name
         }.`,
         itemCount: initialCards.length,
+        subjectId: subj.id,
+        shareScopeKey: scopeKey,
+        existingShare: existingShare || undefined,
         initialFlashcardTopicId: resolvedInitTopic,
         flashcardTopicOptions: orderedTopicOptions,
         flashcardsPayload: {
@@ -1333,7 +1452,159 @@ export default function App() {
         },
       });
     },
-    [workspace]
+    [workspace, buildFlashcardScopeKey, findExistingDeckShare]
+  );
+
+  const handlePublishDeckChanges = useCallback(
+    async (
+      subjectId: string,
+      sectionName = 'ALL',
+      topicId?: string
+    ): Promise<{ ok: boolean; shareCode?: string; error?: string }> => {
+      const explicitTopic =
+        topicId && topicId !== 'ALL' && topicId !== '__unlinked__'
+          ? workspace.topics.find((t) => t.id === topicId)
+          : undefined;
+      const resolvedSubjId =
+        subjectId && subjectId !== 'ALL'
+          ? subjectId
+          : explicitTopic?.subjectId ||
+            workspace.flashcards[0]?.subjectId ||
+            workspace.subjects[0]?.id ||
+            '';
+      const subj = workspace.subjects.find((s) => s.id === resolvedSubjId);
+      const existingShare = findExistingDeckShare(resolvedSubjId, sectionName, topicId);
+
+      if (!firebaseUser || !subj || !existingShare) {
+        if (subj) handleShareDeck(resolvedSubjId, sectionName, topicId);
+        return { ok: false, error: 'Create or sign in to update this shared deck.' };
+      }
+
+      const scopeKey = buildFlashcardScopeKey(subj.id, sectionName, topicId);
+      const savedRef = (workspace.sharedFlashcardRefs || []).find((r) => r.scopeKey === scopeKey);
+
+      let cardsToPublish = workspace.flashcards.filter((c) => c.subjectId === subj.id);
+      if (explicitTopic) {
+        cardsToPublish = cardsToPublish.filter((c) => c.topicId === explicitTopic.id);
+      } else if (sectionName && sectionName !== 'ALL') {
+        const secLower = sectionName.trim().toLowerCase();
+        cardsToPublish = cardsToPublish.filter(
+          (c) => (c.sectionName || 'Core Deck').trim().toLowerCase() === secLower
+        );
+      } else if (savedRef?.topicIds && savedRef.topicIds.length > 0) {
+        const trackedTopicIds = new Set(savedRef.topicIds);
+        const trackedSecs = new Set(
+          (savedRef.sectionNames || []).map((s) => s.trim().toLowerCase()).filter(Boolean)
+        );
+        const subset = cardsToPublish.filter(
+          (c) =>
+            (c.topicId && trackedTopicIds.has(c.topicId)) ||
+            trackedSecs.has((c.sectionName || 'Core Deck').trim().toLowerCase())
+        );
+        if (subset.length > 0) cardsToPublish = subset;
+      }
+
+      if (cardsToPublish.length === 0) {
+        return { ok: false, error: 'No flashcards remain in this shared scope to publish.' };
+      }
+
+      const nextSectionLabel =
+        explicitTopic?.name ||
+        (sectionName !== 'ALL'
+          ? sectionName
+          : existingShare.flashcardsPayload?.sectionName || `${subj.name} Flashcards`);
+      const nextTitle =
+        (existingShare.title || savedRef?.title || nextSectionLabel).trim() || nextSectionLabel;
+      const defaultSummary = `${cardsToPublish.length} active-recall flashcard${
+        cardsToPublish.length === 1 ? '' : 's'
+      } for ${explicitTopic ? `${explicitTopic.name} (${subj.name})` : subj.name}.`;
+      const prevSummary = (existingShare.summary || '').trim();
+      const nextSummary =
+        !prevSummary || /^\d+\s+active-recall flashcards?\s+for\s+/i.test(prevSummary)
+          ? defaultSummary
+          : prevSummary;
+
+      const payloadCards = cardsToPublish.map((c) => ({
+        q: c.q,
+        a: c.a,
+        sectionName: c.sectionName,
+      }));
+      const nextPayload = {
+        sectionName: nextSectionLabel,
+        cards: payloadCards,
+      };
+      if (JSON.stringify({ flashcardsPayload: nextPayload }).length > 390_000) {
+        return {
+          ok: false,
+          error: 'Updated deck exceeds the 400 KB share limit. Split decks via Share dialog.',
+        };
+      }
+
+      try {
+        const updated = await updateSharedItem({
+          id: existingShare.id,
+          uid: firebaseUser.uid,
+          ownerName: accountDisplayName,
+          type: 'flashcards',
+          shareCode: existingShare.shareCode,
+          createdAt: existingShare.createdAt,
+          copyCount: existingShare.copyCount,
+          title: nextTitle,
+          subjectName: subj.name,
+          examBoard: subj.examBoard,
+          summary: nextSummary,
+          visibility: existingShare.visibility,
+          itemCount: payloadCards.length,
+          flashcardsPayload: nextPayload,
+        });
+
+        clearCommunityCache();
+        setUserSharedItems((prev) => [
+          updated,
+          ...prev.filter((item) => item.id !== updated.id),
+        ]);
+        const nextRef: SharedFlashcardLink = {
+          shareId: updated.id,
+          shareCode: updated.shareCode,
+          subjectId: subj.id,
+          scopeKey,
+          title: updated.title,
+          visibility: updated.visibility,
+          lastPublishedAt: updated.updatedAt,
+          sectionNames: Array.from(
+            new Set(payloadCards.map((c) => (c.sectionName || 'Core Deck').trim()).filter(Boolean))
+          ),
+          ...(savedRef?.topicIds ? { topicIds: savedRef.topicIds } : {}),
+        };
+        updateWorkspace((prev) => ({
+          ...prev,
+          sharedFlashcardRefs: [
+            ...(prev.sharedFlashcardRefs || []).filter(
+              (r) => r.scopeKey !== scopeKey && r.shareId !== updated.id
+            ),
+            nextRef,
+          ],
+        }));
+        return { ok: true, shareCode: updated.shareCode };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'Unable to publish changes right now.',
+        };
+      }
+    },
+    [
+      firebaseUser,
+      workspace.topics,
+      workspace.flashcards,
+      workspace.subjects,
+      workspace.sharedFlashcardRefs,
+      findExistingDeckShare,
+      handleShareDeck,
+      buildFlashcardScopeKey,
+      accountDisplayName,
+      updateWorkspace,
+    ]
   );
 
   // Auth, Vault, Backup handlers
@@ -1676,6 +1947,8 @@ export default function App() {
               onUpdateWorkspace={updateWorkspace}
               onOpenImport={() => setImportModalOpen(true)}
               onShareDeck={handleShareDeck}
+              getExistingDeckShare={findExistingDeckShare}
+              onPublishDeckChanges={handlePublishDeckChanges}
               onNavigate={(tab) => handleNavigate(tab)}
             />
           )}
@@ -1729,8 +2002,11 @@ export default function App() {
               onDeletedSharedItem={(deletedId) => {
                 setUserSharedItems((prev) => prev.filter((item) => item.id !== deletedId));
                 updateWorkspace((prev) => {
-                  const hasRef = prev.topics.some((t) => t.sharedRef?.shareId === deletedId);
-                  if (!hasRef) return prev;
+                  const hasTopicRef = prev.topics.some((t) => t.sharedRef?.shareId === deletedId);
+                  const hasFlashcardRef = (prev.sharedFlashcardRefs || []).some(
+                    (r) => r.shareId === deletedId
+                  );
+                  if (!hasTopicRef && !hasFlashcardRef) return prev;
                   return {
                     ...prev,
                     topics: prev.topics.map((t) => {
@@ -1738,6 +2014,9 @@ export default function App() {
                       const { sharedRef: _drop, ...rest } = t;
                       return rest;
                     }),
+                    sharedFlashcardRefs: (prev.sharedFlashcardRefs || []).filter(
+                      (r) => r.shareId !== deletedId
+                    ),
                   };
                 });
               }}
@@ -1835,7 +2114,7 @@ export default function App() {
           setShareTarget(null);
           setAuthModalOpen(true);
         }}
-        onPublished={(item, topicId) => {
+        onPublished={(item, topicId, flashcardCtx) => {
           clearCommunityCache();
           setUserSharedItems((prev) => [
             item,
@@ -1864,6 +2143,41 @@ export default function App() {
                   : t
               ),
             }));
+          } else if (item.type === 'flashcards') {
+            const fallbackSubjId =
+              flashcardCtx?.subjectId ||
+              latestWorkspaceRef.current.subjects.find(
+                (s) => s.name.trim().toLowerCase() === item.subjectName.trim().toLowerCase()
+              )?.id ||
+              '';
+            const scopeKey =
+              flashcardCtx?.scopeKey || (fallbackSubjId ? `subject::${fallbackSubjId}` : '');
+            if (fallbackSubjId && scopeKey) {
+              const nextRef: SharedFlashcardLink = {
+                shareId: item.id,
+                shareCode: item.shareCode,
+                subjectId: fallbackSubjId,
+                scopeKey,
+                title: item.title,
+                visibility: item.visibility,
+                lastPublishedAt: item.updatedAt,
+                ...(flashcardCtx?.sectionNames?.length
+                  ? { sectionNames: flashcardCtx.sectionNames }
+                  : {}),
+                ...(flashcardCtx?.topicIds?.length
+                  ? { topicIds: flashcardCtx.topicIds }
+                  : {}),
+              };
+              updateWorkspace((prev) => ({
+                ...prev,
+                sharedFlashcardRefs: [
+                  ...(prev.sharedFlashcardRefs || []).filter(
+                    (r) => r.scopeKey !== scopeKey && r.shareId !== item.id
+                  ),
+                  nextRef,
+                ],
+              }));
+            }
           }
         }}
       />

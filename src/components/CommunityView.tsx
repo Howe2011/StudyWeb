@@ -244,6 +244,30 @@ function StructuredNoteReader({
                       />
                     );
                   }
+                  if (blk.kind === 'image') {
+                    const widthCls =
+                      blk.width === 'compact'
+                        ? 'max-w-sm mx-auto'
+                        : blk.width === 'medium'
+                        ? 'max-w-lg mx-auto'
+                        : blk.width === 'full'
+                        ? 'w-full'
+                        : 'max-w-3xl mx-auto';
+                    return (
+                      <figure key={i} className={`my-3 ${widthCls}`}>
+                        <img
+                          src={blk.src}
+                          alt={blk.caption || 'Study note diagram'}
+                          className="w-full h-auto rounded-xl border border-[var(--line)] bg-[var(--card)] object-contain"
+                        />
+                        {blk.caption && (
+                          <figcaption className="mt-1.5 text-center text-xs text-[var(--mute)]">
+                            {blk.caption}
+                          </figcaption>
+                        )}
+                      </figure>
+                    );
+                  }
                   if (blk.kind === 'paragraph') {
                     return (
                       <p key={i} className="whitespace-pre-line leading-[1.75]">

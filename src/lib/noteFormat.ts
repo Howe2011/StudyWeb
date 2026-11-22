@@ -9,6 +9,11 @@ import {
   normalizeStudySymbols,
   splitRightArrowSteps,
 } from './noteSymbols';
+import {
+  isNoteImagePoint,
+  NoteImageWidth,
+  parseNoteImagePoint,
+} from './imageUtils';
 
 export type NoteFormatPreset =
   | 'balanced-visual'
@@ -55,13 +60,15 @@ export function estimateNoteReadingMinutes(note: StructuredNoteData): number {
     note.workedExample,
     ...note.sections.flatMap((s) => [
       s.heading,
-      ...s.points.filter((p) => !/^@table-color:/i.test(p.trim())),
+      ...s.points.filter(
+        (p) => !/^@table-color:/i.test(p.trim()) && !isNoteImagePoint(p)
+      ),
     ]),
     ...note.keyTerms.flatMap((k) => [k.term, k.definition]),
     note.originalHtml
-      ? note.originalHtml.replace(/<[^>]+>/g, ' ')
+      ? note.originalHtml.replace(/<img\b[^>]*>/gi, ' ').replace(/<[^>]+>/g, ' ')
       : note.legacyHtml
-      ? note.legacyHtml.replace(/<[^>]+>/g, ' ')
+      ? note.legacyHtml.replace(/<img\b[^>]*>/gi, ' ').replace(/<[^>]+>/g, ' ')
       : '',
   ]
     .join(' ')
@@ -83,7 +90,10 @@ export function isNoteEmpty(note: StructuredNoteData): boolean {
   const hasTip = note.examTip.trim().length > 0;
   const hasEx = note.workedExample.trim().length > 0;
   const docHtml = note.originalHtml || note.legacyHtml;
-  const hasLegacy = Boolean(docHtml && docHtml.replace(/<[^>]+>/g, '').trim().length > 0);
+  const hasLegacy = Boolean(
+    docHtml &&
+      (/<img\b/i.test(docHtml) || docHtml.replace(/<[^>]+>/g, '').trim().length > 0)
+  );
   return !hasSummary && !hasSections && !hasTerms && !hasTip && !hasEx && !hasLegacy;
 }
 
@@ -208,6 +218,10 @@ export function assessExistingFormattingQuality(rawInput: string): FormattingQua
 
   for (const rawLine of lines) {
     const t = rawLine.trim();
+    if (isNoteImagePoint(t)) {
+      tablesOrFlows++;
+      continue;
+    }
     nonEmptyChars += t.length;
 
     if (isBoilerplateNoiseLine(t)) {
@@ -656,6 +670,12 @@ export function parseTextIntoStructuredNote(
     }
     const precededByBlank = prevWasBlank;
     prevWasBlank = false;
+
+    // Embedded image token (@image:{...} or ![caption](src)): preserve verbatim without text/colon splitting
+    if (isNoteImagePoint(line)) {
+      currentSec.points.push(line);
+      continue;
+    }
 
     // Extract Gizmo / revision cloze deletions `{{answer}}` or `==answer==` into flashcards
     if (/\{\{[^}]+\}\}|==[^=]+==/.test(line)) {
@@ -1429,21 +1449,40 @@ export function structuredNoteToHtml(title: string, note: StructuredNoteData): s
     parts.push(`<h2>${esc(sec.heading)}</h2>`);
     const visiblePoints = sec.points.filter((p) => !/^@table-color:/i.test(p.trim()));
     if (visiblePoints.length > 0) {
-      parts.push(
-        `<ul>${visiblePoints
-          .map((p) =>
-            p.startsWith('📌 ')
-              ? `<li><strong>Fact:</strong> ${fmt(
-                  p
-                    .slice(2)
-                    .replace(/^\s*\[color:[^\]]+\]\s*/i, '')
-                    .replace('|', ' — ')
-                    .trim()
-                )}</li>`
-              : `<li>${fmt(p.replace(/^↳\s*/, '').replace(/^¶\s*/, ''))}</li>`
-          )
-          .join('')}</ul>`
-      );
+      const listBuf: string[] = [];
+      const flushList = () => {
+        if (listBuf.length > 0) {
+          parts.push(`<ul>${listBuf.join('')}</ul>`);
+          listBuf.length = 0;
+        }
+      };
+      for (const p of visiblePoints) {
+        const img = parseNoteImagePoint(p);
+        if (img) {
+          flushList();
+          const cap = img.caption
+            ? `<figcaption class="sd-note-figcaption">${esc(img.caption)}</figcaption>`
+            : '';
+          parts.push(
+            `<figure class="sd-note-figure"><img src="${img.src.replace(/"/g, '&quot;')}" alt="${esc(
+              img.caption || 'Study note image'
+            )}" class="sd-note-img" />${cap}</figure>`
+          );
+          continue;
+        }
+        listBuf.push(
+          p.startsWith('📌 ')
+            ? `<li><strong>Fact:</strong> ${fmt(
+                p
+                  .slice(2)
+                  .replace(/^\s*\[color:[^\]]+\]\s*/i, '')
+                  .replace('|', ' — ')
+                  .trim()
+              )}</li>`
+            : `<li>${fmt(p.replace(/^↳\s*/, '').replace(/^¶\s*/, ''))}</li>`
+        );
+      }
+      flushList();
     }
   }
   if (note.keyTerms.length > 0) {
@@ -1468,7 +1507,8 @@ export type SectionRenderBlock =
   | { kind: 'bullet'; text: string; indent?: number }
   | { kind: 'factbox'; title?: string; text: string; color?: string }
   | { kind: 'flow'; label?: string; steps: string[] }
-  | { kind: 'table'; headers: string[]; rows: string[][]; color?: string };
+  | { kind: 'table'; headers: string[]; rows: string[][]; color?: string }
+  | { kind: 'image'; src: string; caption?: string; width?: NoteImageWidth };
 
 function splitPipeRow(line: string): string[] {
   return line
@@ -1531,6 +1571,19 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
     const tableColorMatch = raw.match(/^@table-color:\s*([#A-Za-z0-9_-]+)$/i);
     if (tableColorMatch) {
       pendingTableColor = tableColorMatch[1].trim();
+      i++;
+      continue;
+    }
+
+    const parsedImage = parseNoteImagePoint(raw);
+    if (parsedImage) {
+      pendingTableColor = undefined;
+      blocks.push({
+        kind: 'image',
+        src: parsedImage.src,
+        caption: parsedImage.caption,
+        width: parsedImage.width || 'wide',
+      });
       i++;
       continue;
     }
@@ -1768,7 +1821,7 @@ export function extractTimelineEventsFromNote(
 
   const scanLine = (rawLine: string, era?: string) => {
     const line = rawLine.replace(/^(?:↳|¶)\s*/, '').trim();
-    if (!line || line.startsWith('### ') || line.startsWith('@table-color:')) return;
+    if (!line || line.startsWith('### ') || line.startsWith('@table-color:') || isNoteImagePoint(line)) return;
 
     if (line.startsWith('|')) {
       if (/^\|\s*[-:]+(?:\s*\|\s*[-:]+)+\s*\|$/.test(line)) return;
