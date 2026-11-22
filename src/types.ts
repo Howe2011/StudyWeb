@@ -330,6 +330,13 @@ export type HomeWidgetId =
   | 'progHours'
   | 'weakTopics'
   | 'miniCalendar'
+  | 'fullCalendar'
+  | 'examTimetable'
+  | 'quickNotes'
+  | 'quickFlashcards'
+  | 'subjectBreakdown'
+  | 'topicChecklist'
+  | 'gradeTargetTracker'
   | 'communityNotes';
 
 export interface HomeWidgetLayoutItem {

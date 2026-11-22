@@ -74,6 +74,13 @@ const VALID_HOME_WIDGET_IDS = new Set<HomeWidgetId>([
   'progHours',
   'weakTopics',
   'miniCalendar',
+  'fullCalendar',
+  'examTimetable',
+  'quickNotes',
+  'quickFlashcards',
+  'subjectBreakdown',
+  'topicChecklist',
+  'gradeTargetTracker',
   'communityNotes',
 ]);
 
@@ -108,7 +115,7 @@ function normalizeHomeLayout(
       const rawH = obj.h === null || obj.h === undefined ? null : Number(obj.h);
       const h =
         rawH !== null && Number.isFinite(rawH) && rawH > 0
-          ? Math.max(180, Math.min(760, Math.round(rawH)))
+          ? Math.max(180, Math.min(1100, Math.round(rawH)))
           : null;
       out.push({ id, cols, h });
     }
@@ -2053,4 +2060,90 @@ export function addLoggedStudyMinutes(
     ],
     updatedAt: new Date().toISOString(),
   };
+}
+
+export interface UnifiedExamItem {
+  id: string;
+  date: string;
+  startTime: string;
+  durationMins: number;
+  title: string;
+  displayLabel: string;
+  subjectId?: string;
+  subjectName?: string;
+  subjectColor?: string;
+  blockId?: string;
+  isFallback: boolean;
+}
+
+/**
+ * Returns deduplicated scheduled exam entries by merging `calendarBlocks` (kind === 'exam')
+ * with `subjects[].examDate` fallback entries so an exam on the same date is never shown twice.
+ */
+export function getUnifiedExamsForWorkspace(
+  subjects: StudySubject[],
+  calendarBlocks: CalendarStudyBlock[]
+): UnifiedExamItem[] {
+  const subjById = new Map(subjects.map((s) => [s.id, s]));
+  const out: UnifiedExamItem[] = [];
+  const seenBlockKeys = new Set<string>();
+  const coveredSubjDates = new Set<string>();
+
+  for (const b of calendarBlocks) {
+    if (b.kind !== 'exam' || !b.date || !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) continue;
+    const subj = b.subjectId ? subjById.get(b.subjectId) : undefined;
+    const rawTitle = (b.title || `${subj?.name || 'Subject'} Exam`).trim();
+    const displayLabel =
+      subj && !rawTitle.toLowerCase().includes(subj.name.toLowerCase())
+        ? `${subj.name} · ${rawTitle}`
+        : rawTitle;
+    const dedupKey = `${b.date}::${b.subjectId || ''}::${rawTitle.toLowerCase()}::${b.startTime || '09:00'}`;
+    if (seenBlockKeys.has(dedupKey)) continue;
+    seenBlockKeys.add(dedupKey);
+
+    if (b.subjectId) {
+      coveredSubjDates.add(`${b.subjectId}::${b.date}`);
+    } else {
+      const lowerTitle = rawTitle.toLowerCase();
+      for (const s of subjects) {
+        if (s.examDate === b.date && lowerTitle.includes(s.name.toLowerCase())) {
+          coveredSubjDates.add(`${s.id}::${b.date}`);
+        }
+      }
+    }
+
+    out.push({
+      id: b.id,
+      date: b.date,
+      startTime: b.startTime || '09:00',
+      durationMins: Number(b.durationMins) || 90,
+      title: rawTitle,
+      displayLabel,
+      subjectId: b.subjectId,
+      subjectName: subj?.name,
+      subjectColor: subj?.color,
+      blockId: b.id,
+      isFallback: false,
+    });
+  }
+
+  for (const s of subjects) {
+    if (!s.examDate || !/^\d{4}-\d{2}-\d{2}$/.test(s.examDate)) continue;
+    if (coveredSubjDates.has(`${s.id}::${s.examDate}`)) continue;
+    coveredSubjDates.add(`${s.id}::${s.examDate}`);
+    out.push({
+      id: `subj_exam_${s.id}`,
+      date: s.examDate,
+      startTime: '09:00',
+      durationMins: 90,
+      title: `${s.name} Exam`,
+      displayLabel: `${s.name} Exam`,
+      subjectId: s.id,
+      subjectName: s.name,
+      subjectColor: s.color,
+      isFallback: true,
+    });
+  }
+
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
 }

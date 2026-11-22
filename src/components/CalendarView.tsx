@@ -14,7 +14,9 @@ import {
 import {
   autoGenerateStudySchedule,
   DEFAULT_PLANNER_PREFS,
+  getUnifiedExamsForWorkspace,
   makeId,
+  UnifiedExamItem,
 } from '../lib/workspaceStore';
 import { CalendarStudyBlock, TodoTaskItem, WorkspaceData } from '../types';
 
@@ -103,20 +105,20 @@ export function CalendarView({
   );
 
   const examsByDate = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const s of workspace.subjects) {
-      if (s.examDate) {
-        const list = map.get(s.examDate) || [];
-        list.push(`${s.name} exam`);
-        map.set(s.examDate, list);
-      }
+    const map = new Map<string, UnifiedExamItem[]>();
+    const allExams = getUnifiedExamsForWorkspace(workspace.subjects, workspace.calendarBlocks);
+    for (const ex of allExams) {
+      const list = map.get(ex.date) || [];
+      list.push(ex);
+      map.set(ex.date, list);
     }
     return map;
-  }, [workspace.subjects]);
+  }, [workspace.subjects, workspace.calendarBlocks]);
 
   const blocksByDate = useMemo(() => {
     const map = new Map<string, CalendarStudyBlock[]>();
     for (const b of workspace.calendarBlocks) {
+      if (b.kind === 'exam') continue;
       const list = map.get(b.date) || [];
       list.push(b);
       map.set(b.date, list);
@@ -523,6 +525,12 @@ export function CalendarView({
                 </span>
               ))}
               <span className="inline-flex items-center gap-1.5">
+                <span className="inline-flex items-center rounded border border-[#111827] bg-[#FDE047] px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-[#111827]">
+                  EXAM
+                </span>
+                <span>Exam Date</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5">
                 <ListTodo className="h-3.5 w-3.5 text-[var(--ok)]" aria-hidden="true" />
                 <span>Due Tasks</span>
               </span>
@@ -741,12 +749,29 @@ export function CalendarView({
                     </span>
 
                     {exams.map((ex) => (
-                      <span
-                        key={ex}
-                        className="truncate rounded border border-[var(--e2)] px-1 text-[10px] font-semibold text-[var(--e2)]"
+                      <button
+                        key={ex.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (ex.blockId) {
+                            setSelectedTodoId(null);
+                            setSelectedBlockId(selectedBlockId === ex.blockId ? null : ex.blockId);
+                          } else {
+                            setRefDate(iso);
+                            setCalMode('day');
+                          }
+                        }}
+                        className={`flex w-full cursor-pointer items-center gap-1 truncate rounded border border-[#111827] bg-[#FDE047] px-1.5 py-0.5 text-left text-[10px] font-extrabold text-[#111827] ${
+                          ex.blockId && selectedBlockId === ex.blockId ? 'ring-2 ring-[var(--e3)]' : ''
+                        }`}
+                        title={`${ex.displayLabel} · ${ex.startTime} (${ex.durationMins}m)`}
                       >
-                        {ex}
-                      </span>
+                        <span className="shrink-0 rounded bg-[#111827] px-1 text-[9px] font-black uppercase tracking-wider text-[#FDE047]">
+                          EXAM
+                        </span>
+                        <span className="truncate">{ex.displayLabel}</span>
+                      </button>
                     ))}
 
                     {visibleTodos.map((td) => {
@@ -863,12 +888,37 @@ export function CalendarView({
                     </button>
 
                     {exams.map((ex) => (
-                      <div
-                        key={ex}
-                        className="rounded-lg border border-[var(--e2)] px-2 py-1 text-center text-[11px] font-bold text-[var(--e2)]"
+                      <button
+                        key={ex.id}
+                        type="button"
+                        onClick={() => {
+                          if (ex.blockId) {
+                            setSelectedTodoId(null);
+                            setSelectedBlockId(selectedBlockId === ex.blockId ? null : ex.blockId);
+                          }
+                        }}
+                        className={`flex w-full flex-col gap-0.5 rounded-xl border-2 border-[#111827] bg-[#FDE047] text-left text-[#111827] transition-transform hover:-translate-y-0.5 ${
+                          oneDay ? 'p-3.5' : 'p-2'
+                        } ${ex.blockId ? 'cursor-pointer' : 'cursor-default'} ${
+                          ex.blockId && selectedBlockId === ex.blockId ? 'ring-2 ring-[var(--e3)]' : ''
+                        }`}
                       >
-                        {ex}
-                      </div>
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="rounded bg-[#111827] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#FDE047]">
+                            EXAM
+                          </span>
+                          <span className="font-mono-num text-[10px] font-bold text-[#111827]/85">
+                            {ex.startTime} · {ex.durationMins}m
+                          </span>
+                        </div>
+                        <span
+                          className={`font-extrabold leading-snug text-[#111827] ${
+                            oneDay ? 'text-base' : 'text-xs'
+                          }`}
+                        >
+                          {ex.displayLabel}
+                        </span>
+                      </button>
                     ))}
 
                     <div className="flex-1 space-y-2">
@@ -1006,12 +1056,27 @@ export function CalendarView({
                           {d === todayStr ? ' (today)' : ''}
                         </span>
                         {exams.map((ex) => (
-                          <span
-                            key={ex}
-                            className="rounded border border-[var(--e2)] px-1.5 py-0.5 text-[11px] text-[var(--e2)]"
+                          <button
+                            key={ex.id}
+                            type="button"
+                            onClick={() => {
+                              if (ex.blockId) {
+                                setSelectedTodoId(null);
+                                setSelectedBlockId(selectedBlockId === ex.blockId ? null : ex.blockId);
+                              }
+                            }}
+                            className={`inline-flex items-center gap-1.5 rounded-lg border-2 border-[#111827] bg-[#FDE047] px-2 py-0.5 text-xs font-extrabold text-[#111827] ${
+                              ex.blockId ? 'cursor-pointer' : 'cursor-default'
+                            } ${ex.blockId && selectedBlockId === ex.blockId ? 'ring-2 ring-[var(--e3)]' : ''}`}
                           >
-                            {ex}
-                          </span>
+                            <span className="rounded bg-[#111827] px-1 text-[9px] font-black uppercase tracking-wider text-[#FDE047]">
+                              EXAM
+                            </span>
+                            <span>{ex.displayLabel}</span>
+                            <span className="font-mono-num text-[11px] font-bold text-[#111827]/80">
+                              {ex.startTime} · {ex.durationMins}m
+                            </span>
+                          </button>
                         ))}
                       </div>
                       <div className="space-y-1.5">

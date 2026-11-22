@@ -16,9 +16,12 @@ import {
   CalendarDays,
   Check,
   CheckSquare,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Flame,
   Globe,
+  GraduationCap,
   GripVertical,
   HelpCircle,
   Layers,
@@ -28,6 +31,8 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  RotateCw,
+  Search,
   SlidersHorizontal,
   Sparkles,
   StickyNote,
@@ -39,20 +44,25 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { isNoteEmpty } from '../lib/noteFormat';
 import { parseBackupJsonToWorkspace } from '../lib/smartImporter';
 import {
   addLoggedStudyMinutes,
   DEFAULT_HOME_LAYOUT,
+  getUnifiedExamsForWorkspace,
   homeWidgetsFromLayout,
   makeId,
   mergeWorkspaces,
+  UnifiedExamItem,
 } from '../lib/workspaceStore';
 import {
+  CalendarStudyBlock,
   DailyStudyTaskItem,
   HomeWidgetId,
   HomeWidgetLayoutItem,
   LiveTimerState,
   PlannerSubTab,
+  TodoTaskItem,
   WorkspaceData,
   WorkspaceTab,
 } from '../types';
@@ -209,6 +219,20 @@ const WIDGET_CATALOG: WidgetMeta[] = [
     category: 'Progress & Charts',
     defaultCols: 6,
   },
+  {
+    id: 'subjectBreakdown',
+    label: 'Revision Time by Subject',
+    desc: 'Proportional breakdown of logged minutes per subject with 1-click +25m logging.',
+    category: 'Progress & Charts',
+    defaultCols: 6,
+  },
+  {
+    id: 'gradeTargetTracker',
+    label: 'Target Grades & Mock Readiness',
+    desc: 'Compare syllabus readiness %, mock paper averages, and editable target grades.',
+    category: 'Progress & Charts',
+    defaultCols: 6,
+  },
 
   // Flashcards & Notes
   {
@@ -222,6 +246,20 @@ const WIDGET_CATALOG: WidgetMeta[] = [
     id: 'flashcardBreakdown',
     label: 'Flashcards Progress & Boxes',
     desc: 'Leitner Box 1–5 counts plus per-subject deck mastery rows.',
+    category: 'Flashcards & Notes',
+    defaultCols: 6,
+  },
+  {
+    id: 'quickFlashcards',
+    label: 'Quick Flashcard Review',
+    desc: 'Flip & rate Leitner flashcards directly on Home without switching tabs.',
+    category: 'Flashcards & Notes',
+    defaultCols: 6,
+  },
+  {
+    id: 'quickNotes',
+    label: 'Study Notes Finder & Recents',
+    desc: 'Search structured notes across subjects and jump straight into editing.',
     category: 'Flashcards & Notes',
     defaultCols: 6,
   },
@@ -256,6 +294,13 @@ const WIDGET_CATALOG: WidgetMeta[] = [
     defaultCols: 6,
   },
   {
+    id: 'topicChecklist',
+    label: 'Syllabus Confidence Checklist',
+    desc: 'Filter topics by subject & confidence rating with instant 0–3 updates.',
+    category: 'Subjects & Calendar',
+    defaultCols: 6,
+  },
+  {
     id: 'examCountdowns',
     label: 'Exam & Goal Countdowns',
     desc: 'Subject exam countdowns plus custom mock, coursework, or test deadlines.',
@@ -263,9 +308,16 @@ const WIDGET_CATALOG: WidgetMeta[] = [
     defaultCols: 6,
   },
   {
+    id: 'examTimetable',
+    label: 'Exam Timetable & Readiness',
+    desc: 'Full chronological exam papers schedule with subject readiness & start-focus action.',
+    category: 'Subjects & Calendar',
+    defaultCols: 6,
+  },
+  {
     id: 'schedule',
     label: "Today's Schedule",
-    desc: 'Planned revision blocks for today with 1-click completion checkboxes.',
+    desc: 'Planned revision blocks & exams for today with 1-click completion checkboxes.',
     category: 'Subjects & Calendar',
     defaultCols: 6,
   },
@@ -275,6 +327,13 @@ const WIDGET_CATALOG: WidgetMeta[] = [
     desc: 'Week-ahead strip showing upcoming exams and planned study sessions.',
     category: 'Subjects & Calendar',
     defaultCols: 6,
+  },
+  {
+    id: 'fullCalendar',
+    label: 'Full-Size Interactive Calendar',
+    desc: 'Complete Month & Week calendar with yellow/black exam boxes, due tasks, day inspector & quick-add.',
+    category: 'Subjects & Calendar',
+    defaultCols: 12,
   },
 ];
 
@@ -420,6 +479,29 @@ export function HomeDashboardView({
   const [addDailyTopicId, setAddDailyTopicId] = useState('');
 
   const [shareCodeInput, setShareCodeInput] = useState('');
+  const [widgetSearch, setWidgetSearch] = useState('');
+
+  // Full-size calendar widget state
+  const [fullCalMode, setFullCalMode] = useState<'month' | 'week'>('month');
+  const [fullCalRefDate, setFullCalRefDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [fullCalSelectedDay, setFullCalSelectedDay] = useState(() => new Date().toISOString().slice(0, 10));
+  const [fullCalQuickTitle, setFullCalQuickTitle] = useState('');
+  const [fullCalQuickSubjId, setFullCalQuickSubjId] = useState('');
+  const [fullCalQuickTime, setFullCalQuickTime] = useState('16:30');
+  const [fullCalQuickMins, setFullCalQuickMins] = useState(25);
+
+  // Quick flashcard widget state
+  const [fcWidgetSubjId, setFcWidgetSubjId] = useState('ALL');
+  const [fcWidgetDueOnly, setFcWidgetDueOnly] = useState(true);
+  const [fcWidgetIdx, setFcWidgetIdx] = useState(0);
+  const [fcWidgetFlipped, setFcWidgetFlipped] = useState(false);
+
+  // Quick notes & syllabus checklist widget states
+  const [notesWidgetQuery, setNotesWidgetQuery] = useState('');
+  const [notesWidgetSubjId, setNotesWidgetSubjId] = useState('ALL');
+  const [checklistSubjId, setChecklistSubjId] = useState('');
+  const [checklistFilter, setChecklistFilter] = useState<'all' | '0' | '1' | '2' | '3'>('all');
+
   const [importingHowes, setImportingHowes] = useState(false);
   const [howesImportMsg, setHowesImportMsg] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -459,7 +541,8 @@ export function HomeDashboardView({
   useEffect(() => {
     if (!paperSubjId && workspace.subjects[0]) setPaperSubjId(workspace.subjects[0].id);
     if (!addDailySubjId && workspace.subjects[0]) setAddDailySubjId(workspace.subjects[0].id);
-  }, [workspace.subjects, paperSubjId, addDailySubjId]);
+    if (!checklistSubjId && workspace.subjects[0]) setChecklistSubjId(workspace.subjects[0].id);
+  }, [workspace.subjects, paperSubjId, addDailySubjId, checklistSubjId]);
 
   const layout: HomeWidgetLayoutItem[] = useMemo(
     () =>
@@ -510,10 +593,51 @@ export function HomeDashboardView({
     return counts;
   }, [workspace.flashcards]);
 
+  const unifiedExams = useMemo(
+    () => getUnifiedExamsForWorkspace(workspace.subjects, workspace.calendarBlocks),
+    [workspace.subjects, workspace.calendarBlocks]
+  );
+
+  const examsByDate = useMemo(() => {
+    const map = new Map<string, UnifiedExamItem[]>();
+    for (const ex of unifiedExams) {
+      const list = map.get(ex.date) || [];
+      list.push(ex);
+      map.set(ex.date, list);
+    }
+    return map;
+  }, [unifiedExams]);
+
+  const nonExamBlocksByDate = useMemo(() => {
+    const map = new Map<string, CalendarStudyBlock[]>();
+    for (const b of workspace.calendarBlocks) {
+      if (b.kind === 'exam') continue;
+      const list = map.get(b.date) || [];
+      list.push(b);
+      map.set(b.date, list);
+    }
+    map.forEach((arr) => arr.sort((a, b) => a.startTime.localeCompare(b.startTime)));
+    return map;
+  }, [workspace.calendarBlocks]);
+
+  const todosByDate = useMemo(() => {
+    const map = new Map<string, TodoTaskItem[]>();
+    for (const t of workspace.todos) {
+      if (!t.dueDate || !/^\d{4}-\d{2}-\d{2}$/.test(t.dueDate)) continue;
+      const list = map.get(t.dueDate) || [];
+      list.push(t);
+      map.set(t.dueDate, list);
+    }
+    map.forEach((arr) =>
+      arr.sort((a, b) => Number(a.done) - Number(b.done) || b.priority - a.priority)
+    );
+    return map;
+  }, [workspace.todos]);
+
   const todaysBlocks = useMemo(
     () =>
       workspace.calendarBlocks
-        .filter((b) => b.date === todayStr)
+        .filter((b) => b.date === todayStr && b.kind !== 'exam')
         .sort((a, b) => a.startTime.localeCompare(b.startTime)),
     [workspace.calendarBlocks, todayStr]
   );
@@ -540,7 +664,7 @@ export function HomeDashboardView({
       : 0;
   }, [minsByDate, todayStr, todaysBlocks, workspace.lastStudyDate, workspace.studyMinutesLogged]);
 
-  // All upcoming countdowns (subject exam dates + custom deadlines)
+  // All upcoming countdowns (unified deduplicated exams + custom deadlines)
   const allCountdowns = useMemo(() => {
     const list: Array<{
       id: string;
@@ -551,15 +675,15 @@ export function HomeDashboardView({
       custom: boolean;
     }> = [];
 
-    for (const s of workspace.subjects) {
-      const d = daysUntilDate(s.examDate);
+    for (const ex of unifiedExams) {
+      const d = daysUntilDate(ex.date);
       if (d !== null && d >= 0) {
         list.push({
-          id: `ex_${s.id}`,
-          title: `${s.name} Exam`,
-          date: s.examDate,
+          id: ex.id,
+          title: ex.displayLabel,
+          date: ex.date,
           days: d,
-          color: s.color,
+          color: ex.subjectColor,
           custom: false,
         });
       }
@@ -579,7 +703,7 @@ export function HomeDashboardView({
     }
 
     return list.sort((a, b) => a.days - b.days);
-  }, [workspace.subjects, workspace.customCountdowns]);
+  }, [unifiedExams, workspace.customCountdowns]);
 
   const activeTodos = useMemo(
     () =>
@@ -732,7 +856,7 @@ export function HomeDashboardView({
                 patch.h !== undefined
                   ? patch.h === null
                     ? null
-                    : Math.max(180, Math.min(760, Math.round(patch.h)))
+                    : Math.max(180, Math.min(1100, Math.round(patch.h)))
                   : w.h,
             }
           : w
@@ -772,7 +896,7 @@ export function HomeDashboardView({
           : Math.max(3, Math.min(12, Math.round(startCols + dx / colWidth)));
       const nextH =
         mode === 'both' || mode === 'height'
-          ? Math.max(190, Math.min(760, Math.round(startH + dy)))
+          ? Math.max(190, Math.min(1100, Math.round(startH + dy)))
           : item.h;
       updateWidgetSize(item.id, {
         cols: nextCols,
@@ -1042,10 +1166,70 @@ export function HomeDashboardView({
   const dailyGoalPct = Math.min(100, Math.round((todayLoggedMins / dailyGoalMins) * 100));
 
   const unusedCatalog = useMemo(() => {
-    const unused = WIDGET_CATALOG.filter((m) => !activeWidgetIds.has(m.id));
-    if (trayCategory === 'All') return unused;
-    return unused.filter((m) => m.category === trayCategory);
-  }, [activeWidgetIds, trayCategory]);
+    const q = widgetSearch.trim().toLowerCase();
+    return WIDGET_CATALOG.filter((m) => {
+      if (activeWidgetIds.has(m.id)) return false;
+      if (trayCategory !== 'All' && m.category !== trayCategory) return false;
+      if (q && !m.label.toLowerCase().includes(q) && !m.desc.toLowerCase().includes(q)) {
+        return false;
+      }
+      return true;
+    });
+  }, [activeWidgetIds, trayCategory, widgetSearch]);
+
+  const handleAddQuickCalendarSession = (e: FormEvent) => {
+    e.preventDefault();
+    if (!fullCalSelectedDay) return;
+    const subj = fullCalQuickSubjId ? subjectMap.get(fullCalQuickSubjId) : undefined;
+    const title = fullCalQuickTitle.trim() || (subj ? `${subj.name}: Active recall` : 'Revision session');
+    const newBlock: CalendarStudyBlock = {
+      id: makeId('blk'),
+      date: fullCalSelectedDay,
+      startTime: fullCalQuickTime || '16:30',
+      durationMins: Math.max(10, Math.min(240, Number(fullCalQuickMins) || 25)),
+      title,
+      ...(subj ? { subjectId: subj.id } : {}),
+      kind: 'revision',
+      done: false,
+      manual: true,
+    };
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      calendarBlocks: [...prev.calendarBlocks, newBlock],
+      updatedAt: new Date().toISOString(),
+    }));
+    setFullCalQuickTitle('');
+  };
+
+  const handleRateQuickFlashcard = (cardId: string, grade: 'again' | 'hard' | 'good' | 'easy') => {
+    const DAY = 24 * 3600 * 1000;
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: prev.flashcards.map((c) => {
+        if (c.id !== cardId) return c;
+        const currBox = c.box || 1;
+        const nextBox: 1 | 2 | 3 | 4 | 5 =
+          grade === 'again'
+            ? 1
+            : grade === 'hard'
+            ? 2
+            : grade === 'easy'
+            ? 5
+            : (Math.min(5, currBox + 1) as 1 | 2 | 3 | 4 | 5);
+        const daysGap =
+          grade === 'again' ? 0 : nextBox === 2 ? 1 : nextBox === 3 ? 3 : nextBox === 4 ? 7 : 14;
+        return {
+          ...c,
+          box: nextBox,
+          lastReviewedAt: Date.now(),
+          dueAt: grade === 'again' ? Date.now() + 10 * 60 * 1000 : Date.now() + daysGap * DAY,
+        };
+      }),
+      updatedAt: new Date().toISOString(),
+    }));
+    setFcWidgetFlipped(false);
+    setFcWidgetIdx((i) => i + 1);
+  };
 
   // Renderer for every single widget in catalog
   const renderWidgetBody = (id: HomeWidgetId) => {
@@ -1413,7 +1597,8 @@ export function HomeDashboardView({
           </div>
         );
 
-      case 'schedule':
+      case 'schedule': {
+        const todaysExams = examsByDate.get(todayStr) || [];
         return (
           <div className="flex h-full flex-col justify-between">
             <div>
@@ -1431,12 +1616,33 @@ export function HomeDashboardView({
                 </button>
               </div>
 
-              <div className="mt-4">
+              <div className="mt-4 space-y-2.5">
+                {todaysExams.length > 0 && (
+                  <div className="space-y-1.5">
+                    {todaysExams.map((ex) => (
+                      <div
+                        key={ex.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border-2 border-[#111827] bg-[#FDE047] px-3 py-2 text-xs font-extrabold text-[#111827]"
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="shrink-0 rounded bg-[#111827] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#FDE047]">
+                            EXAM
+                          </span>
+                          <span className="truncate">{ex.displayLabel}</span>
+                        </span>
+                        <span className="font-mono-num shrink-0 text-[#111827]/85">
+                          {ex.startTime} · {ex.durationMins}m
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
                   Scheduled Sessions Today ({todaysBlocks.length})
                 </div>
                 {todaysBlocks.length === 0 ? (
-                  <div className="mt-2 rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
+                  <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
                     No blocks planned for today. Use{' '}
                     <button
                       type="button"
@@ -1448,7 +1654,7 @@ export function HomeDashboardView({
                     to schedule revision around your exams.
                   </div>
                 ) : (
-                  <div className="mt-2 space-y-2">
+                  <div className="space-y-2">
                     {todaysBlocks.map((blk) => (
                       <button
                         key={blk.id}
@@ -1485,6 +1691,7 @@ export function HomeDashboardView({
             </div>
           </div>
         );
+      }
 
       case 'todos':
         return (
@@ -2875,10 +3082,8 @@ export function HomeDashboardView({
                   weekday: 'short',
                   day: 'numeric',
                 });
-          const blocks = workspace.calendarBlocks.filter(
-            (b) => b.date === dStr && b.kind !== 'busy'
-          );
-          const exams = workspace.subjects.filter((s) => s.examDate === dStr);
+          const blocks = (nonExamBlocksByDate.get(dStr) || []).filter((b) => b.kind !== 'busy');
+          const exams = examsByDate.get(dStr) || [];
           return { dStr, label, blocks, exams };
         });
 
@@ -2905,7 +3110,9 @@ export function HomeDashboardView({
                     type="button"
                     onClick={() => onNavigate('calendar')}
                     className={`flex cursor-pointer flex-col items-center justify-between rounded-xl border p-2 text-center transition-colors hover:border-[var(--e3)] ${
-                      idx === 0
+                      day.exams.length > 0
+                        ? 'border-[#111827] bg-[color-mix(in_srgb,#FDE047_18%,var(--bg))]'
+                        : idx === 0
                         ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--bg))]'
                         : 'border-[var(--line)] bg-[var(--bg)]'
                     }`}
@@ -2916,7 +3123,9 @@ export function HomeDashboardView({
                     </span>
                     <span className="text-[10px] text-[var(--mute)]">
                       {day.exams.length > 0 ? (
-                        <strong className="text-[var(--bad)]">Exam</strong>
+                        <span className="inline-block rounded border border-[#111827] bg-[#FDE047] px-1 text-[9px] font-black uppercase tracking-wider text-[#111827]">
+                          {day.exams.length > 1 ? `${day.exams.length} EXAMS` : 'EXAM'}
+                        </span>
                       ) : (
                         'sess.'
                       )}
@@ -2924,6 +3133,1112 @@ export function HomeDashboardView({
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+        );
+      }
+
+      case 'fullCalendar': {
+        const calDow = (iso: string) => (new Date(`${iso}T12:00:00`).getDay() + 6) % 7;
+        const addIso = (iso: string, days: number) => {
+          const dt = new Date(`${iso}T12:00:00`);
+          dt.setDate(dt.getDate() + days);
+          return dt.toISOString().slice(0, 10);
+        };
+        const stepCal = (dir: -1 | 1) => {
+          if (fullCalMode === 'month') {
+            const dt = new Date(`${fullCalRefDate.slice(0, 8)}01T12:00:00`);
+            dt.setMonth(dt.getMonth() + dir);
+            setFullCalRefDate(dt.toISOString().slice(0, 10));
+          } else {
+            setFullCalRefDate(addIso(fullCalRefDate, dir * 7));
+          }
+        };
+
+        const titleLabel =
+          fullCalMode === 'month'
+            ? new Date(`${fullCalRefDate}T12:00:00`).toLocaleDateString('en-GB', {
+                month: 'long',
+                year: 'numeric',
+              })
+            : (() => {
+                const mon = addIso(fullCalRefDate, -calDow(fullCalRefDate));
+                const sun = addIso(mon, 6);
+                return `${formatShortDate(mon)} – ${formatShortDate(sun)}`;
+              })();
+
+        const monthCells: Array<{ iso: string; outside: boolean }> = [];
+        if (fullCalMode === 'month') {
+          const first = `${fullCalRefDate.slice(0, 8)}01`;
+          const startGrid = addIso(first, -calDow(first));
+          const curYm = fullCalRefDate.slice(0, 7);
+          for (let k = 0; k < 42; k++) {
+            const d = addIso(startGrid, k);
+            const outside = d.slice(0, 7) !== curYm;
+            if (k >= 35 && outside && calDow(d) === 0) break;
+            monthCells.push({ iso: d, outside });
+          }
+        }
+
+        const weekDays = Array.from({ length: 7 }, (_, i) => {
+          const mon = addIso(fullCalRefDate, -calDow(fullCalRefDate));
+          return addIso(mon, i);
+        });
+
+        const dayExams = examsByDate.get(fullCalSelectedDay) || [];
+        const dayBlocks = nonExamBlocksByDate.get(fullCalSelectedDay) || [];
+        const dayTodos = todosByDate.get(fullCalSelectedDay) || [];
+
+        return (
+          <div className="space-y-4">
+            {/* Header Toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="font-display flex items-center gap-2 text-lg font-bold text-[var(--ink)]">
+                  <CalendarDays className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <span>{titleLabel}</span>
+                </h2>
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--mute)]">
+                  <span className="rounded border border-[#111827] bg-[#FDE047] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#111827]">
+                    EXAM
+                  </span>
+                  <span>Exam Date</span>
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="sd-seg" role="tablist" aria-label="Dashboard calendar view">
+                  <button
+                    type="button"
+                    aria-pressed={fullCalMode === 'month'}
+                    onClick={() => setFullCalMode('month')}
+                    className="sd-seg-btn"
+                  >
+                    Month
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={fullCalMode === 'week'}
+                    onClick={() => setFullCalMode('week')}
+                    className="sd-seg-btn"
+                  >
+                    Week
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => stepCal(-1)}
+                    aria-label="Previous period"
+                    className="sd-btn h-7 w-7 p-0"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFullCalRefDate(todayStr);
+                      setFullCalSelectedDay(todayStr);
+                    }}
+                    className="sd-btn px-2.5 py-1 text-xs"
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepCal(1)}
+                    aria-label="Next period"
+                    className="sd-btn h-7 w-7 p-0"
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onNavigate('calendar')}
+                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                >
+                  Open Calendar Tab →
+                </button>
+              </div>
+            </div>
+
+            {/* Month Grid */}
+            {fullCalMode === 'month' ? (
+              <div className="grid grid-cols-7 gap-1">
+                {WEEK_LABELS.map((d) => (
+                  <div
+                    key={d}
+                    className="py-1 text-center text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]"
+                  >
+                    {d}
+                  </div>
+                ))}
+                {monthCells.map(({ iso, outside }) => {
+                  const isToday = iso === todayStr;
+                  const isSel = iso === fullCalSelectedDay;
+                  const exs = examsByDate.get(iso) || [];
+                  const blks = nonExamBlocksByDate.get(iso) || [];
+                  const tds = todosByDate.get(iso) || [];
+                  const visibleTds = tds.slice(0, 1);
+                  const visibleBlks = blks.slice(0, 2);
+                  const hiddenCount = Math.max(0, tds.length - visibleTds.length + blks.length - visibleBlks.length);
+                  return (
+                    <button
+                      key={iso}
+                      type="button"
+                      onClick={() => setFullCalSelectedDay(iso)}
+                      className={`flex min-h-[88px] cursor-pointer flex-col gap-1 rounded-xl border p-1.5 text-left transition-colors ${
+                        isSel
+                          ? 'border-[var(--e3)] ring-2 ring-[var(--e3)]/40 bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))]'
+                          : isToday
+                          ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_4%,var(--bg))]'
+                          : 'border-[var(--line)] bg-[var(--bg)] hover:border-[var(--mute)]'
+                      } ${outside ? 'opacity-45' : ''}`}
+                    >
+                      <div className="flex w-full items-center justify-between">
+                        <span
+                          className={`font-mono-num text-xs font-bold ${
+                            isToday ? 'text-[var(--e3)]' : 'text-[var(--ink)]'
+                          }`}
+                        >
+                          {Number(iso.slice(8))}
+                        </span>
+                        {blks.length > 0 && (
+                          <span className="font-mono-num text-[10px] text-[var(--mute)]">
+                            {blks.filter((b) => b.done).length}/{blks.length}
+                          </span>
+                        )}
+                      </div>
+
+                      {exs.map((ex) => (
+                        <div
+                          key={ex.id}
+                          className="flex w-full items-center gap-1 truncate rounded border border-[#111827] bg-[#FDE047] px-1 py-0.5 text-[10px] font-extrabold text-[#111827]"
+                          title={`${ex.displayLabel} · ${ex.startTime} (${ex.durationMins}m)`}
+                        >
+                          <span className="shrink-0 rounded bg-[#111827] px-1 text-[8px] font-black uppercase text-[#FDE047]">
+                            EXAM
+                          </span>
+                          <span className="truncate">{ex.displayLabel}</span>
+                        </div>
+                      ))}
+
+                      {visibleTds.map((td) => {
+                        const col = (td.subjectId && subjectMap.get(td.subjectId)?.color) || 'var(--ok)';
+                        return (
+                          <div
+                            key={td.id}
+                            style={{
+                              borderLeftColor: col,
+                              backgroundColor: `color-mix(in srgb, ${col} 14%, var(--card))`,
+                            }}
+                            className={`w-full truncate rounded border-l-[3px] px-1 py-0.5 text-[10px] font-medium ${
+                              td.done ? 'line-through opacity-50' : 'text-[var(--ink)]'
+                            }`}
+                          >
+                            ✓ {td.title}
+                          </div>
+                        );
+                      })}
+
+                      {visibleBlks.map((b) => {
+                        const col =
+                          b.kind === 'busy'
+                            ? 'var(--mute)'
+                            : (b.subjectId && subjectMap.get(b.subjectId)?.color) || 'var(--e3)';
+                        return (
+                          <div
+                            key={b.id}
+                            style={{
+                              borderLeftColor: col,
+                              backgroundColor: `color-mix(in srgb, ${col} 16%, var(--card))`,
+                            }}
+                            className={`w-full truncate rounded border-l-[3px] px-1 py-0.5 text-[10px] font-medium ${
+                              b.done ? 'line-through opacity-50' : 'text-[var(--ink)]'
+                            }`}
+                          >
+                            {b.kind === 'busy'
+                              ? b.title
+                              : (b.subjectId && subjectMap.get(b.subjectId)?.name) || b.title}
+                          </div>
+                        );
+                      })}
+
+                      {hiddenCount > 0 && (
+                        <span className="text-[10px] text-[var(--mute)]">+{hiddenCount} more</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Week Grid */
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-7">
+                {weekDays.map((iso) => {
+                  const isToday = iso === todayStr;
+                  const isSel = iso === fullCalSelectedDay;
+                  const exs = examsByDate.get(iso) || [];
+                  const blks = nonExamBlocksByDate.get(iso) || [];
+                  const tds = todosByDate.get(iso) || [];
+                  return (
+                    <div
+                      key={iso}
+                      onClick={() => setFullCalSelectedDay(iso)}
+                      className={`flex min-h-[175px] cursor-pointer flex-col gap-1.5 rounded-xl border p-2.5 transition-colors ${
+                        isSel
+                          ? 'border-[var(--e3)] ring-2 ring-[var(--e3)]/40 bg-[color-mix(in_srgb,var(--e3)_6%,var(--bg))]'
+                          : isToday
+                          ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_4%,var(--bg))]'
+                          : 'border-[var(--line)] bg-[var(--bg)]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between border-b border-[var(--line)] pb-1.5">
+                        <span className="text-[11px] font-bold uppercase text-[var(--mute)]">
+                          {WEEK_LABELS[calDow(iso)]}
+                        </span>
+                        <span
+                          className={`font-mono-num text-sm font-extrabold ${
+                            isToday ? 'text-[var(--e3)]' : 'text-[var(--ink)]'
+                          }`}
+                        >
+                          {Number(iso.slice(8))}
+                        </span>
+                      </div>
+
+                      {exs.map((ex) => (
+                        <div
+                          key={ex.id}
+                          className="rounded-lg border-2 border-[#111827] bg-[#FDE047] px-2 py-1 text-[10px] font-extrabold text-[#111827]"
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="rounded bg-[#111827] px-1 text-[8px] font-black uppercase text-[#FDE047]">
+                              EXAM
+                            </span>
+                            <span className="font-mono-num">{ex.startTime}</span>
+                          </div>
+                          <div className="mt-0.5 truncate">{ex.displayLabel}</div>
+                        </div>
+                      ))}
+
+                      {tds.map((td) => (
+                        <div
+                          key={td.id}
+                          className={`truncate rounded-lg border border-[var(--line)] bg-[var(--card)] px-2 py-1 text-[11px] font-semibold ${
+                            td.done ? 'line-through opacity-50' : 'text-[var(--ink)]'
+                          }`}
+                        >
+                          ✓ {td.title}
+                        </div>
+                      ))}
+
+                      {blks.map((b) => {
+                        const col =
+                          b.kind === 'busy'
+                            ? 'var(--mute)'
+                            : (b.subjectId && subjectMap.get(b.subjectId)?.color) || 'var(--e3)';
+                        return (
+                          <div
+                            key={b.id}
+                            style={{
+                              borderLeftColor: col,
+                              backgroundColor: `color-mix(in srgb, ${col} 14%, var(--card))`,
+                            }}
+                            className={`rounded-lg border-l-[3px] px-2 py-1 text-[11px] ${
+                              b.done ? 'line-through opacity-50' : 'text-[var(--ink)]'
+                            }`}
+                          >
+                            <div className="font-mono-num text-[10px] text-[var(--mute)]">
+                              {b.startTime} · {b.durationMins}m
+                            </div>
+                            <div className="truncate font-semibold">{b.title}</div>
+                          </div>
+                        );
+                      })}
+
+                      {exs.length === 0 && tds.length === 0 && blks.length === 0 && (
+                        <div className="py-4 text-center text-[11px] text-[var(--mute)]">Rest day</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Selected Day Detail & Quick-Add Drawer */}
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2">
+                <div className="text-xs font-bold text-[var(--ink)]">
+                  {formatShortDate(fullCalSelectedDay)}
+                  {fullCalSelectedDay === todayStr ? ' · Today' : ''}
+                </div>
+                <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                  {dayExams.length} exam{dayExams.length === 1 ? '' : 's'} · {dayBlocks.length} session
+                  {dayBlocks.length === 1 ? '' : 's'} · {dayTodos.length} task
+                  {dayTodos.length === 1 ? '' : 's'}
+                </span>
+              </div>
+
+              {(dayExams.length > 0 || dayBlocks.length > 0 || dayTodos.length > 0) && (
+                <div className="mt-2.5 space-y-1.5">
+                  {dayExams.map((ex) => (
+                    <div
+                      key={ex.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border-2 border-[#111827] bg-[#FDE047] px-3 py-1.5 text-xs font-extrabold text-[#111827]"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="rounded bg-[#111827] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#FDE047]">
+                          EXAM
+                        </span>
+                        <span>{ex.displayLabel}</span>
+                      </span>
+                      <span className="font-mono-num text-[11px]">
+                        {ex.startTime} · {ex.durationMins}m
+                      </span>
+                    </div>
+                  ))}
+
+                  {dayTodos.map((td) => (
+                    <button
+                      key={td.id}
+                      type="button"
+                      onClick={() => toggleTodoDone(td.id)}
+                      className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5 text-left text-xs hover:border-[var(--e3)]"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                            td.done
+                              ? 'border-[var(--ok)] bg-[var(--ok)] text-white'
+                              : 'border-[var(--mute)]'
+                          }`}
+                        >
+                          {td.done && <Check className="h-2.5 w-2.5" aria-hidden="true" />}
+                        </span>
+                        <span className={`truncate font-semibold ${td.done ? 'line-through opacity-55' : 'text-[var(--ink)]'}`}>
+                          {td.title}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-[11px] text-[var(--mute)]">Due Task</span>
+                    </button>
+                  ))}
+
+                  {dayBlocks.map((b) => {
+                    const subj = b.subjectId ? subjectMap.get(b.subjectId) : undefined;
+                    return (
+                      <div
+                        key={b.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-1.5 text-xs"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleBlockDone(b.id)}
+                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                        >
+                          <span
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                              b.done
+                                ? 'border-[var(--ok)] bg-[var(--ok)] text-white'
+                                : 'border-[var(--mute)]'
+                            }`}
+                          >
+                            {b.done && <Check className="h-2.5 w-2.5" aria-hidden="true" />}
+                          </span>
+                          <span className={`truncate font-semibold ${b.done ? 'line-through opacity-55' : 'text-[var(--ink)]'}`}>
+                            {b.title}
+                          </span>
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                            {b.startTime} · {b.durationMins}m
+                          </span>
+                          {b.kind !== 'busy' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onNavigate('planner', {
+                                  plannerTab: 'timer',
+                                  subjectId: subj?.id,
+                                })
+                              }
+                              className="cursor-pointer rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-0.5 text-[11px] font-semibold text-[var(--e3)] hover:border-[var(--e3)]"
+                            >
+                              Focus
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <form onSubmit={handleAddQuickCalendarSession} className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2.5">
+                <input
+                  type="text"
+                  value={fullCalQuickTitle}
+                  onChange={(e) => setFullCalQuickTitle(e.target.value)}
+                  placeholder={`Schedule session on ${formatShortDate(fullCalSelectedDay)}…`}
+                  className="sd-input min-w-[170px] flex-1 py-1 text-xs"
+                />
+                {workspace.subjects.length > 0 && (
+                  <select
+                    aria-label="Session subject"
+                    value={fullCalQuickSubjId}
+                    onChange={(e) => setFullCalQuickSubjId(e.target.value)}
+                    className="sd-input w-auto max-w-[140px] py-1 text-xs"
+                  >
+                    <option value="">General</option>
+                    {workspace.subjects.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="time"
+                  aria-label="Session start time"
+                  value={fullCalQuickTime}
+                  onChange={(e) => setFullCalQuickTime(e.target.value)}
+                  className="sd-input w-auto py-1 text-xs"
+                />
+                <select
+                  aria-label="Session duration"
+                  value={fullCalQuickMins}
+                  onChange={(e) => setFullCalQuickMins(Number(e.target.value))}
+                  className="sd-input w-auto py-1 text-xs"
+                >
+                  <option value={25}>25m</option>
+                  <option value={45}>45m</option>
+                  <option value={60}>60m</option>
+                </select>
+                <button type="submit" className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap">
+                  <Plus className="h-3 w-3" aria-hidden="true" />
+                  <span>Add</span>
+                </button>
+              </form>
+            </div>
+          </div>
+        );
+      }
+
+      case 'examTimetable': {
+        const upcoming = unifiedExams.filter((ex) => {
+          const d = daysUntilDate(ex.date);
+          return d !== null && d >= 0;
+        });
+        return (
+          <div className="flex h-full flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                <h2 className="font-display flex items-center gap-2 text-base font-bold text-[var(--ink)]">
+                  <GraduationCap className="h-4 w-4 text-[var(--ink)]" aria-hidden="true" />
+                  <span>Exam Timetable ({upcoming.length})</span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('calendar')}
+                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                >
+                  Open Calendar →
+                </button>
+              </div>
+
+              {upcoming.length === 0 ? (
+                <p className="mt-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
+                  No upcoming exams scheduled yet. Add exam dates in Subjects or Calendar.
+                </p>
+              ) : (
+                <div className="mt-3 max-h-[300px] space-y-2 overflow-y-auto pr-1">
+                  {upcoming.slice(0, 10).map((ex) => {
+                    const days = daysUntilDate(ex.date) ?? 0;
+                    const stat = ex.subjectId
+                      ? subjectStats.find((st) => st.subj.id === ex.subjectId)
+                      : undefined;
+                    return (
+                      <div
+                        key={ex.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-xs"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="shrink-0 rounded border border-[#111827] bg-[#FDE047] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#111827]">
+                              EXAM
+                            </span>
+                            <span className="truncate font-bold text-[var(--ink)]">
+                              {ex.displayLabel}
+                            </span>
+                          </div>
+                          <div className="font-mono-num mt-0.5 text-[11px] text-[var(--mute)]">
+                            {formatShortDate(ex.date)} · {ex.startTime} ({ex.durationMins}m)
+                            {stat ? ` · Readiness ${stat.readiness}%` : ''}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`font-mono-num font-bold ${
+                              days <= 3
+                                ? 'text-[var(--bad)]'
+                                : days <= 14
+                                ? 'text-[var(--e2)]'
+                                : 'text-[var(--ok)]'
+                            }`}
+                          >
+                            {days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${days}d`}
+                          </span>
+                          {ex.subjectId && (
+                            <button
+                              type="button"
+                              onClick={() => onNavigate('subjects', { subjectId: ex.subjectId })}
+                              className="cursor-pointer rounded border border-[var(--line)] bg-[var(--card)] px-2 py-1 text-[11px] font-semibold text-[var(--e3)] hover:border-[var(--e3)]"
+                            >
+                              Revise
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      case 'quickFlashcards': {
+        const pool = workspace.flashcards.filter((c) => {
+          if (fcWidgetSubjId !== 'ALL' && c.subjectId !== fcWidgetSubjId) return false;
+          if (fcWidgetDueOnly && c.dueAt > nowMs) return false;
+          return true;
+        });
+        const activePool =
+          pool.length > 0
+            ? pool
+            : workspace.flashcards.filter(
+                (c) => fcWidgetSubjId === 'ALL' || c.subjectId === fcWidgetSubjId
+              );
+        const card = activePool.length > 0 ? activePool[fcWidgetIdx % activePool.length] : null;
+        const cardSubj = card ? subjectMap.get(card.subjectId) : undefined;
+
+        return (
+          <div className="flex h-full flex-col justify-between">
+            <div>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                <h2 className="font-display flex items-center gap-2 text-base font-bold text-[var(--ink)]">
+                  <Layers className="h-4 w-4 text-[var(--ok)]" aria-hidden="true" />
+                  <span>Quick Flashcard Review</span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('flashcards')}
+                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                >
+                  Full Deck →
+                </button>
+              </div>
+
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <select
+                  aria-label="Filter deck by subject"
+                  value={fcWidgetSubjId}
+                  onChange={(e) => {
+                    setFcWidgetSubjId(e.target.value);
+                    setFcWidgetIdx(0);
+                    setFcWidgetFlipped(false);
+                  }}
+                  className="sd-input w-auto flex-1 py-1 text-xs"
+                >
+                  <option value="ALL">All Subjects ({workspace.flashcards.length})</option>
+                  {workspace.subjects.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFcWidgetDueOnly((v) => !v);
+                    setFcWidgetIdx(0);
+                    setFcWidgetFlipped(false);
+                  }}
+                  className={`sd-btn px-2.5 py-1 text-xs whitespace-nowrap ${
+                    fcWidgetDueOnly ? 'border-[var(--ok)] text-[var(--ok)]' : ''
+                  }`}
+                >
+                  {fcWidgetDueOnly ? 'Due Only' : 'All Cards'}
+                </button>
+              </div>
+
+              {!card ? (
+                <p className="mt-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
+                  No flashcards match this filter yet. Create cards in Flashcards or import a Quizlet deck.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-2.5">
+                  <div className="flex items-center justify-between text-[11px] text-[var(--mute)]">
+                    <span className="truncate font-semibold">
+                      {cardSubj?.name || 'Subject'} · {card.sectionName}
+                    </span>
+                    <span className="font-mono-num shrink-0">
+                      Box {card.box} · {(fcWidgetIdx % activePool.length) + 1}/{activePool.length}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFcWidgetFlipped((v) => !v)}
+                    className="flex min-h-[104px] w-full cursor-pointer flex-col items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 text-center transition-colors hover:border-[var(--e3)]"
+                  >
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                      {fcWidgetFlipped ? 'Answer' : 'Question · Click to flip'}
+                    </div>
+                    <div className="mt-1.5 text-sm font-semibold leading-snug text-[var(--ink)]">
+                      {fcWidgetFlipped ? card.a : card.q}
+                    </div>
+                  </button>
+
+                  {fcWidgetFlipped ? (
+                    <div className="grid grid-cols-4 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleRateQuickFlashcard(card.id, 'again')}
+                        className="sd-btn py-1.5 text-xs font-bold text-[var(--bad)]"
+                      >
+                        Again
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRateQuickFlashcard(card.id, 'hard')}
+                        className="sd-btn py-1.5 text-xs font-bold text-[var(--e2)]"
+                      >
+                        Hard
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRateQuickFlashcard(card.id, 'good')}
+                        className="sd-btn py-1.5 text-xs font-bold text-[var(--e3)]"
+                      >
+                        Good
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRateQuickFlashcard(card.id, 'easy')}
+                        className="sd-btn py-1.5 text-xs font-bold text-[var(--ok)]"
+                      >
+                        Easy
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFcWidgetFlipped(true)}
+                        className="sd-btn-pri flex-1 py-1.5 text-xs"
+                      >
+                        <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Show Answer</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFcWidgetFlipped(false);
+                          setFcWidgetIdx((i) => i + 1);
+                        }}
+                        className="sd-btn px-3 py-1.5 text-xs"
+                      >
+                        Skip
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      case 'quickNotes': {
+        const q = notesWidgetQuery.trim().toLowerCase();
+        const noteTopics = workspace.topics
+          .filter((t) => {
+            if (notesWidgetSubjId !== 'ALL' && t.subjectId !== notesWidgetSubjId) return false;
+            const hasContent = !isNoteEmpty(t.notes) || (t.timelineEvents?.length || 0) > 0;
+            if (!hasContent) return false;
+            if (!q) return true;
+            const subjName = subjectMap.get(t.subjectId)?.name.toLowerCase() || '';
+            return (
+              t.name.toLowerCase().includes(q) ||
+              t.notes.summary.toLowerCase().includes(q) ||
+              subjName.includes(q)
+            );
+          })
+          .sort((a, b) => (b.notes.updatedAt || '').localeCompare(a.notes.updatedAt || ''))
+          .slice(0, 6);
+
+        return (
+          <div className="flex h-full flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                <h2 className="font-display flex items-center gap-2 text-base font-bold text-[var(--ink)]">
+                  <BookOpen className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Study Notes Finder</span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('notes')}
+                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                >
+                  Open Notes →
+                </button>
+              </div>
+
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                <div className="relative min-w-[150px] flex-1">
+                  <Search
+                    className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                    aria-hidden="true"
+                  />
+                  <input
+                    type="search"
+                    value={notesWidgetQuery}
+                    onChange={(e) => setNotesWidgetQuery(e.target.value)}
+                    placeholder="Search notes…"
+                    className="sd-input py-1 pl-8 text-xs"
+                  />
+                </div>
+                <select
+                  aria-label="Filter notes by subject"
+                  value={notesWidgetSubjId}
+                  onChange={(e) => setNotesWidgetSubjId(e.target.value)}
+                  className="sd-input w-auto max-w-[140px] py-1 text-xs"
+                >
+                  <option value="ALL">All Subjects</option>
+                  {workspace.subjects.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {noteTopics.length === 0 ? (
+                <p className="mt-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
+                  No structured notes match this filter yet.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {noteTopics.map((tp) => {
+                    const subj = subjectMap.get(tp.subjectId);
+                    return (
+                      <button
+                        key={tp.id}
+                        type="button"
+                        onClick={() =>
+                          onNavigate('notes', { subjectId: tp.subjectId, topicId: tp.id })
+                        }
+                        className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-left text-xs transition-colors hover:border-[var(--e3)]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-bold text-[var(--ink)]">{tp.name}</div>
+                          <div className="truncate text-[11px] text-[var(--mute)]">
+                            {subj?.name || 'Subject'}
+                            {tp.notes.keyTerms.length > 0
+                              ? ` · ${tp.notes.keyTerms.length} key terms`
+                              : ''}
+                            {tp.timelineEvents && tp.timelineEvents.length > 0
+                              ? ` · ${tp.timelineEvents.length} timeline events`
+                              : ''}
+                          </div>
+                        </div>
+                        <span className="shrink-0 font-semibold text-[var(--e3)]">Open →</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      case 'subjectBreakdown': {
+        const minsBySubj = new Map<string, number>();
+        for (const entry of studyLog) {
+          if (!entry.subjectId) continue;
+          minsBySubj.set(entry.subjectId, (minsBySubj.get(entry.subjectId) || 0) + (entry.mins || 0));
+        }
+        const rows = workspace.subjects
+          .map((s) => ({ subj: s, mins: minsBySubj.get(s.id) || 0 }))
+          .sort((a, b) => b.mins - a.mins);
+        const maxMins = Math.max(1, ...rows.map((r) => r.mins));
+        const totalSubjMins = rows.reduce((acc, r) => acc + r.mins, 0);
+
+        return (
+          <div className="flex h-full flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                <h2 className="font-display flex items-center gap-2 text-base font-bold text-[var(--ink)]">
+                  <BarChart3 className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Revision Time by Subject</span>
+                </h2>
+                <span className="font-mono-num text-xs font-semibold text-[var(--mute)]">
+                  {(totalSubjMins / 60).toFixed(1)}h logged
+                </span>
+              </div>
+
+              {rows.length === 0 ? (
+                <p className="mt-3 text-xs text-[var(--mute)]">
+                  Add subjects to see revision time per subject.
+                </p>
+              ) : (
+                <div className="mt-3 max-h-[280px] space-y-2.5 overflow-y-auto pr-1">
+                  {rows.map(({ subj, mins }) => {
+                    const pct = Math.round((mins / maxMins) * 100);
+                    return (
+                      <div key={subj.id} className="space-y-1 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex min-w-0 items-center gap-2 font-semibold text-[var(--ink)]">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: subj.color }}
+                            />
+                            <span className="truncate">{subj.name}</span>
+                          </span>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="font-mono-num text-[11px] font-semibold text-[var(--mute)]">
+                              {mins}m
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateWorkspace((prev) =>
+                                  addLoggedStudyMinutes(prev, 25, {
+                                    subjectId: subj.id,
+                                    kind: 'manual',
+                                    note: 'Quick +25m',
+                                  })
+                                )
+                              }
+                              className="cursor-pointer rounded border border-[var(--line)] bg-[var(--bg)] px-1.5 py-0.5 font-mono-num text-[10px] font-semibold text-[var(--e3)] hover:border-[var(--e3)]"
+                            >
+                              +25m
+                            </button>
+                          </div>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-[var(--bg)]">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{ width: `${pct}%`, backgroundColor: subj.color }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      case 'topicChecklist': {
+        const activeSubjId =
+          checklistSubjId && subjectMap.has(checklistSubjId)
+            ? checklistSubjId
+            : workspace.subjects[0]?.id || '';
+        const subjTopics = workspace.topics.filter((t) => {
+          if (activeSubjId && t.subjectId !== activeSubjId) return false;
+          const conf = String(t.confidence ?? (t.completed ? 3 : 0));
+          if (checklistFilter !== 'all' && conf !== checklistFilter) return false;
+          return true;
+        });
+
+        const CONF_LABELS: Record<number, { text: string; cls: string }> = {
+          0: { text: 'New', cls: 'border-[var(--line)] text-[var(--mute)]' },
+          1: { text: 'Weak', cls: 'border-[var(--bad)] text-[var(--bad)]' },
+          2: { text: 'Alright', cls: 'border-[var(--e2)] text-[var(--e2)]' },
+          3: { text: 'Mastered', cls: 'border-[var(--ok)] text-[var(--ok)]' },
+        };
+
+        return (
+          <div className="flex h-full flex-col justify-between">
+            <div>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                <h2 className="font-display flex items-center gap-2 text-base font-bold text-[var(--ink)]">
+                  <CheckSquare className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Syllabus Checklist</span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('subjects', { subjectId: activeSubjId })}
+                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                >
+                  Open Subjects →
+                </button>
+              </div>
+
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <select
+                  aria-label="Checklist subject"
+                  value={activeSubjId}
+                  onChange={(e) => setChecklistSubjId(e.target.value)}
+                  className="sd-input w-auto flex-1 py-1 text-xs"
+                >
+                  {workspace.subjects.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Filter by confidence"
+                  value={checklistFilter}
+                  onChange={(e) => setChecklistFilter(e.target.value as 'all' | '0' | '1' | '2' | '3')}
+                  className="sd-input w-auto py-1 text-xs"
+                >
+                  <option value="all">All</option>
+                  <option value="0">Unstarted</option>
+                  <option value="1">Weak</option>
+                  <option value="2">Alright</option>
+                  <option value="3">Mastered</option>
+                </select>
+              </div>
+
+              {subjTopics.length === 0 ? (
+                <p className="mt-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--bg)] p-4 text-xs text-[var(--mute)]">
+                  No topics match this filter yet.
+                </p>
+              ) : (
+                <div className="mt-3 max-h-[250px] space-y-1.5 overflow-y-auto pr-1">
+                  {subjTopics.map((tp) => {
+                    const conf = tp.confidence ?? (tp.completed ? 3 : 0);
+                    const badge = CONF_LABELS[conf] || CONF_LABELS[0];
+                    return (
+                      <div
+                        key={tp.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3 py-1.5 text-xs"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => cycleTopicConfidence(tp.id)}
+                          className={`shrink-0 cursor-pointer rounded border bg-[var(--card)] px-2 py-0.5 text-[10px] font-bold ${badge.cls}`}
+                          title="Click to cycle confidence"
+                        >
+                          {badge.text}
+                        </button>
+                        <span className="min-w-0 flex-1 truncate font-medium text-[var(--ink)]">
+                          {tp.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onNavigate('notes', { subjectId: tp.subjectId, topicId: tp.id })
+                          }
+                          className="shrink-0 cursor-pointer text-[11px] font-semibold text-[var(--e3)] hover:underline"
+                        >
+                          Notes →
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      case 'gradeTargetTracker': {
+        const scores = workspace.paperScores || [];
+        return (
+          <div className="flex h-full flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                <h2 className="font-display flex items-center gap-2 text-base font-bold text-[var(--ink)]">
+                  <Award className="h-4 w-4 text-[var(--e2)]" aria-hidden="true" />
+                  <span>Target Grades &amp; Readiness</span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('progress')}
+                  className="cursor-pointer text-xs font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                >
+                  Progress →
+                </button>
+              </div>
+
+              {subjectStats.length === 0 ? (
+                <p className="mt-3 text-xs text-[var(--mute)]">
+                  Add subjects to set target grades and track exam readiness.
+                </p>
+              ) : (
+                <div className="mt-3 max-h-[280px] overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-[var(--line)] text-[11px] text-[var(--mute)]">
+                        <th className="py-1.5 font-semibold">Subject</th>
+                        <th className="py-1.5 font-semibold">Target</th>
+                        <th className="py-1.5 text-right font-semibold">Syllabus</th>
+                        <th className="py-1.5 text-right font-semibold">Mock Avg</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--line)]">
+                      {subjectStats.map((row) => {
+                        const subjScores = scores.filter((sc) => sc.subjectId === row.subj.id && sc.total > 0);
+                        const avgPct =
+                          subjScores.length > 0
+                            ? Math.round(
+                                subjScores.reduce((acc, sc) => acc + (sc.mark / sc.total) * 100, 0) /
+                                  subjScores.length
+                              )
+                            : null;
+                        return (
+                          <tr key={row.subj.id}>
+                            <td className="py-2 pr-2 font-semibold text-[var(--ink)]">
+                              <span className="inline-flex items-center gap-1.5">
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full"
+                                  style={{ backgroundColor: row.subj.color }}
+                                />
+                                <span className="truncate max-w-[140px]">{row.subj.name}</span>
+                              </span>
+                            </td>
+                            <td className="py-1.5 pr-2">
+                              <input
+                                type="text"
+                                aria-label={`Target grade for ${row.subj.name}`}
+                                value={row.subj.targetGrade || ''}
+                                onChange={(e) => {
+                                  const nextGrade = e.target.value;
+                                  onUpdateWorkspace((prev) => ({
+                                    ...prev,
+                                    subjects: prev.subjects.map((s) =>
+                                      s.id === row.subj.id ? { ...s, targetGrade: nextGrade } : s
+                                    ),
+                                  }));
+                                }}
+                                placeholder="e.g. 9 / A*"
+                                className="sd-input w-20 py-0.5 text-center font-mono-num text-xs"
+                              />
+                            </td>
+                            <td className="py-2 text-right font-mono-num font-bold text-[var(--ink)]">
+                              {row.readiness}%
+                            </td>
+                            <td className="py-2 text-right font-mono-num font-semibold text-[var(--mute)]">
+                              {avgPct !== null ? `${avgPct}%` : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -3034,30 +4349,45 @@ export function HomeDashboardView({
               </div>
             </div>
 
-            {/* Category filter pills */}
-            <div className="flex flex-wrap gap-1.5 border-b border-[var(--line)] pb-3">
-              {CATEGORY_TABS.map((cat) => {
-                const count =
-                  cat === 'All'
-                    ? WIDGET_CATALOG.filter((m) => !activeWidgetIds.has(m.id)).length
-                    : WIDGET_CATALOG.filter((m) => m.category === cat && !activeWidgetIds.has(m.id))
-                        .length;
-                const active = trayCategory === cat;
-                return (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => setTrayCategory(cat)}
-                    className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
-                      active
-                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))] text-[var(--e3)]'
-                        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
-                    }`}
-                  >
-                    {cat} ({count})
-                  </button>
-                );
-              })}
+            {/* Category filter & search */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-3">
+              <div className="flex flex-wrap gap-1.5">
+                {CATEGORY_TABS.map((cat) => {
+                  const count =
+                    cat === 'All'
+                      ? WIDGET_CATALOG.filter((m) => !activeWidgetIds.has(m.id)).length
+                      : WIDGET_CATALOG.filter((m) => m.category === cat && !activeWidgetIds.has(m.id))
+                          .length;
+                  const active = trayCategory === cat;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setTrayCategory(cat)}
+                      className={`cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap ${
+                        active
+                          ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))] text-[var(--e3)]'
+                          : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)] hover:text-[var(--ink)]'
+                      }`}
+                    >
+                      {cat} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="relative min-w-[190px]">
+                <Search
+                  className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--mute)]"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={widgetSearch}
+                  onChange={(e) => setWidgetSearch(e.target.value)}
+                  placeholder="Search widgets…"
+                  className="sd-input py-1 pl-8 text-xs"
+                />
+              </div>
             </div>
 
             {unusedCatalog.length > 0 ? (
