@@ -7,6 +7,8 @@
  * canonical symbols StudyDeck parses and renders, while protecting URLs, HTML tags, and code spans.
  */
 
+import { isLikelyCurrency, isValidInlineMath } from './latexRenderer';
+
 export const BULLET_GLYPH_CLASS = '[-*•▪▫◦‣●○■□◆◇❖⁃∙▸▹►▻➢➣–—]';
 export const SUB_BULLET_GLYPH_CLASS = '[↳└├]';
 
@@ -30,7 +32,7 @@ const TRIANGLE_BULLET_GLYPHS_RE = /[►▶▸▹▻▷➣➢◄◀◂◁◃◅]/
 /**
  * Normalizes variant external symbols (arrows, bidirectional/reversible arrows, HTML entities,
  * simple LaTeX symbol commands, tree/sub-bullet markers, and math operators) into StudyDeck's
- * canonical symbol set while keeping URLs, HTML tags, comments, and `inline code` untouched.
+ * canonical symbol set while keeping LaTeX math, code blocks, URLs, HTML tags, and comments untouched.
  */
 export function normalizeStudySymbols(
   input: string,
@@ -45,7 +47,7 @@ export function normalizeStudySymbols(
     .replace(/[\u00A0\u202F\u2009]/g, ' ')
     .replace(/\r/g, '');
 
-  // 2. Protect inline code, URLs, HTML comments, and rich-text HTML tags
+  // 2. Protect fenced code blocks, display math, inline math, URLs, HTML comments, and rich-text HTML tags
   const protectedTokens: string[] = [];
   const protect = (raw: string) => {
     const idx = protectedTokens.length;
@@ -53,8 +55,28 @@ export function normalizeStudySymbols(
     return `\uE000SDPROT_${idx}\uE001`;
   };
 
+  // 2a. Fenced code blocks
+  s = s.replace(/```[\s\S]*?```/g, (m) => protect(m));
+
+  // 2b. Display LaTeX math: $$...$$, \[...\], \begin{env}...\end{env}
+  s = s.replace(/\$\$[\s\S]*?\$\$/g, (m) => protect(m));
+  s = s.replace(/\\\[[\s\S]*?\\\]/g, (m) => protect(m));
+  s = s.replace(/\\begin\{(equation\*?|align\*?|gather\*?|multline\*?|cases|pmatrix|bmatrix|matrix|split)\}[\s\S]*?\\end\{\1\}/g, (m) => protect(m));
+
+  // 2c. Inline math: \(...\)
+  s = s.replace(/\\\([\s\S]*?\\\)/g, (m) => protect(m));
+
+  // 2d. Inline math: $...$ (with currency guard)
+  s = s.replace(/\$([^\$\n]+)\$/g, (m, inner) => {
+    if (inner && !isLikelyCurrency(inner) && isValidInlineMath(inner)) {
+      return protect(m);
+    }
+    return m;
+  });
+
+  // 2e. Image tokens, inline code spans, HTML tags/comments, and URLs
   s = s.replace(
-    /(@image:\{[^\n]+\}|`[^`\n]+`|<!--[\s\S]*?-->|<\/?(?:span|mark|u|strong|em|b|i|code|br|a|sub|sup|p|div|table|thead|tbody|tr|th|td|ul|ol|li|h[1-6]|blockquote)\b[^>]*>|https?:\/\/[^\s)>\]"']+)/gi,
+    /(@image:\{[^\n]+\}|`[^`\n]+`|<!--[\s\S]*?-->|<\/?(?:span|mark|u|strong|em|b|i|code|br|a|sub|sup|del|s|kbd|p|div|table|thead|tbody|tr|th|td|ul|ol|li|h[1-6]|blockquote)\b[^>]*>|https?:\/\/[^\s)>\]"']+)/gi,
     (m) => protect(m)
   );
 
@@ -80,7 +102,7 @@ export function normalizeStudySymbols(
     .replace(/&hellip;|&#0*8230;/gi, '…')
     .replace(/&amp;/gi, '&');
 
-  // 4. Normalize common LaTeX symbol commands (outside code)
+  // 4. Normalize standalone shorthand LaTeX symbol commands (only outside protected math/code)
   s = s
     .replace(/\\(?:rightleftharpoons|leftrightharpoons)\b/g, '⇌')
     .replace(/\\(?:Longleftrightarrow|longleftrightarrow|leftrightarrow|Leftrightarrow|iff)\b/g, '↔')
@@ -105,12 +127,6 @@ export function normalizeStudySymbols(
     .replace(/\\pi\b/g, 'π')
     .replace(/\\sigma\b/g, 'σ')
     .replace(/\\omega\b/g, 'ω');
-
-  // Unwrap inline $...$ only when it contains converted science/arrow unicode (never currency like $50)
-  s = s.replace(
-    /\$([^$\n]{1,48}[→←↔⇌≤≥≠≈×÷±°Δαβγθλμπσω∞][^$\n]{0,48})\$/g,
-    '$1'
-  );
 
   // 5. Preserve StudyDeck's leading flow marker `⇒ ` at line start, while converting mid-line `⇒`
   const preserveFlowMarker = opts?.preserveLeadingFlowMarker !== false;

@@ -1,23 +1,16 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 import {
-  CalendarDays,
   Check,
   CheckSquare,
   Flag,
-  Pause,
   Play,
   Plus,
-  RotateCcw,
   Star,
-  Timer,
   Trash2,
   Undo2,
 } from 'lucide-react';
-import { addLoggedStudyMinutes, makeId } from '../lib/workspaceStore';
+import { makeId } from '../lib/workspaceStore';
 import {
-  LiveTimerState,
-  PlannerSubTab,
-  StopwatchState,
   StudySubject,
   TodoTaskItem,
   WorkspaceData,
@@ -25,30 +18,14 @@ import {
 
 interface PlannerViewProps {
   workspace: WorkspaceData;
-  subTab: PlannerSubTab;
-  onChangeSubTab: (tab: PlannerSubTab) => void;
   onUpdateWorkspace: (updater: (prev: WorkspaceData) => WorkspaceData) => void;
-  liveTimer: LiveTimerState;
-  timerRemainingSec: number;
-  timerDurationMins: number;
-  timerSubject: string;
-  onChangeTimerSubject: (s: string) => void;
-  onToggleTimer: () => void;
-  onResetTimer: (mins?: number) => void;
-  stopwatch: StopwatchState;
-  onToggleStopwatch: () => void;
-  onLapStopwatch: () => void;
-  onResetStopwatch: () => void;
-  onStopAndLogStopwatch: () => number;
-  onChangeStopwatchSubject: (subjectName: string, subjectId?: string) => void;
-  onTimerModeChange?: (mode: 'timer' | 'pomo' | 'stopwatch') => void;
+  onStartStudySession?: (subjectName?: string) => void;
 }
 
 type TodoCategory = 'exam' | 'hw' | 'oth';
 type TodoViewFilter = 'all' | 'star' | 'today' | 'done' | 'c:exam' | 'c:hw' | 'c:oth';
 type TodoGroupMode = 'due' | 'cat' | 'sub' | 'pri' | 'none';
 type TodoSortMode = 'due' | 'pri' | 'new' | 'az';
-type TimerEngineMode = 'timer' | 'pomo' | 'stopwatch';
 
 const CAT_META: Record<TodoCategory, { label: string; color: string }> = {
   exam: { label: 'Exam', color: 'var(--e1)' },
@@ -207,36 +184,12 @@ function parseSmartTodo(
   return { title, dueDate, priority, tags, estMins, category, subjectId };
 }
 
-function formatClock(totalSec: number): string {
-  const s = Math.max(0, Math.floor(totalSec));
-  const hrs = Math.floor(s / 3600);
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return hrs > 0 ? `${hrs}:${mm}:${ss}` : `${mm}:${ss}`;
-}
-
 export function PlannerView({
   workspace,
-  subTab,
-  onChangeSubTab,
   onUpdateWorkspace,
-  liveTimer,
-  timerRemainingSec,
-  timerDurationMins,
-  timerSubject,
-  onChangeTimerSubject,
-  onToggleTimer,
-  onResetTimer,
-  stopwatch,
-  onToggleStopwatch,
-  onLapStopwatch,
-  onResetStopwatch,
-  onStopAndLogStopwatch,
-  onChangeStopwatchSubject,
-  onTimerModeChange,
+  onStartStudySession,
 }: PlannerViewProps) {
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const effectiveSubTab: 'todo' | 'timer' = subTab === 'timer' ? 'timer' : 'todo';
 
   // Smart To-Do state
   const [quickInput, setQuickInput] = useState('');
@@ -256,19 +209,7 @@ export function PlannerView({
     null
   );
 
-  // Extended Focus Timer modes (Timer / Pomodoro / Stopwatch)
-  const [timerMode, setTimerMode] = useState<TimerEngineMode>(() =>
-    stopwatch.running || stopwatch.elapsedSec > 0 ? 'stopwatch' : 'timer'
-  );
-  const [pomoFocusMins, setPomoFocusMins] = useState(25);
-  const [pomoBreakMins, setPomoBreakMins] = useState(5);
-  const [pomoPhase, setPomoPhase] = useState<'focus' | 'break'>('focus');
-  const [pomoRound, setPomoRound] = useState(1);
-  const [timerBanner, setTimerBanner] = useState<string | null>(null);
 
-  useEffect(() => {
-    onTimerModeChange?.(timerMode);
-  }, [timerMode, onTimerModeChange]);
 
   const subjById = useMemo(
     () => new Map(workspace.subjects.map((s) => [s.id, s])),
@@ -506,70 +447,24 @@ export function PlannerView({
     .filter((t) => !t.done && t.category === 'exam' && t.dueDate && t.dueDate >= todayStr)
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
 
-  const handleLogFocusMinutes = (mins: number) => {
-    if (mins <= 0) return;
-    onUpdateWorkspace((prev) => addLoggedStudyMinutes(prev, mins));
-    setTimerBanner(`Logged +${mins} minutes to your study streak!`);
-    window.setTimeout(() => setTimerBanner(null), 2800);
-  };
-
-  const handleStopAndLog = () => {
-    if (timerMode === 'stopwatch') {
-      const loggedMins = onStopAndLogStopwatch();
-      if (loggedMins > 0) {
-        setTimerBanner(`Logged +${loggedMins} minutes to your study streak!`);
-        window.setTimeout(() => setTimerBanner(null), 2800);
-      }
-    } else {
-      const elapsedSec = timerDurationMins * 60 - timerRemainingSec;
-      const mins = Math.max(1, Math.round(elapsedSec / 60));
-      if (elapsedSec >= 30) {
-        handleLogFocusMinutes(mins);
-      }
-      onResetTimer(timerMode === 'pomo' ? pomoFocusMins : timerDurationMins);
-    }
-  };
-
-  const mmssMain =
-    timerMode === 'stopwatch' ? stopwatch.text : formatClock(timerRemainingSec);
-
   return (
     <div className="h-full overflow-y-auto bg-[var(--bg)]">
       <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">
-        {/* Header & Sub-tabs (To-Do | Focus Timer) */}
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-4">
           <div>
             <h1 className="font-display text-2xl font-extrabold tracking-tight text-[var(--ink)] sm:text-3xl">
               Planner
             </h1>
             <p className="mt-1 text-sm text-[var(--mute)]">
-              Smart natural-language To-Do manager, Today&apos;s plan, and Pomodoro / Stopwatch timer.
+              Smart natural-language To-Do manager and Today&apos;s plan.
             </p>
           </div>
-
-          <div className="sd-seg" role="tablist" aria-label="Planner views">
-            <button
-              type="button"
-              aria-pressed={effectiveSubTab === 'todo'}
-              onClick={() => onChangeSubTab('todo')}
-              className="sd-seg-btn"
-            >
-              To-Do ({counts.all})
-            </button>
-            <button
-              type="button"
-              aria-pressed={effectiveSubTab === 'timer'}
-              onClick={() => onChangeSubTab('timer')}
-              className="sd-seg-btn"
-            >
-              Focus Timer
-            </button>
+          <div className="font-mono-num text-xs font-semibold text-[var(--mute)]">
+            {counts.all} open · {counts.done} completed
           </div>
         </div>
 
-        {/* TO-DO TAB */}
-        {effectiveSubTab === 'todo' && (
-          <div className="space-y-4">
+        <div className="space-y-4">
             {/* Progress Header Card */}
             <div className="sd-card p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1173,11 +1068,7 @@ export function PlannerView({
                                     <div className="flex flex-wrap items-center gap-2">
                                       <button
                                         type="button"
-                                        onClick={() => {
-                                          if (subj) onChangeTimerSubject(subj.name);
-                                          onChangeSubTab('timer');
-                                          if (!liveTimer.running) onToggleTimer();
-                                        }}
+                                        onClick={() => onStartStudySession?.(subj?.name)}
                                         className="sd-btn-pri px-3 py-1.5 text-xs"
                                       >
                                         <Play className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1239,263 +1130,6 @@ export function PlannerView({
               </div>
             </div>
           </div>
-        )}
-
-        {/* FOCUS TIMER TAB */}
-        {effectiveSubTab === 'timer' && (
-          <div className="mx-auto max-w-xl space-y-5">
-            <div className="sd-card space-y-5 p-6 text-center sm:p-8">
-              <div className="flex justify-center">
-                <div className="sd-seg" role="tablist" aria-label="Timer mode">
-                  {(
-                    [
-                      ['timer', 'Timer'],
-                      ['pomo', 'Pomodoro'],
-                      ['stopwatch', 'Stopwatch'],
-                    ] as const
-                  ).map(([m, label]) => (
-                    <button
-                      key={m}
-                      type="button"
-                      aria-pressed={timerMode === m}
-                      onClick={() => {
-                        setTimerMode(m);
-                        if (m === 'pomo') {
-                          setPomoPhase('focus');
-                          onResetTimer(pomoFocusMins);
-                        }
-                      }}
-                      className="sd-seg-btn"
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--e3)]">
-                <Timer className="h-4 w-4" aria-hidden="true" />
-                <span>
-                  {timerMode === 'stopwatch'
-                    ? stopwatch.topicName
-                      ? `Stopwatch · ${stopwatch.topicName}`
-                      : 'Stopwatch'
-                    : timerMode === 'pomo'
-                    ? `${pomoPhase === 'focus' ? 'Focus' : 'Break'} · Round ${pomoRound}`
-                    : 'Countdown Timer'}
-                </span>
-              </div>
-
-              <div className="font-mono-num text-6xl font-extrabold tracking-tight text-[var(--ink)]">
-                {mmssMain}
-              </div>
-
-              <div className="mx-auto max-w-sm space-y-3">
-                <label className="block text-left text-xs font-semibold text-[var(--mute)]">
-                  Focus Subject
-                  <select
-                    value={timerMode === 'stopwatch' ? stopwatch.subjectName : timerSubject}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      onChangeTimerSubject(val);
-                      const matched = workspace.subjects.find((s) => s.name === val);
-                      onChangeStopwatchSubject(val, matched?.id);
-                    }}
-                    className="sd-input mt-1 text-sm"
-                  >
-                    <option value="General Study">General Study</option>
-                    {workspace.subjects.map((s) => (
-                      <option key={s.id} value={s.name}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {timerMode === 'timer' && (
-                  <div className="grid grid-cols-5 gap-2">
-                    {[10, 25, 45, 60, 90].map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => onResetTimer(m)}
-                        className={`font-mono-num cursor-pointer rounded-lg border py-2 text-xs font-bold ${
-                          timerDurationMins === m
-                            ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)]'
-                            : 'border-[var(--line)] bg-[var(--bg)] text-[var(--ink)]'
-                        }`}
-                      >
-                        {m}m
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {timerMode === 'pomo' && (
-                  <div className="grid grid-cols-2 gap-3 text-left">
-                    <label className="text-xs font-semibold text-[var(--mute)]">
-                      Focus (mins)
-                      <input
-                        type="number"
-                        min={5}
-                        max={90}
-                        value={pomoFocusMins}
-                        onChange={(e) => {
-                          const v = Math.max(5, Math.min(90, Number(e.target.value) || 25));
-                          setPomoFocusMins(v);
-                          if (pomoPhase === 'focus') onResetTimer(v);
-                        }}
-                        className="sd-input mt-1 py-1 text-xs"
-                      />
-                    </label>
-                    <label className="text-xs font-semibold text-[var(--mute)]">
-                      Break (mins)
-                      <input
-                        type="number"
-                        min={1}
-                        max={30}
-                        value={pomoBreakMins}
-                        onChange={(e) => {
-                          const v = Math.max(1, Math.min(30, Number(e.target.value) || 5));
-                          setPomoBreakMins(v);
-                          if (pomoPhase === 'break') onResetTimer(v);
-                        }}
-                        className="sd-input mt-1 py-1 text-xs"
-                      />
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex flex-wrap justify-center gap-2.5 pt-2">
-                {timerMode === 'stopwatch' ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={onToggleStopwatch}
-                      className="sd-btn-pri px-5 py-2.5 text-sm"
-                    >
-                      {stopwatch.running ? (
-                        <>
-                          <Pause className="h-4 w-4" aria-hidden="true" />
-                          <span>Pause</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="h-4 w-4" aria-hidden="true" />
-                          <span>{stopwatch.elapsedSec > 0 ? 'Resume' : 'Start'}</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!stopwatch.running && stopwatch.elapsedSec === 0}
-                      onClick={onLapStopwatch}
-                      className="sd-btn px-4 py-2.5 text-sm"
-                    >
-                      Lap
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleStopAndLog}
-                      className="sd-btn px-4 py-2.5 text-sm"
-                    >
-                      Stop &amp; Log
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!stopwatch.running && stopwatch.elapsedSec === 0}
-                      onClick={onResetStopwatch}
-                      className="sd-btn px-3.5 py-2.5 text-sm"
-                    >
-                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                      <span>Reset</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={onToggleTimer}
-                      className="sd-btn-pri px-5 py-2.5 text-sm"
-                    >
-                      {liveTimer.running ? (
-                        <>
-                          <Pause className="h-4 w-4" aria-hidden="true" />
-                          <span>Pause</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="h-4 w-4" aria-hidden="true" />
-                          <span>Start Focus</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleStopAndLog}
-                      className="sd-btn px-4 py-2.5 text-sm"
-                    >
-                      Stop &amp; Log
-                    </button>
-                    {timerMode === 'pomo' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (pomoPhase === 'focus') {
-                            setPomoPhase('break');
-                            onResetTimer(pomoBreakMins);
-                          } else {
-                            setPomoPhase('focus');
-                            setPomoRound((r) => r + 1);
-                            onResetTimer(pomoFocusMins);
-                          }
-                        }}
-                        className="sd-btn px-3.5 py-2.5 text-xs"
-                      >
-                        {pomoPhase === 'focus' ? 'Skip to break' : 'Back to focus'}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => onResetTimer()}
-                      className="sd-btn px-3.5 py-2.5 text-sm"
-                    >
-                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                      <span>Reset</span>
-                    </button>
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => handleLogFocusMinutes(15)}
-                  className="sd-btn px-3.5 py-2.5 text-sm"
-                >
-                  <CalendarDays className="h-4 w-4 text-[var(--ok)]" aria-hidden="true" />
-                  <span>+ Log 15m</span>
-                </button>
-              </div>
-
-              {timerMode === 'stopwatch' && stopwatch.laps.length > 0 && (
-                <div className="mx-auto max-w-xs space-y-1 border-t border-[var(--line)] pt-3 text-xs text-[var(--mute)]">
-                  {stopwatch.laps.map((sec, idx) => (
-                    <div key={idx} className="font-mono-num flex justify-between">
-                      <span>Lap {stopwatch.laps.length - idx}</span>
-                      <span className="font-bold text-[var(--ink)]">{formatClock(sec)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {timerBanner && (
-                <p className="text-xs font-semibold text-[var(--ok)]" role="status">
-                  {timerBanner}
-                </p>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

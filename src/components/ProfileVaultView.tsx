@@ -1486,7 +1486,7 @@ export function ProfileVaultView({
                     className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
-                    <span>Planner &amp; Timer</span>
+                    <span>Focus Timer</span>
                   </button>
                   <button
                     type="button"

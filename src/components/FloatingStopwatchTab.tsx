@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Flag,
   Pause,
+  PictureInPicture2,
   Play,
   RotateCcw,
   Square,
@@ -24,6 +25,7 @@ interface FloatingStopwatchTabProps {
   onStopAndLog: () => void;
   onDismiss: () => void;
   onOpenPlannerTimer: () => void;
+  onFloatMiniBox?: () => void;
 }
 
 function formatClock(totalSeconds: number): string {
@@ -47,6 +49,7 @@ export function FloatingStopwatchTab({
   onStopAndLog,
   onDismiss,
   onOpenPlannerTimer,
+  onFloatMiniBox,
 }: FloatingStopwatchTabProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -189,7 +192,7 @@ export function FloatingStopwatchTab({
             </div>
           )}
 
-          <div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-2.5">
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--line)] pt-2.5">
             <button
               type="button"
               onClick={() => {
@@ -201,6 +204,17 @@ export function FloatingStopwatchTab({
               <span>Open Focus Timer</span>
               <ExternalLink className="h-3 w-3" aria-hidden="true" />
             </button>
+            {onFloatMiniBox && (
+              <button
+                type="button"
+                onClick={onFloatMiniBox}
+                title="Float cross-tab mini timer"
+                className="inline-flex cursor-pointer items-center gap-1 text-[11px] font-semibold text-[var(--ink)] hover:text-[var(--e3)] whitespace-nowrap"
+              >
+                <PictureInPicture2 className="h-3 w-3" aria-hidden="true" />
+                <span>Float</span>
+              </button>
+            )}
             {toastMessage && (
               <span className="text-[11px] font-semibold text-[var(--ok)]">{toastMessage}</span>
             )}

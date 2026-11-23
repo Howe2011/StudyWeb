@@ -2086,42 +2086,72 @@ export function getUnifiedExamsForWorkspace(
 ): UnifiedExamItem[] {
   const subjById = new Map(subjects.map((s) => [s.id, s]));
   const out: UnifiedExamItem[] = [];
-  const seenBlockKeys = new Set<string>();
+  const seenKeys = new Set<string>();
+  const seenGenericSubjDates = new Set<string>();
   const coveredSubjDates = new Set<string>();
+
+  const normalizeTitle = (title: string, subjName?: string): string => {
+    let s = title.toLowerCase().trim();
+    if (subjName) {
+      const escaped = subjName.toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (escaped) {
+        s = s.replace(new RegExp(`^${escaped}\\s*[:\\-·]?\\s*`, 'i'), '');
+      }
+    }
+    s = s.replace(/\b(exam|examination)\b/gi, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    return s;
+  };
 
   for (const b of calendarBlocks) {
     if (b.kind !== 'exam' || !b.date || !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) continue;
-    const subj = b.subjectId ? subjById.get(b.subjectId) : undefined;
-    const rawTitle = (b.title || `${subj?.name || 'Subject'} Exam`).trim();
-    const displayLabel =
-      subj && !rawTitle.toLowerCase().includes(subj.name.toLowerCase())
-        ? `${subj.name} · ${rawTitle}`
-        : rawTitle;
-    const dedupKey = `${b.date}::${b.subjectId || ''}::${rawTitle.toLowerCase()}::${b.startTime || '09:00'}`;
-    if (seenBlockKeys.has(dedupKey)) continue;
-    seenBlockKeys.add(dedupKey);
+    const rawTitle = (b.title || 'Exam').trim();
+    const lowerRaw = rawTitle.toLowerCase();
+    const resolvedSubj =
+      (b.subjectId && subjById.get(b.subjectId)) ||
+      subjects.find((s) => s.name && lowerRaw.includes(s.name.toLowerCase()));
 
-    if (b.subjectId) {
-      coveredSubjDates.add(`${b.subjectId}::${b.date}`);
-    } else {
-      const lowerTitle = rawTitle.toLowerCase();
-      for (const s of subjects) {
-        if (s.examDate === b.date && lowerTitle.includes(s.name.toLowerCase())) {
-          coveredSubjDates.add(`${s.id}::${b.date}`);
-        }
+    const effectiveTitle = rawTitle === 'Exam' && resolvedSubj ? `${resolvedSubj.name} Exam` : rawTitle;
+    const norm = normalizeTitle(effectiveTitle, resolvedSubj?.name);
+    const subjKey = resolvedSubj?.id || b.subjectId || '';
+    const startNorm = (b.startTime || '09:00').trim();
+
+    // Prevent generic "Subject Exam" from duplicating another exam block on the same date/subject
+    const exactKey = `${b.date}::${subjKey}::${norm}::${startNorm}`;
+    const noTimeKey = `${b.date}::${subjKey}::${norm}`;
+    const genericSubjKey = subjKey ? `${b.date}::${subjKey}` : '';
+
+    if (seenKeys.has(exactKey) || seenKeys.has(noTimeKey)) continue;
+    if (norm === '' && genericSubjKey && seenGenericSubjDates.has(genericSubjKey)) continue;
+
+    seenKeys.add(exactKey);
+    seenKeys.add(noTimeKey);
+    if (genericSubjKey) {
+      seenGenericSubjDates.add(genericSubjKey);
+    }
+
+    if (b.subjectId) coveredSubjDates.add(`${b.subjectId}::${b.date}`);
+    if (resolvedSubj) coveredSubjDates.add(`${resolvedSubj.id}::${b.date}`);
+    for (const s of subjects) {
+      if (s.examDate === b.date && lowerRaw.includes(s.name.toLowerCase())) {
+        coveredSubjDates.add(`${s.id}::${b.date}`);
       }
     }
+
+    const displayLabel =
+      resolvedSubj && !effectiveTitle.toLowerCase().includes(resolvedSubj.name.toLowerCase())
+        ? `${resolvedSubj.name} · ${effectiveTitle}`
+        : effectiveTitle;
 
     out.push({
       id: b.id,
       date: b.date,
-      startTime: b.startTime || '09:00',
+      startTime: startNorm,
       durationMins: Number(b.durationMins) || 90,
-      title: rawTitle,
+      title: effectiveTitle,
       displayLabel,
-      subjectId: b.subjectId,
-      subjectName: subj?.name,
-      subjectColor: subj?.color,
+      subjectId: resolvedSubj?.id || b.subjectId,
+      subjectName: resolvedSubj?.name,
+      subjectColor: resolvedSubj?.color,
       blockId: b.id,
       isFallback: false,
     });

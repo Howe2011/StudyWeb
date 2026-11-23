@@ -14,6 +14,86 @@ import {
   NoteImageWidth,
   parseNoteImagePoint,
 } from './imageUtils';
+import { parseLatexDocumentToMarkdown } from './latexRenderer';
+
+export function isMathPoint(point: string): boolean {
+  const p = point.trim();
+  return /^@math:\{/i.test(p) || (p.startsWith('$$') && p.endsWith('$$') && p.length > 4);
+}
+
+export function parseMathPoint(point: string): { latex: string; label?: string } | null {
+  const p = point.trim();
+  if (/^@math:\{/i.test(p)) {
+    try {
+      const data = JSON.parse(p.slice(6));
+      return { latex: data.latex || '', label: data.label };
+    } catch {
+      return null;
+    }
+  }
+  if (p.startsWith('$$') && p.endsWith('$$') && p.length > 4) {
+    return { latex: p.slice(2, -2).trim() };
+  }
+  return null;
+}
+
+export function encodeMathPoint(latex: string, label?: string): string {
+  return `@math:${JSON.stringify({ latex: latex.trim(), ...(label ? { label: label.trim() } : {}) })}`;
+}
+
+export function isCodePoint(point: string): boolean {
+  return /^@code:\{/i.test(point.trim());
+}
+
+export function parseCodePoint(point: string): { code: string; lang?: string } | null {
+  const p = point.trim();
+  if (/^@code:\{/i.test(p)) {
+    try {
+      const data = JSON.parse(p.slice(6));
+      return { code: data.code || '', lang: data.lang || 'text' };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function encodeCodePoint(code: string, lang = 'text'): string {
+  return `@code:${JSON.stringify({ code, lang })}`;
+}
+
+export function isCalloutPoint(point: string): boolean {
+  return /^@callout:\{/i.test(point.trim());
+}
+
+export function parseCalloutPoint(point: string): {
+  type: 'note' | 'tip' | 'warning' | 'important' | 'example' | 'formula' | 'quote';
+  title?: string;
+  body: string;
+} | null {
+  const p = point.trim();
+  if (/^@callout:\{/i.test(p)) {
+    try {
+      const data = JSON.parse(p.slice(9));
+      return {
+        type: data.type || 'note',
+        title: data.title,
+        body: data.body || data.text || '',
+      };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function encodeCalloutPoint(
+  type: 'note' | 'tip' | 'warning' | 'important' | 'example' | 'formula' | 'quote',
+  body: string,
+  title?: string
+): string {
+  return `@callout:${JSON.stringify({ type, body, ...(title ? { title } : {}) })}`;
+}
 
 export type NoteFormatPreset =
   | 'balanced-visual'
@@ -61,7 +141,9 @@ export function estimateNoteReadingMinutes(note: StructuredNoteData): number {
     ...note.sections.flatMap((s) => [
       s.heading,
       ...s.points.filter(
-        (p) => !/^@table-color:/i.test(p.trim()) && !isNoteImagePoint(p)
+        (p) =>
+          !/^@(?:table-color|code|math|callout|divider):?/i.test(p.trim()) &&
+          !isNoteImagePoint(p)
       ),
     ]),
     ...note.keyTerms.flatMap((k) => [k.term, k.definition]),
@@ -623,7 +705,53 @@ export function parseTextIntoStructuredNote(
   const strictHeadings = Boolean(options.strictHeadings);
   const existingQuality = assessExistingFormattingQuality(rawInput);
 
-  const text = preprocessPlainStudyText(rawInput, {
+  let normalizedInput = rawInput;
+  if (/\\documentclass\b|\\begin\{document\}|\\section\*?\{/.test(normalizedInput)) {
+    normalizedInput = parseLatexDocumentToMarkdown(normalizedInput).markdown;
+  }
+
+  const preservedBlocks: string[] = [];
+  const makeToken = (pt: string) => {
+    const idx = preservedBlocks.length;
+    preservedBlocks.push(pt);
+    return `__SD_BLOCK_POINT_${idx}__`;
+  };
+
+  // 1. Fenced code blocks ```lang\n...```
+  normalizedInput = normalizedInput.replace(/```([a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n```/g, (_m, lang, code) => {
+    return `\n${makeToken(encodeCodePoint(code, (lang || 'text').trim()))}\n`;
+  });
+
+  // 2. Display math $$...$$
+  normalizedInput = normalizedInput.replace(/\$\$([\s\S]*?)\$\$/g, (_m, latex) => {
+    return `\n${makeToken(encodeMathPoint(latex.trim()))}\n`;
+  });
+
+  // 3. Display math \[...\]
+  normalizedInput = normalizedInput.replace(/\\\[([\s\S]*?)\\\]/g, (_m, latex) => {
+    return `\n${makeToken(encodeMathPoint(latex.trim()))}\n`;
+  });
+
+  // 4. LaTeX display environments
+  normalizedInput = normalizedInput.replace(/\\begin\{(equation\*?|align\*?|gather\*?|cases|matrix|pmatrix|bmatrix)\}([\s\S]*?)\\end\{\1\}/g, (_m, env, inner) => {
+    return `\n${makeToken(encodeMathPoint(`\\begin{${env}}${inner}\\end{${env}}`))}\n`;
+  });
+
+  // 5. Obsidian / GitHub callouts
+  normalizedInput = normalizedInput.replace(
+    /(?:^|\n)>\s*\[!([a-zA-Z]+)\]\s*([^\n]*)(?:\n(?:>[^\n]*\n?)+)/g,
+    (_m, type, title, rawLines) => {
+      const body = rawLines
+        .split('\n')
+        .map((l: string) => l.replace(/^>\s*/, '').trim())
+        .filter(Boolean)
+        .join(' ');
+      const cleanType = (type || 'note').toLowerCase() as any;
+      return `\n${makeToken(encodeCalloutPoint(cleanType, body, (title || '').trim() || undefined))}\n`;
+    }
+  );
+
+  const text = preprocessPlainStudyText(normalizedInput, {
     ...options,
     splitDenseParagraphs: existingQuality.isGood ? false : options.splitDenseParagraphs,
   });
@@ -674,6 +802,48 @@ export function parseTextIntoStructuredNote(
     // Embedded image token (@image:{...} or ![caption](src)): preserve verbatim without text/colon splitting
     if (isNoteImagePoint(line)) {
       currentSec.points.push(line);
+      continue;
+    }
+
+    // Preserved multi-line code/math/callout block tokens
+    const tokenMatch = line.match(/^__SD_BLOCK_POINT_(\d+)__$/);
+    if (tokenMatch) {
+      const idx = Number(tokenMatch[1]);
+      if (preservedBlocks[idx]) {
+        currentSec.points.push(preservedBlocks[idx]);
+      }
+      continue;
+    }
+
+    // Horizontal divider
+    if (/^(?:---|\*\*\*|___)$/.test(line)) {
+      currentSec.points.push('@divider');
+      continue;
+    }
+
+    // Checklist item: - [ ] text, - [x] text, ☐ text, ✓ text
+    const checklistMatch =
+      line.match(/^(?:[-*•]\s+)?\[([ xX✓✔])\]\s+(.+)$/i) ||
+      line.match(/^([☐☑✓✔✅])\s+(.+)$/);
+    if (checklistMatch) {
+      const isChecked = /[xX✓✔☑✅]/.test(checklistMatch[1]);
+      const itemText = checklistMatch[2].trim();
+      currentSec.points.push(
+        isNestedBullet
+          ? `↳ @check:${isChecked ? 1 : 0}|${itemText}`
+          : `@check:${isChecked ? 1 : 0}|${itemText}`
+      );
+      continue;
+    }
+
+    // Ordered list item: 1. text
+    const orderedMatch = line.match(/^(\d+)[.)]\s+(.+)$/);
+    if (orderedMatch && !/^19\d{2}|20\d{2}/.test(line) && !line.includes('|')) {
+      const num = parseInt(orderedMatch[1], 10) || 1;
+      const itemText = orderedMatch[2].trim();
+      currentSec.points.push(
+        isNestedBullet ? `↳ @ol:${num}|${itemText}` : `@ol:${num}|${itemText}`
+      );
       continue;
     }
 
@@ -947,7 +1117,7 @@ export function parseTextIntoStructuredNote(
     // Tab / Pipe / :: definitions (Term | Definition or Term \t Definition)
     const tabOrPipe = cleanBullet.includes('\t')
       ? cleanBullet.split('\t').map((s) => s.trim()).filter(Boolean)
-      : cleanBullet.includes('|')
+      : cleanBullet.includes('|') && !cleanBullet.includes('$') && !cleanBullet.includes('`')
       ? cleanBullet.split('|').map((s) => s.trim()).filter(Boolean)
       : cleanBullet.includes('::')
       ? cleanBullet.split('::').map((s) => s.trim()).filter(Boolean)
@@ -1006,11 +1176,13 @@ export function parseTextIntoStructuredNote(
       continue;
     }
 
-    // Term: Definition (when term is crisp & descriptive and not a date prefix)
+    // Term: Definition (when term is crisp & descriptive and not a date prefix or math expression)
     const colonDef = cleanBullet.match(/^([A-Za-z0-9 ()/%'’&-]{2,52}):\s+(.{6,})$/);
     if (
       colonDef &&
       !/^http/i.test(colonDef[1]) &&
+      !colonDef[1].includes('$') &&
+      !colonDef[1].includes('\\') &&
       !/^(?:in|on|by|at|during)\s+\d{3,4}/i.test(colonDef[1]) &&
       !/^\d{3,4}$/.test(colonDef[1].trim())
     ) {
@@ -1470,6 +1642,29 @@ export function structuredNoteToHtml(title: string, note: StructuredNoteData): s
           );
           continue;
         }
+        const mathPt = parseMathPoint(p);
+        if (mathPt) {
+          flushList();
+          parts.push(`<div class="sd-math-block">$$${esc(mathPt.latex)}$$</div>`);
+          continue;
+        }
+        const codePt = parseCodePoint(p);
+        if (codePt) {
+          flushList();
+          parts.push(`<pre><code class="language-${esc(codePt.lang || 'text')}">${esc(codePt.code)}</code></pre>`);
+          continue;
+        }
+        const calloutPt = parseCalloutPoint(p);
+        if (calloutPt) {
+          flushList();
+          parts.push(`<div class="sd-callout-card sd-callout-${esc(calloutPt.type)}"><strong>${esc(calloutPt.title || calloutPt.type)}:</strong> ${fmt(calloutPt.body)}</div>`);
+          continue;
+        }
+        if (p === '@divider') {
+          flushList();
+          parts.push('<hr />');
+          continue;
+        }
         listBuf.push(
           p.startsWith('📌 ')
             ? `<li><strong>Fact:</strong> ${fmt(
@@ -1508,15 +1703,39 @@ export type SectionRenderBlock =
   | { kind: 'factbox'; title?: string; text: string; color?: string }
   | { kind: 'flow'; label?: string; steps: string[] }
   | { kind: 'table'; headers: string[]; rows: string[][]; color?: string }
-  | { kind: 'image'; src: string; caption?: string; width?: NoteImageWidth };
+  | { kind: 'image'; src: string; caption?: string; width?: NoteImageWidth }
+  | { kind: 'math'; latex: string; label?: string }
+  | { kind: 'code'; code: string; lang?: string }
+  | {
+      kind: 'callout';
+      type: 'note' | 'tip' | 'warning' | 'important' | 'example' | 'formula' | 'quote';
+      title?: string;
+      text: string;
+    }
+  | { kind: 'ordered'; items: Array<{ num: number; text: string }> }
+  | { kind: 'checklist'; items: Array<{ checked: boolean; text: string; rawPointIndex?: number }> }
+  | { kind: 'divider' };
 
 function splitPipeRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((c) => c.trim());
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells: string[] = [];
+  let current = '';
+  let inMath = false;
+  let inCode = false;
+  for (let idx = 0; idx < trimmed.length; idx++) {
+    const ch = trimmed[idx];
+    if (ch === '`') inCode = !inCode;
+    else if (ch === '$' && !inCode) inMath = !inMath;
+
+    if (ch === '|' && !inMath && !inCode) {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
 }
 
 function parseFlowLine(raw: string): { label?: string; steps: string[] } | null {
@@ -1566,6 +1785,92 @@ export function groupSectionPoints(points: string[]): SectionRenderBlock[] {
     if (!raw) {
       i++;
       continue;
+    }
+
+    const mathPt = parseMathPoint(raw);
+    if (mathPt) {
+      pendingTableColor = undefined;
+      blocks.push({ kind: 'math', latex: mathPt.latex, label: mathPt.label });
+      i++;
+      continue;
+    }
+
+    const codePt = parseCodePoint(raw);
+    if (codePt) {
+      pendingTableColor = undefined;
+      blocks.push({ kind: 'code', code: codePt.code, lang: codePt.lang });
+      i++;
+      continue;
+    }
+
+    const calloutPt = parseCalloutPoint(raw);
+    if (calloutPt) {
+      pendingTableColor = undefined;
+      blocks.push({
+        kind: 'callout',
+        type: calloutPt.type,
+        title: calloutPt.title,
+        text: calloutPt.body,
+      });
+      i++;
+      continue;
+    }
+
+    if (raw === '@divider' || /^---{1,}$/.test(raw) || /^\*{3,}$/.test(raw)) {
+      pendingTableColor = undefined;
+      blocks.push({ kind: 'divider' });
+      i++;
+      continue;
+    }
+
+    if (raw.startsWith('@ol:') || /^\d+[.)]\s+/.test(raw)) {
+      pendingTableColor = undefined;
+      const items: Array<{ num: number; text: string }> = [];
+      while (
+        i < points.length &&
+        ((points[i] || '').trim().startsWith('@ol:') || /^\d+[.)]\s+/.test((points[i] || '').trim()))
+      ) {
+        const pt = (points[i] || '').trim();
+        const olMatch = pt.match(/^@ol:(\d+)\|(.*)$/);
+        if (olMatch) {
+          items.push({ num: parseInt(olMatch[1], 10) || 1, text: olMatch[2] });
+        } else {
+          const numMatch = pt.match(/^(\d+)[.)]\s+(.*)$/);
+          if (numMatch) {
+            items.push({ num: parseInt(numMatch[1], 10) || 1, text: numMatch[2] });
+          }
+        }
+        i++;
+      }
+      if (items.length > 0) {
+        blocks.push({ kind: 'ordered', items });
+        continue;
+      }
+    }
+
+    const isChecklistPt = (pt: string) =>
+      pt.startsWith('@check:') || /^(?:☐|☑|✓|✔|✅|\[[ xX✓✔]\])\s+/.test(pt);
+    if (isChecklistPt(raw)) {
+      pendingTableColor = undefined;
+      const items: Array<{ checked: boolean; text: string; rawPointIndex?: number }> = [];
+      while (i < points.length && isChecklistPt((points[i] || '').trim())) {
+        const pt = (points[i] || '').trim();
+        let checked = false;
+        let itemText = '';
+        if (pt.startsWith('@check:')) {
+          checked = pt.startsWith('@check:1|');
+          itemText = pt.replace(/^@check:[01]\|/, '');
+        } else {
+          checked = /^(?:☑|✓|✔|✅|\[[xX✓✔]\])\s+/.test(pt);
+          itemText = pt.replace(/^(?:☐|☑|✓|✔|✅|\[[ xX✓✔]\])\s+/, '');
+        }
+        items.push({ checked, text: itemText, rawPointIndex: i });
+        i++;
+      }
+      if (items.length > 0) {
+        blocks.push({ kind: 'checklist', items });
+        continue;
+      }
     }
 
     const tableColorMatch = raw.match(/^@table-color:\s*([#A-Za-z0-9_-]+)$/i);

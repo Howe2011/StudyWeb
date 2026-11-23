@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ChevronDown,
   ChevronRight,
+  Copy,
   Download,
   Edit3,
   Eye,
@@ -14,6 +15,7 @@ import {
   FolderOpen,
   FolderPlus,
   Gamepad2,
+  GitMerge,
   Layers,
   MoreHorizontal,
   Play,
@@ -23,6 +25,7 @@ import {
   Search,
   Share2,
   Shuffle,
+  SlidersHorizontal,
   Square,
   Trash2,
   Upload,
@@ -40,6 +43,7 @@ import {
   WorkspaceData,
   WorkspaceTab,
 } from '../types';
+import { renderRichInline } from '../lib/inlineRichText';
 
 interface FlashcardsViewProps {
   workspace: WorkspaceData;
@@ -286,6 +290,47 @@ export function FlashcardsView({
   const [collapsedManageFolders, setCollapsedManageFolders] = useState<Set<string>>(() => new Set());
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [renameFolderDraft, setRenameFolderDraft] = useState<string>('');
+
+  // Minimal Edit Rollout + Merge Decks + Copy From Deck + Right-click Drag Select
+  const [manageEditOpen, setManageEditOpen] = useState<boolean>(false);
+  const [manageOrganizeOpen, setManageOrganizeOpen] = useState<boolean>(false);
+  const [mergeModalOpen, setMergeModalOpen] = useState<boolean>(false);
+  const [mergeSelectedDeckKeys, setMergeSelectedDeckKeys] = useState<Set<string>>(new Set());
+  const [mergeTargetSubjectId, setMergeTargetSubjectId] = useState<string>('');
+  const [mergeTargetDeckName, setMergeTargetDeckName] = useState<string>('');
+  const [mergeRemoveSources, setMergeRemoveSources] = useState<boolean>(true);
+  const [mergeDedupe, setMergeDedupe] = useState<boolean>(true);
+
+  const [copyModalOpen, setCopyModalOpen] = useState<boolean>(false);
+  const [copySourceDeckKey, setCopySourceDeckKey] = useState<string>('');
+  const [copySelectedCardIds, setCopySelectedCardIds] = useState<Set<string>>(new Set());
+  const [copySearch, setCopySearch] = useState<string>('');
+  const [copyTargetSubjectId, setCopyTargetSubjectId] = useState<string>('');
+  const [copyTargetDeckName, setCopyTargetDeckName] = useState<string>('');
+
+  const rightDragSelectRef = useRef<{
+    active: boolean;
+    mode: 'select' | 'deselect';
+    justDragged: boolean;
+  }>({ active: false, mode: 'select', justDragged: false });
+
+  useEffect(() => {
+    const endRightDrag = () => {
+      if (!rightDragSelectRef.current.active) return;
+      rightDragSelectRef.current.active = false;
+      window.setTimeout(() => {
+        rightDragSelectRef.current.justDragged = false;
+      }, 80);
+    };
+    window.addEventListener('pointerup', endRightDrag);
+    window.addEventListener('mouseup', endRightDrag);
+    window.addEventListener('blur', endRightDrag);
+    return () => {
+      window.removeEventListener('pointerup', endRightDrag);
+      window.removeEventListener('mouseup', endRightDrag);
+      window.removeEventListener('blur', endRightDrag);
+    };
+  }, []);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const prevSubjectIdRef = useRef<string>(selectedSubjectId);
@@ -1539,6 +1584,227 @@ export function FlashcardsView({
     setMoveFeedback(`Deleted ${ids.size} selected card${ids.size === 1 ? '' : 's'}.`);
   };
 
+  // All distinct decks across workspace for Merge & Copy-from-Deck modals
+  const allWorkspaceDeckBuckets = useMemo(() => {
+    const map = new Map<
+      string,
+      { key: string; subjectId: string; subjectName: string; sectionName: string; cards: StudyFlashcard[] }
+    >();
+    for (const c of workspace.flashcards) {
+      const sec = (c.sectionName || 'Core Deck').trim() || 'Core Deck';
+      const key = `${c.subjectId}::${sec}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.cards.push(c);
+      } else {
+        map.set(key, {
+          key,
+          subjectId: c.subjectId,
+          subjectName: subjById.get(c.subjectId)?.name || 'General',
+          sectionName: sec,
+          cards: [c],
+        });
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => a.subjectName.localeCompare(b.subjectName) || a.sectionName.localeCompare(b.sectionName)
+    );
+  }, [workspace.flashcards, subjById]);
+
+  const openMergeDecksModal = (presetKeys?: string[]) => {
+    const initial =
+      presetKeys && presetKeys.length > 0
+        ? presetKeys
+        : selectedSections.length >= 2
+        ? selectedSections
+        : allWorkspaceDeckBuckets.slice(0, 2).map((b) => b.key);
+    const firstBucket = allWorkspaceDeckBuckets.find((b) => initial.includes(b.key)) || allWorkspaceDeckBuckets[0];
+    setMergeSelectedDeckKeys(new Set(initial));
+    setMergeTargetSubjectId(
+      firstBucket?.subjectId ||
+        (selectedSubjectId !== 'ALL' ? selectedSubjectId : workspace.subjects[0]?.id || '')
+    );
+    setMergeTargetDeckName(
+      firstBucket ? `${firstBucket.sectionName} (Merged)` : 'Merged Deck'
+    );
+    setMergeRemoveSources(true);
+    setMergeDedupe(true);
+    setMergeModalOpen(true);
+  };
+
+  const handleConfirmMergeDecks = (e: FormEvent) => {
+    e.preventDefault();
+    const targetSec = mergeTargetDeckName.trim();
+    if (!targetSec || mergeSelectedDeckKeys.size < 2 || !mergeTargetSubjectId) return;
+
+    const chosenBuckets = allWorkspaceDeckBuckets.filter((b) => mergeSelectedDeckKeys.has(b.key));
+    const sourceCards = chosenBuckets.flatMap((b) => b.cards);
+    if (sourceCards.length === 0) return;
+
+    const sourceCardIdSet = new Set(sourceCards.map((c) => c.id));
+    const now = Date.now();
+    const seenQa = new Set<string>();
+    const filteredSourceCards: StudyFlashcard[] = [];
+    for (const c of sourceCards) {
+      const qaKey = `${c.q.trim().toLowerCase()}:::${c.a.trim().toLowerCase()}`;
+      if (mergeDedupe && seenQa.has(qaKey)) continue;
+      seenQa.add(qaKey);
+      filteredSourceCards.push(c);
+    }
+
+    onUpdateWorkspace((prev) => {
+      let nextFlashcards: StudyFlashcard[];
+      if (mergeRemoveSources) {
+        const keepIds = new Set(filteredSourceCards.map((c) => c.id));
+        nextFlashcards = prev.flashcards
+          .filter((c) => !sourceCardIdSet.has(c.id) || keepIds.has(c.id))
+          .map((c) =>
+            keepIds.has(c.id)
+              ? { ...c, subjectId: mergeTargetSubjectId, sectionName: targetSec }
+              : c
+          );
+      } else {
+        const clones: StudyFlashcard[] = filteredSourceCards.map((c) => ({
+          ...c,
+          id: makeId('fc'),
+          subjectId: mergeTargetSubjectId,
+          sectionName: targetSec,
+          box: 1,
+          dueAt: now,
+          flagged: false,
+          createdAt: new Date().toISOString(),
+        }));
+        nextFlashcards = [...prev.flashcards, ...clones];
+      }
+
+      const nextDeckGroups = (prev.deckGroups || []).map((g) => {
+        if (!mergeRemoveSources) return g;
+        const removedNames = new Set(
+          chosenBuckets
+            .filter((b) => b.subjectId === g.subjectId)
+            .map((b) => b.sectionName)
+        );
+        if (removedNames.size === 0) return g;
+        const updatedNames = g.sectionNames.filter((s) => !removedNames.has(s));
+        if (g.subjectId === mergeTargetSubjectId && g.sectionNames.some((s) => removedNames.has(s))) {
+          if (!updatedNames.includes(targetSec)) updatedNames.push(targetSec);
+        }
+        return { ...g, sectionNames: updatedNames };
+      });
+
+      return {
+        ...prev,
+        flashcards: nextFlashcards,
+        deckGroups: nextDeckGroups,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    const newKey = `${mergeTargetSubjectId}::${targetSec}`;
+    setSelectedSections((prev) => {
+      const cleaned = mergeRemoveSources
+        ? prev.filter((k) => !mergeSelectedDeckKeys.has(k))
+        : prev;
+      return cleaned.includes(newKey) ? cleaned : [...cleaned, newKey];
+    });
+    setMergeModalOpen(false);
+    setMoveFeedback(
+      `${mergeRemoveSources ? 'Merged' : 'Combined copies from'} ${chosenBuckets.length} decks into "${targetSec}" (${filteredSourceCards.length} cards).`
+    );
+    setDeckPublishNotice({
+      ok: true,
+      text: `${mergeRemoveSources ? 'Merged' : 'Copied'} ${chosenBuckets.length} decks into "${targetSec}" (${filteredSourceCards.length} cards).`,
+    });
+    window.setTimeout(() => setDeckPublishNotice(null), 5000);
+  };
+
+  const openCopyFromDeckModal = (presetCards?: StudyFlashcard[]) => {
+    if (presetCards && presetCards.length > 0) {
+      const first = presetCards[0];
+      const srcKey = `${first.subjectId}::${(first.sectionName || 'Core Deck').trim()}`;
+      setCopySourceDeckKey(srcKey);
+      setCopySelectedCardIds(new Set(presetCards.map((c) => c.id)));
+      const fallbackSubj =
+        (selectedSubjectId && selectedSubjectId !== 'ALL' ? selectedSubjectId : first.subjectId) ||
+        workspace.subjects[0]?.id ||
+        '';
+      setCopyTargetSubjectId(fallbackSubj);
+      setCopyTargetDeckName('');
+    } else {
+      const firstDeck = allWorkspaceDeckBuckets[0];
+      setCopySourceDeckKey(firstDeck?.key || '');
+      setCopySelectedCardIds(new Set(firstDeck ? firstDeck.cards.map((c) => c.id) : []));
+      const targetSubj =
+        selectedSubjectId && selectedSubjectId !== 'ALL'
+          ? selectedSubjectId
+          : workspace.subjects[0]?.id || '';
+      setCopyTargetSubjectId(targetSubj);
+      setCopyTargetDeckName('');
+    }
+    setCopySearch('');
+    setCopyModalOpen(true);
+  };
+
+  const handleConfirmCopyFromDeck = (e: FormEvent) => {
+    e.preventDefault();
+    const targetSec = copyTargetDeckName.trim();
+    if (!targetSec || !copyTargetSubjectId || copySelectedCardIds.size === 0) return;
+
+    const toCopy = workspace.flashcards.filter((c) => copySelectedCardIds.has(c.id));
+    if (toCopy.length === 0) return;
+
+    const now = Date.now();
+    const clones: StudyFlashcard[] = toCopy.map((c) => ({
+      ...c,
+      id: makeId('fc'),
+      subjectId: copyTargetSubjectId,
+      sectionName: targetSec,
+      box: 1,
+      dueAt: now,
+      flagged: false,
+      createdAt: new Date().toISOString(),
+    }));
+
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: [...prev.flashcards, ...clones],
+      updatedAt: new Date().toISOString(),
+    }));
+
+    const newKey = `${copyTargetSubjectId}::${targetSec}`;
+    setSelectedSections((prev) => (prev.includes(newKey) ? prev : [...prev, newKey]));
+    setCopyModalOpen(false);
+    setMoveFeedback(`Copied ${clones.length} card${clones.length === 1 ? '' : 's'} into "${targetSec}".`);
+    setDeckPublishNotice({
+      ok: true,
+      text: `Copied ${clones.length} card${clones.length === 1 ? '' : 's'} to deck "${targetSec}".`,
+    });
+    window.setTimeout(() => setDeckPublishNotice(null), 5000);
+  };
+
+  const handleDuplicateSelectedCards = () => {
+    if (targetBulkCardIds.length === 0) return;
+    const idSet = new Set(targetBulkCardIds);
+    const now = Date.now();
+    const clones: StudyFlashcard[] = workspace.flashcards
+      .filter((c) => idSet.has(c.id))
+      .map((c) => ({
+        ...c,
+        id: makeId('fc'),
+        box: 1,
+        dueAt: now,
+        flagged: false,
+        createdAt: new Date().toISOString(),
+      }));
+    if (clones.length === 0) return;
+    onUpdateWorkspace((prev) => ({
+      ...prev,
+      flashcards: [...prev.flashcards, ...clones],
+      updatedAt: new Date().toISOString(),
+    }));
+    setMoveFeedback(`Duplicated ${clones.length} card${clones.length === 1 ? '' : 's'}.`);
+  };
+
   const handleRenameSection = (
     cardIds: string[],
     nextName: string,
@@ -1925,6 +2191,37 @@ export function FlashcardsView({
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
+                      {selectedSections.length >= 2 && (
+                        <button
+                          type="button"
+                          onClick={() => openMergeDecksModal(selectedSections)}
+                          className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
+                        >
+                          <GitMerge className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Merge Selected ({selectedSections.length})</span>
+                        </button>
+                      )}
+                      {allWorkspaceDeckBuckets.length >= 2 && selectedSections.length < 2 && (
+                        <button
+                          type="button"
+                          onClick={() => openMergeDecksModal()}
+                          className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                          title="Select 2 or more decks to merge"
+                        >
+                          <GitMerge className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Merge Decks</span>
+                        </button>
+                      )}
+                      {allWorkspaceDeckBuckets.length >= 1 && (
+                        <button
+                          type="button"
+                          onClick={() => openCopyFromDeckModal()}
+                          className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                        >
+                          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Copy from Deck</span>
+                        </button>
+                      )}
                       {activeSubjectDeckGroups.length > 0 && (
                         <>
                           <button
@@ -2859,7 +3156,7 @@ export function FlashcardsView({
                   ) : (
                     <div className="my-auto py-4 text-center">
                       <div className="font-display text-xl font-bold leading-snug text-[var(--ink)] sm:text-2xl">
-                        {optReverse ? currentCard.a : currentCard.q}
+                        {renderRichInline(optReverse ? currentCard.a : currentCard.q)}
                       </div>
                       {showHint && (
                         <p className="mt-3 font-display text-sm tracking-wider text-[var(--mute)]">
@@ -2893,7 +3190,7 @@ export function FlashcardsView({
                   </div>
 
                   <p className="mt-3 text-center text-sm text-[var(--mute)]">
-                    {optReverse ? currentCard.a : currentCard.q}
+                    {renderRichInline(optReverse ? currentCard.a : currentCard.q)}
                   </p>
 
                   <div className="my-auto py-3 text-center">
@@ -2911,7 +3208,7 @@ export function FlashcardsView({
                       </div>
                     ) : (
                       <div className="font-display text-xl font-bold leading-snug text-[var(--ink)] sm:text-2xl">
-                        {optReverse ? currentCard.q : currentCard.a}
+                        {renderRichInline(optReverse ? currentCard.q : currentCard.a)}
                       </div>
                     )}
 
@@ -3168,8 +3465,36 @@ export function FlashcardsView({
             return (
               <div
                 key={card.id}
-                className={`flex flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm transition-colors ${
-                  checked ? 'bg-[color-mix(in_srgb,var(--e3)_7%,var(--card))]' : ''
+                data-fc-card-row="true"
+                onPointerDown={(e) => {
+                  if (e.button === 2) {
+                    e.preventDefault();
+                    const mode = selectedManageIds.has(card.id) ? 'deselect' : 'select';
+                    rightDragSelectRef.current = { active: true, mode, justDragged: true };
+                    setSelectedManageIds((prev) => {
+                      const next = new Set(prev);
+                      if (mode === 'select') next.add(card.id);
+                      else next.delete(card.id);
+                      return next;
+                    });
+                  }
+                }}
+                onPointerEnter={() => {
+                  if (!rightDragSelectRef.current.active) return;
+                  rightDragSelectRef.current.justDragged = true;
+                  const mode = rightDragSelectRef.current.mode;
+                  setSelectedManageIds((prev) => {
+                    const next = new Set(prev);
+                    if (mode === 'select') next.add(card.id);
+                    else next.delete(card.id);
+                    return next;
+                  });
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                }}
+                className={`flex select-none flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm transition-colors ${
+                  checked ? 'bg-[color-mix(in_srgb,var(--e3)_9%,var(--card))]' : ''
                 }`}
               >
                 <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -3302,7 +3627,22 @@ export function FlashcardsView({
               : addSubjectId || workspace.subjects[0]?.id || '';
 
           return (
-            <div className="space-y-4">
+            <div
+              className="space-y-4"
+              onClick={(e) => {
+                if (selectedManageIds.size === 0 || rightDragSelectRef.current.justDragged) return;
+                const el = e.target as HTMLElement | null;
+                if (!el) return;
+                if (
+                  el.closest(
+                    '[data-fc-card-row="true"], [data-fc-keep-selection="true"], button, input, select, textarea, label, [role="dialog"]'
+                  )
+                ) {
+                  return;
+                }
+                setSelectedManageIds(new Set());
+              }}
+            >
               {/* Top Manage Header */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-4">
                 <div className="flex items-center gap-3">
@@ -3759,146 +4099,272 @@ export function FlashcardsView({
                     </div>
                   </div>
 
-                  {/* Multi-Select / Organize & Bulk Actions Toolbar */}
+                  {/* Minimal Context Selection & Edit-Rollout Toolbar */}
                   {manageFilteredCards.length > 0 && (
-                    <div className="sd-card space-y-2.5 bg-[color-mix(in_srgb,var(--e3)_4%,var(--card))] p-3.5 text-xs">
+                    <div
+                      data-fc-keep-selection="true"
+                      className="sd-card space-y-2.5 bg-[color-mix(in_srgb,var(--e3)_4%,var(--card))] p-3 text-xs"
+                    >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-bold text-[var(--ink)]">
-                          {activeSelCount > 0
-                            ? `${activeSelCount} selected card${activeSelCount === 1 ? '' : 's'}`
-                            : `Bulk action on all ${manageFilteredCards.length} matching card${manageFilteredCards.length === 1 ? '' : 's'}`}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-[var(--ink)]">
+                            {activeSelCount > 0
+                              ? `${activeSelCount} selected`
+                              : `${manageFilteredCards.length} cards`}
+                          </span>
+                          <span className="hidden text-[11px] text-[var(--mute)] sm:inline">
+                            {activeSelCount > 0
+                              ? '· Click empty space to clear'
+                              : '· Hold right-click & drag across cards to select'}
+                          </span>
+                        </div>
+
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleBulkBoxUpdate('reset')}
-                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                          >
-                            <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                            <span>Reset to Box 1</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBulkBoxUpdate('master')}
-                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                          >
-                            <CheckCircle2 className="h-3 w-3 text-[var(--ok)]" aria-hidden="true" />
-                            <span>Mark Mastered</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBulkBoxUpdate('flag')}
-                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                          >
-                            <Flag className="h-3 w-3 text-[var(--e2)]" aria-hidden="true" />
-                            <span>Flag</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBulkBoxUpdate('swap')}
-                            className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
-                          >
-                            <ArrowLeftRight className="h-3 w-3" aria-hidden="true" />
-                            <span>Swap Q↔A</span>
-                          </button>
+                          {/* Contextual actions shown automatically when cards are selected */}
                           {activeSelCount > 0 && (
-                            confirmBulkDelete ? (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={handleBulkDeleteSelected}
-                                  className="sd-btn border-[var(--bad)] bg-[var(--bad)] px-2.5 py-1 text-[11px] text-white whitespace-nowrap"
-                                >
-                                  Confirm Delete ({activeSelCount})
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmBulkDelete(false)}
-                                  className="sd-btn px-2 py-1 text-[11px]"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            ) : (
+                            <>
                               <button
                                 type="button"
-                                onClick={() => setConfirmBulkDelete(true)}
-                                className="sd-btn border-[var(--bad)] px-2.5 py-1 text-[11px] text-[var(--bad)] whitespace-nowrap"
+                                onClick={() =>
+                                  openCopyFromDeckModal(
+                                    manageFilteredCards.filter((c) => selectedManageIds.has(c.id))
+                                  )
+                                }
+                                className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
                               >
-                                <Trash2 className="h-3 w-3" aria-hidden="true" />
-                                <span>Delete ({activeSelCount})</span>
+                                <Copy className="h-3 w-3" aria-hidden="true" />
+                                <span>Copy to Deck</span>
                               </button>
-                            )
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setManageEditOpen(true);
+                                  setManageOrganizeOpen((v) => !v);
+                                }}
+                                className={`sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap ${
+                                  manageOrganizeOpen ? 'border-[var(--e3)] text-[var(--e3)]' : ''
+                                }`}
+                              >
+                                <span>Move / Link</span>
+                              </button>
+                              {confirmBulkDelete ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={handleBulkDeleteSelected}
+                                    className="sd-btn border-[var(--bad)] bg-[var(--bad)] px-2.5 py-1 text-[11px] text-white whitespace-nowrap"
+                                  >
+                                    Confirm Delete ({activeSelCount})
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmBulkDelete(false)}
+                                    className="sd-btn px-2 py-1 text-[11px]"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmBulkDelete(true)}
+                                  className="sd-btn border-[var(--bad)] px-2.5 py-1 text-[11px] text-[var(--bad)] whitespace-nowrap"
+                                >
+                                  <Trash2 className="h-3 w-3" aria-hidden="true" />
+                                  <span>Delete ({activeSelCount})</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setSelectedManageIds(new Set())}
+                                className="sd-btn px-2 py-1 text-[11px] text-[var(--mute)]"
+                              >
+                                Clear
+                              </button>
+                            </>
                           )}
+
+                          {allWorkspaceDeckBuckets.length >= 2 && (
+                            <button
+                              type="button"
+                              onClick={() => openMergeDecksModal()}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                              title="Merge two or more decks"
+                            >
+                              <GitMerge className="h-3 w-3" aria-hidden="true" />
+                              <span>Merge Decks</span>
+                            </button>
+                          )}
+
+                          {allWorkspaceDeckBuckets.length >= 1 && activeSelCount === 0 && (
+                            <button
+                              type="button"
+                              onClick={() => openCopyFromDeckModal()}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                              title="Select cards from a deck and copy to another deck"
+                            >
+                              <Copy className="h-3 w-3" aria-hidden="true" />
+                              <span>Copy from Deck</span>
+                            </button>
+                          )}
+
+                          {/* Roll-out toggle behind Edit icon */}
+                          <button
+                            type="button"
+                            onClick={() => setManageEditOpen((v) => !v)}
+                            aria-expanded={manageEditOpen}
+                            title="Roll out card edit & management actions"
+                            className={`sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap ${
+                              manageEditOpen
+                                ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_12%,var(--card))] text-[var(--e3)]'
+                                : ''
+                            }`}
+                          >
+                            <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>{manageEditOpen ? 'Hide Tools' : 'Edit'}</span>
+                          </button>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2.5">
-                        <span className="font-semibold text-[var(--mute)]">
-                          Organize / move:
-                        </span>
-                        <input
-                          type="text"
-                          list="fc-move-deck-suggestions"
-                          value={moveTargetSection}
-                          onChange={(e) => setMoveTargetSection(e.target.value)}
-                          placeholder="Deck / Section name…"
-                          className="sd-input w-44 py-1 text-xs"
-                        />
-                        <datalist id="fc-move-deck-suggestions">
-                          {manageAvailableSections.map((sec) => (
-                            <option key={sec} value={sec} />
-                          ))}
-                        </datalist>
-                        {workspace.subjects.length > 1 && (
-                          <select
-                            aria-label="Destination subject"
-                            value={moveTargetSubjectId}
-                            onChange={(e) => setMoveTargetSubjectId(e.target.value)}
-                            className="sd-input w-auto max-w-[170px] py-1 text-xs"
-                          >
-                            <option value="__keep__">Keep subject</option>
-                            {workspace.subjects.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                        <select
-                          aria-label="Optional Study Notes link"
-                          value={moveTargetTopicId}
-                          onChange={(e) => setMoveTargetTopicId(e.target.value)}
-                          className="sd-input w-auto max-w-[230px] py-1 text-xs"
-                        >
-                          <option value="__keep__">Keep current note link</option>
-                          <option value="__unlink__">Separate (unlink from Notes)</option>
-                          {workspace.topics
-                            .filter(
-                              (t) =>
-                                moveTargetSubjectId === '__keep__' ||
-                                t.subjectId === moveTargetSubjectId
-                            )
-                            .map((t) => (
-                              <option key={t.id} value={t.id}>
-                                Link: {subjById.get(t.subjectId)?.name || 'Subject'} — {t.name}
-                              </option>
-                            ))}
-                        </select>
-                        <button
-                          type="button"
-                          disabled={
-                            !moveTargetSection.trim() &&
-                            moveTargetSubjectId === '__keep__' &&
-                            moveTargetTopicId === '__keep__'
-                          }
-                          onClick={handleMoveTargetCards}
-                          className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
-                        >
-                          Apply to {activeSelCount > 0 ? activeSelCount : targetBulkCardIds.length} Card
-                          {targetBulkCardIds.length === 1 ? '' : 's'}
-                        </button>
-                      </div>
+                      {/* Rolled-out Bulk Card Management Drawer */}
+                      {manageEditOpen && (
+                        <div className="space-y-2.5 border-t border-[var(--line)] pt-2.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="mr-1 text-[11px] font-semibold text-[var(--mute)]">
+                              {activeSelCount > 0
+                                ? `Selected (${activeSelCount}):`
+                                : `All matching (${manageFilteredCards.length}):`}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleBulkBoxUpdate('reset')}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                            >
+                              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                              <span>Reset to Box 1</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleBulkBoxUpdate('master')}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                            >
+                              <CheckCircle2 className="h-3 w-3 text-[var(--ok)]" aria-hidden="true" />
+                              <span>Mark Mastered</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleBulkBoxUpdate('flag')}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                            >
+                              <Flag className="h-3 w-3 text-[var(--e2)]" aria-hidden="true" />
+                              <span>Flag</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleBulkBoxUpdate('unflag')}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                            >
+                              <XCircle className="h-3 w-3 text-[var(--mute)]" aria-hidden="true" />
+                              <span>Unflag</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleBulkBoxUpdate('swap')}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                            >
+                              <ArrowLeftRight className="h-3 w-3" aria-hidden="true" />
+                              <span>Swap Q↔A</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDuplicateSelectedCards}
+                              className="sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap"
+                            >
+                              <Copy className="h-3 w-3" aria-hidden="true" />
+                              <span>Duplicate</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setManageOrganizeOpen((v) => !v)}
+                              className={`sd-btn px-2.5 py-1 text-[11px] whitespace-nowrap ${
+                                manageOrganizeOpen ? 'border-[var(--e3)] text-[var(--e3)]' : ''
+                              }`}
+                            >
+                              <SlidersHorizontal className="h-3 w-3" aria-hidden="true" />
+                              <span>Move / Link Deck</span>
+                            </button>
+                          </div>
+
+                          {manageOrganizeOpen && (
+                            <div className="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2">
+                              <span className="font-semibold text-[var(--mute)]">
+                                Move / Link:
+                              </span>
+                              <input
+                                type="text"
+                                list="fc-move-deck-suggestions"
+                                value={moveTargetSection}
+                                onChange={(e) => setMoveTargetSection(e.target.value)}
+                                placeholder="Deck / Section name…"
+                                className="sd-input w-44 py-1 text-xs"
+                              />
+                              <datalist id="fc-move-deck-suggestions">
+                                {manageAvailableSections.map((sec) => (
+                                  <option key={sec} value={sec} />
+                                ))}
+                              </datalist>
+                              {workspace.subjects.length > 1 && (
+                                <select
+                                  aria-label="Destination subject"
+                                  value={moveTargetSubjectId}
+                                  onChange={(e) => setMoveTargetSubjectId(e.target.value)}
+                                  className="sd-input w-auto max-w-[170px] py-1 text-xs"
+                                >
+                                  <option value="__keep__">Keep subject</option>
+                                  {workspace.subjects.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                              <select
+                                aria-label="Optional Study Notes link"
+                                value={moveTargetTopicId}
+                                onChange={(e) => setMoveTargetTopicId(e.target.value)}
+                                className="sd-input w-auto max-w-[230px] py-1 text-xs"
+                              >
+                                <option value="__keep__">Keep current note link</option>
+                                <option value="__unlink__">Separate (unlink from Notes)</option>
+                                {workspace.topics
+                                  .filter(
+                                    (t) =>
+                                      moveTargetSubjectId === '__keep__' ||
+                                      t.subjectId === moveTargetSubjectId
+                                  )
+                                  .map((t) => (
+                                    <option key={t.id} value={t.id}>
+                                      Link: {subjById.get(t.subjectId)?.name || 'Subject'} — {t.name}
+                                    </option>
+                                  ))}
+                              </select>
+                              <button
+                                type="button"
+                                disabled={
+                                  !moveTargetSection.trim() &&
+                                  moveTargetSubjectId === '__keep__' &&
+                                  moveTargetTopicId === '__keep__'
+                                }
+                                onClick={handleMoveTargetCards}
+                                className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap"
+                              >
+                                Apply to {activeSelCount > 0 ? activeSelCount : targetBulkCardIds.length} Card
+                                {targetBulkCardIds.length === 1 ? '' : 's'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -4669,6 +5135,360 @@ export function FlashcardsView({
           </div>
         </div>
       )}
+
+      {/* Merge Decks Modal */}
+      {mergeModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3 sm:p-5"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Merge flashcard decks"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setMergeModalOpen(false);
+          }}
+        >
+          <form
+            onSubmit={handleConfirmMergeDecks}
+            className="sd-card flex max-h-[88dvh] w-full max-w-lg flex-col overflow-hidden shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
+              <div>
+                <h2 className="font-display flex items-center gap-2 text-lg font-bold text-[var(--ink)]">
+                  <GitMerge className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                  <span>Merge Flashcard Decks</span>
+                </h2>
+                <p className="mt-0.5 text-xs text-[var(--mute)]">
+                  Pick 2 or more decks to merge into a single deck.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMergeModalOpen(false)}
+                className="sd-btn h-8 w-8 rounded-full p-0"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 text-xs">
+              <div>
+                <div className="mb-1.5 flex items-center justify-between font-bold text-[var(--ink)]">
+                  <span>Select Decks to Merge ({mergeSelectedDeckKeys.size} chosen)</span>
+                  <button
+                    type="button"
+                    onClick={() => setMergeSelectedDeckKeys(new Set())}
+                    className="cursor-pointer font-semibold text-[var(--mute)] hover:text-[var(--ink)]"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="max-h-52 space-y-1 overflow-y-auto rounded-xl border border-[var(--line)] p-2">
+                  {allWorkspaceDeckBuckets.map((b) => {
+                    const checked = mergeSelectedDeckKeys.has(b.key);
+                    return (
+                      <label
+                        key={b.key}
+                        className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 py-2 transition-colors ${
+                          checked
+                            ? 'bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))] font-semibold text-[var(--ink)]'
+                            : 'hover:bg-[var(--bg)] text-[var(--ink)]'
+                        }`}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = new Set(mergeSelectedDeckKeys);
+                              if (e.target.checked) next.add(b.key);
+                              else next.delete(b.key);
+                              setMergeSelectedDeckKeys(next);
+                            }}
+                            className="h-4 w-4 rounded accent-[var(--e3)]"
+                          />
+                          <span className="truncate">
+                            {b.subjectName} — {b.sectionName}
+                          </span>
+                        </span>
+                        <span className="font-mono-num shrink-0 text-[11px] text-[var(--mute)]">
+                          {b.cards.length} cards
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block font-semibold text-[var(--mute)]">
+                  Target Subject
+                  <select
+                    value={mergeTargetSubjectId}
+                    onChange={(e) => setMergeTargetSubjectId(e.target.value)}
+                    className="sd-input mt-1 text-xs"
+                  >
+                    {workspace.subjects.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block font-semibold text-[var(--mute)]">
+                  Merged Deck Name *
+                  <input
+                    type="text"
+                    required
+                    value={mergeTargetDeckName}
+                    onChange={(e) => setMergeTargetDeckName(e.target.value)}
+                    placeholder="e.g. Paper 1 Combined"
+                    className="sd-input mt-1 text-xs"
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                <label className="flex cursor-pointer items-center gap-2 text-[var(--ink)]">
+                  <input
+                    type="checkbox"
+                    checked={mergeRemoveSources}
+                    onChange={(e) => setMergeRemoveSources(e.target.checked)}
+                    className="h-4 w-4 rounded accent-[var(--e3)]"
+                  />
+                  <span>Replace source decks (uncheck to copy cards and keep originals)</span>
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-[var(--ink)]">
+                  <input
+                    type="checkbox"
+                    checked={mergeDedupe}
+                    onChange={(e) => setMergeDedupe(e.target.checked)}
+                    className="h-4 w-4 rounded accent-[var(--e3)]"
+                  />
+                  <span>Skip exact duplicate Question/Answer cards</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--line)] bg-[var(--bg)] px-5 py-3 text-xs">
+              <button
+                type="button"
+                onClick={() => setMergeModalOpen(false)}
+                className="sd-btn px-3.5 py-1.5 text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={mergeSelectedDeckKeys.size < 2 || !mergeTargetDeckName.trim()}
+                className="sd-btn-pri px-4 py-1.5 text-xs font-bold"
+              >
+                Merge {mergeSelectedDeckKeys.size} Decks
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Copy Cards From Another Deck Modal */}
+      {copyModalOpen && (() => {
+        const sourceBucket =
+          allWorkspaceDeckBuckets.find((b) => b.key === copySourceDeckKey) ||
+          allWorkspaceDeckBuckets[0];
+        const q = copySearch.trim().toLowerCase();
+        const visibleSourceCards = (sourceBucket?.cards || []).filter(
+          (c) => !q || c.q.toLowerCase().includes(q) || c.a.toLowerCase().includes(q)
+        );
+        const existingTargetDecks = allWorkspaceDeckBuckets
+          .filter((b) => b.subjectId === copyTargetSubjectId)
+          .map((b) => b.sectionName);
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3 sm:p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Copy cards from deck"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setCopyModalOpen(false);
+            }}
+          >
+            <form
+              onSubmit={handleConfirmCopyFromDeck}
+              className="sd-card flex max-h-[88dvh] w-full max-w-2xl flex-col overflow-hidden shadow-2xl"
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
+                <div>
+                  <h2 className="font-display flex items-center gap-2 text-lg font-bold text-[var(--ink)]">
+                    <Copy className="h-4 w-4 text-[var(--e3)]" aria-hidden="true" />
+                    <span>Copy Cards from Another Deck</span>
+                  </h2>
+                  <p className="mt-0.5 text-xs text-[var(--mute)]">
+                    Choose cards from any existing deck and copy them into an existing or new deck.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCopyModalOpen(false)}
+                  className="sd-btn h-8 w-8 rounded-full p-0"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 text-xs">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block font-semibold text-[var(--mute)]">
+                    Source Deck
+                    <select
+                      value={sourceBucket?.key || ''}
+                      onChange={(e) => {
+                        const key = e.target.value;
+                        setCopySourceDeckKey(key);
+                        const nextB = allWorkspaceDeckBuckets.find((b) => b.key === key);
+                        setCopySelectedCardIds(new Set(nextB ? nextB.cards.map((c) => c.id) : []));
+                      }}
+                      className="sd-input mt-1 text-xs"
+                    >
+                      {allWorkspaceDeckBuckets.map((b) => (
+                        <option key={b.key} value={b.key}>
+                          {b.subjectName} — {b.sectionName} ({b.cards.length})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block font-semibold text-[var(--mute)]">
+                    Filter Cards
+                    <input
+                      type="text"
+                      value={copySearch}
+                      onChange={(e) => setCopySearch(e.target.value)}
+                      placeholder="Search questions or answers…"
+                      className="sd-input mt-1 text-xs"
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between font-bold text-[var(--ink)]">
+                    <span>
+                      Select Cards ({copySelectedCardIds.size} of {sourceBucket?.cards.length || 0})
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCopySelectedCardIds(new Set(visibleSourceCards.map((c) => c.id)))
+                        }
+                        className="cursor-pointer font-semibold text-[var(--e3)] hover:underline"
+                      >
+                        Select visible
+                      </button>
+                      <span className="text-[var(--line)]">·</span>
+                      <button
+                        type="button"
+                        onClick={() => setCopySelectedCardIds(new Set())}
+                        className="cursor-pointer font-semibold text-[var(--mute)] hover:text-[var(--ink)]"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-56 divide-y divide-[var(--line)] overflow-y-auto rounded-xl border border-[var(--line)]">
+                    {visibleSourceCards.map((c) => {
+                      const checked = copySelectedCardIds.has(c.id);
+                      return (
+                        <label
+                          key={c.id}
+                          className={`flex cursor-pointer items-start gap-2.5 px-3 py-2 transition-colors ${
+                            checked
+                              ? 'bg-[color-mix(in_srgb,var(--e3)_8%,var(--card))]'
+                              : 'hover:bg-[var(--bg)]'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = new Set(copySelectedCardIds);
+                              if (e.target.checked) next.add(c.id);
+                              else next.delete(c.id);
+                              setCopySelectedCardIds(next);
+                            }}
+                            className="mt-0.5 h-4 w-4 rounded accent-[var(--e3)]"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-[var(--ink)]">{c.q}</div>
+                            <div className="truncate text-[11px] text-[var(--mute)]">{c.a}</div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                    {visibleSourceCards.length === 0 && (
+                      <div className="p-4 text-center text-[var(--mute)]">
+                        No cards match your filter.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 border-t border-[var(--line)] pt-3 sm:grid-cols-2">
+                  <label className="block font-semibold text-[var(--mute)]">
+                    Copy Into Subject
+                    <select
+                      value={copyTargetSubjectId}
+                      onChange={(e) => setCopyTargetSubjectId(e.target.value)}
+                      className="sd-input mt-1 text-xs"
+                    >
+                      {workspace.subjects.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block font-semibold text-[var(--mute)]">
+                    Destination Deck Name (new or existing) *
+                    <input
+                      type="text"
+                      required
+                      list="fc-copy-target-decks"
+                      value={copyTargetDeckName}
+                      onChange={(e) => setCopyTargetDeckName(e.target.value)}
+                      placeholder="Type new deck name or pick existing…"
+                      className="sd-input mt-1 text-xs"
+                    />
+                    <datalist id="fc-copy-target-decks">
+                      {existingTargetDecks.map((sec) => (
+                        <option key={sec} value={sec} />
+                      ))}
+                    </datalist>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 border-t border-[var(--line)] bg-[var(--bg)] px-5 py-3 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setCopyModalOpen(false)}
+                  className="sd-btn px-3.5 py-1.5 text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={copySelectedCardIds.size === 0 || !copyTargetDeckName.trim()}
+                  className="sd-btn-pri px-4 py-1.5 text-xs font-bold"
+                >
+                  Copy {copySelectedCardIds.size} Card{copySelectedCardIds.size === 1 ? '' : 's'}
+                </button>
+              </div>
+            </form>
+          </div>
+        );
+      })()}
     </div>
   );
 }

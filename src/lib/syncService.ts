@@ -622,14 +622,43 @@ export async function updateUserRole(
   targetUid: string,
   newRole: UserRole
 ): Promise<void> {
+  await updateUserAdminControl({ adminUid, targetUid, role: newRole });
+}
+
+export async function updateUserAdminControl(params: {
+  adminUid: string;
+  targetUid: string;
+  role?: UserRole;
+  displayName?: string;
+  disabled?: boolean;
+  suspendedReason?: string;
+  adminNote?: string;
+}): Promise<void> {
+  const { adminUid, targetUid, role, displayName, disabled, suspendedReason, adminNote } = params;
   const userPath = `users/${targetUid}`;
   const adminPath = `admins/${targetUid}`;
+
+  const patch: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  if (role !== undefined) patch.role = role;
+  if (displayName !== undefined) {
+    const cleanName = displayName.trim().slice(0, 100);
+    if (cleanName) patch.displayName = cleanName;
+  }
+  if (disabled !== undefined && targetUid !== adminUid) {
+    patch.disabled = disabled;
+  }
+  if (suspendedReason !== undefined) {
+    patch.suspendedReason = suspendedReason.trim().slice(0, 280);
+  }
+  if (adminNote !== undefined) {
+    patch.adminNote = adminNote.trim().slice(0, 500);
+  }
+
   try {
-    await updateDoc(doc(db, 'users', targetUid), {
-      role: newRole,
-      updatedAt: serverTimestamp(),
-    });
-    if (newRole === 'admin') {
+    await updateDoc(doc(db, 'users', targetUid), patch);
+    if (role === 'admin') {
       const admRef = doc(db, 'admins', targetUid);
       const admSnap = await getDoc(admRef);
       if (!admSnap.exists()) {
@@ -639,7 +668,7 @@ export async function updateUserRole(
           createdAt: serverTimestamp(),
         });
       }
-    } else if (targetUid !== adminUid) {
+    } else if (role !== undefined && targetUid !== adminUid) {
       const admRef = doc(db, 'admins', targetUid);
       const admSnap = await getDoc(admRef);
       if (admSnap.exists()) {
@@ -648,6 +677,70 @@ export async function updateUserRole(
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `${userPath} / ${adminPath}`);
+  }
+}
+
+export async function fetchUserDevicesForAdmin(targetUid: string): Promise<UserDeviceDoc[]> {
+  const path = `users/${targetUid}/devices`;
+  try {
+    const q = query(collection(db, 'users', targetUid, 'devices'), where('ownerId', '==', targetUid));
+    const snap = await getDocs(q);
+    return snap.docs
+      .map((d) => d.data() as UserDeviceDoc)
+      .sort((a, b) => {
+        const ta = a.lastSeenAt instanceof Timestamp ? a.lastSeenAt.toMillis() : 0;
+        const tb = b.lastSeenAt instanceof Timestamp ? b.lastSeenAt.toMillis() : 0;
+        return tb - ta;
+      });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+export async function fetchUserActivityForAdmin(targetUid: string): Promise<UserActivityDoc[]> {
+  const path = `users/${targetUid}/activity`;
+  try {
+    const q = query(collection(db, 'users', targetUid, 'activity'), where('ownerId', '==', targetUid));
+    const snap = await getDocs(q);
+    return snap.docs
+      .map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<UserActivityDoc, 'id'>),
+      }))
+      .sort((a, b) => {
+        const ta = a.createdAt instanceof Timestamp ? a.createdAt.toMillis() : 0;
+        const tb = b.createdAt instanceof Timestamp ? b.createdAt.toMillis() : 0;
+        return tb - ta;
+      })
+      .slice(0, 30);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+export async function deleteUserAccountByAdmin(targetUid: string): Promise<void> {
+  const path = `users/${targetUid}`;
+  try {
+    const batch = writeBatch(db);
+
+    const [devicesSnap, activitySnap, syncSnap, privSnap, admSnap] = await Promise.all([
+      getDocs(query(collection(db, 'users', targetUid, 'devices'), where('ownerId', '==', targetUid))),
+      getDocs(query(collection(db, 'users', targetUid, 'activity'), where('ownerId', '==', targetUid))),
+      getDocs(query(collection(db, 'users', targetUid, 'syncDocs'), where('ownerId', '==', targetUid))),
+      getDoc(doc(db, 'users', targetUid, 'private', 'info')),
+      getDoc(doc(db, 'admins', targetUid)),
+    ]);
+
+    devicesSnap.docs.forEach((d) => batch.delete(d.ref));
+    activitySnap.docs.forEach((d) => batch.delete(d.ref));
+    syncSnap.docs.forEach((d) => batch.delete(d.ref));
+    if (privSnap.exists()) batch.delete(privSnap.ref);
+    if (admSnap.exists()) batch.delete(admSnap.ref);
+    batch.delete(doc(db, 'users', targetUid));
+
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
 

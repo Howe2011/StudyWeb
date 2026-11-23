@@ -4,6 +4,8 @@ import {
   BookOpen,
   Calendar,
   Check,
+  ChevronDown,
+  ChevronRight,
   CornerDownRight,
   Edit3,
   Layers,
@@ -12,6 +14,7 @@ import {
   Play,
   Plus,
   Search,
+  Settings,
   Share2,
   Timer,
   Trash2,
@@ -27,6 +30,7 @@ import {
 import {
   buildTopicTreeList,
   deleteTopicPromotingChildren,
+  getTopicDescendantIds,
   makeId,
 } from '../lib/workspaceStore';
 import {
@@ -120,6 +124,8 @@ export function SubjectsView({
   const [bulkTopicsText, setBulkTopicsText] = useState('');
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [editingTopicName, setEditingTopicName] = useState('');
+  const [collapsedParentIds, setCollapsedParentIds] = useState<Set<string>>(() => new Set());
+  const [openTopicGearId, setOpenTopicGearId] = useState<string | null>(null);
 
   const existingSubjectNames = useMemo(
     () => new Set(workspace.subjects.map((s) => s.name.trim().toLowerCase())),
@@ -347,19 +353,26 @@ export function SubjectsView({
   };
 
   const handleSetTopicConfidence = (topicId: string, confidence: 0 | 1 | 2 | 3) => {
-    onUpdateWorkspace((prev) => ({
-      ...prev,
-      topics: prev.topics.map((t) =>
-        t.id === topicId
-          ? {
-              ...t,
-              confidence,
-              completed: confidence === 3,
-            }
-          : t
-      ),
-      updatedAt: new Date().toISOString(),
-    }));
+    onUpdateWorkspace((prev) => {
+      const targetTopic = prev.topics.find((t) => t.id === topicId);
+      const subjTopics = targetTopic
+        ? prev.topics.filter((t) => t.subjectId === targetTopic.subjectId)
+        : prev.topics;
+      const descendantIds = getTopicDescendantIds(subjTopics, topicId);
+      return {
+        ...prev,
+        topics: prev.topics.map((t) =>
+          t.id === topicId || descendantIds.has(t.id)
+            ? {
+                ...t,
+                confidence,
+                completed: confidence === 3,
+              }
+            : t
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+    });
   };
 
   const handleAddSubtopic = (e: FormEvent, subjId: string) => {
@@ -473,6 +486,19 @@ export function SubjectsView({
     const topicTotal = Math.max(1, topics.length);
 
     const topicTree = buildTopicTreeList(topics);
+    const parentLookup = new Map<string, string | undefined>();
+    topics.forEach((t) => parentLookup.set(t.id, t.parentTopicId));
+    const hasCollapsedAncestor = (topicId: string): boolean => {
+      let cur = parentLookup.get(topicId);
+      const seen = new Set<string>();
+      while (cur && !seen.has(cur)) {
+        seen.add(cur);
+        if (collapsedParentIds.has(cur)) return true;
+        cur = parentLookup.get(cur);
+      }
+      return false;
+    };
+
     const visibleTopicNodes = topicTree.filter((node) => {
       const t = node.topic;
       const c = getTopicConfidence(t);
@@ -484,6 +510,7 @@ export function SubjectsView({
           (t.specCode || '').toLowerCase().includes(q)
         );
       }
+      if (hasCollapsedAncestor(t.id)) return false;
       return true;
     });
 
@@ -810,208 +837,294 @@ export function SubjectsView({
                 const conf = getTopicConfidence(tp);
                 const topicCardsCount = cards.filter((c) => c.topicId === tp.id).length;
                 const isEditingThisTopic = editingTopicId === tp.id;
+                const isParent = node.childCount > 0;
+                const isCollapsed = collapsedParentIds.has(tp.id);
+                const isGearOpen = openTopicGearId === tp.id;
 
                 return (
-                  <div
-                    key={tp.id}
-                    className={`flex flex-wrap items-center justify-between gap-3 py-3 pr-4 text-sm transition-colors hover:bg-[var(--bg)]/60 sm:pr-5 ${
-                      node.depth === 0
-                        ? 'pl-4 sm:pl-5'
-                        : node.depth === 1
-                        ? 'pl-9 sm:pl-11'
-                        : 'pl-14 sm:pl-16'
-                    }`}
-                  >
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      {node.depth > 0 && (
-                        <CornerDownRight
-                          className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]"
-                          aria-hidden="true"
-                        />
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleSetTopicConfidence(
-                            tp.id,
-                            ((conf + 1) % 4) as 0 | 1 | 2 | 3
-                          )
-                        }
-                        title={`Status: ${CONFIDENCE_META[conf].label} (click to cycle)`}
-                        aria-label={`Cycle confidence for ${tp.name}`}
-                        className="h-4 w-4 shrink-0 cursor-pointer rounded-full border border-[var(--line)] transition-transform hover:scale-110"
-                        style={{ backgroundColor: CONFIDENCE_META[conf].color }}
-                      />
-
-                      {tp.specCode && (
-                        <span className="font-mono-num shrink-0 text-xs font-semibold text-[var(--mute)]">
-                          {tp.specCode}
-                        </span>
-                      )}
-
-                      {isEditingThisTopic ? (
-                        <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                          <input
-                            type="text"
-                            autoFocus
-                            value={editingTopicName}
-                            onChange={(e) => setEditingTopicName(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                handleRenameSubtopic(tp.id);
-                              } else if (e.key === 'Escape') {
-                                setEditingTopicId(null);
-                              }
-                            }}
-                            className="sd-input py-1 text-sm"
+                  <div key={tp.id} className="transition-colors hover:bg-[var(--bg)]/50">
+                    <div
+                      className={`flex items-center justify-between gap-3 py-3 pr-4 text-sm sm:pr-5 ${
+                        node.depth === 0
+                          ? 'pl-4 sm:pl-5'
+                          : node.depth === 1
+                          ? 'pl-9 sm:pl-11'
+                          : 'pl-14 sm:pl-16'
+                      }`}
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        {node.depth > 0 && (
+                          <CornerDownRight
+                            className="h-3.5 w-3.5 shrink-0 text-[var(--mute)]"
+                            aria-hidden="true"
                           />
+                        )}
+
+                        {isParent && (
                           <button
-                            type="button"
-                            onClick={() => handleRenameSubtopic(tp.id)}
-                            className="sd-btn-pri px-2.5 py-1 text-xs whitespace-nowrap"
-                          >
-                            Save
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
-                          className="cursor-pointer truncate text-left font-semibold text-[var(--ink)] hover:text-[var(--e3)]"
-                          title={`Open notes for ${tp.name}`}
-                        >
-                          {tp.name}
-                        </button>
-                      )}
-
-                      {node.childCount > 0 && (
-                        <span className="font-mono-num shrink-0 text-xs text-[var(--e3)]">
-                          · {node.childCount} sub-topic{node.childCount === 1 ? '' : 's'}
-                        </span>
-                      )}
-
-                      {topicCardsCount > 0 && (
-                        <span className="font-mono-num shrink-0 text-xs text-[var(--mute)]">
-                          · {topicCardsCount} cards
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div
-                        className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--bg)] p-0.5"
-                        role="group"
-                        aria-label={`Confidence rating for ${tp.name}`}
-                      >
-                        {([1, 2, 3] as const).map((lvl) => (
-                          <button
-                            key={lvl}
                             type="button"
                             onClick={() =>
-                              handleSetTopicConfidence(tp.id, conf === lvl ? 0 : lvl)
+                              setCollapsedParentIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(tp.id)) next.delete(tp.id);
+                                else next.add(tp.id);
+                                return next;
+                              })
                             }
-                            title={CONFIDENCE_META[lvl].label}
-                            className={`cursor-pointer rounded px-2 py-0.5 text-[11px] font-bold transition-colors whitespace-nowrap ${
-                              conf === lvl
-                                ? 'text-white'
-                                : 'text-[var(--mute)] hover:text-[var(--ink)]'
-                            }`}
-                            style={
-                              conf === lvl
-                                ? { backgroundColor: CONFIDENCE_META[lvl].color }
-                                : undefined
+                            aria-expanded={!isCollapsed}
+                            aria-label={
+                              isCollapsed
+                                ? `Expand ${tp.name} sub-topics`
+                                : `Collapse ${tp.name} sub-topics`
                             }
+                            title={isCollapsed ? 'Show sub-topics' : 'Hide sub-topics'}
+                            className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-[var(--mute)] transition-colors hover:bg-[var(--bg)] hover:text-[var(--ink)]"
                           >
-                            {CONFIDENCE_META[lvl].short}
+                            {isCollapsed ? (
+                              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
                           </button>
-                        ))}
-                      </div>
+                        )}
 
-                      {onStartStopwatch && (
                         <button
                           type="button"
                           onClick={() =>
-                            onStartStopwatch({
-                              subjectId: subj.id,
-                              subjectName: subj.name,
-                              topicId: tp.id,
-                              topicName: tp.name,
-                            })
+                            handleSetTopicConfidence(
+                              tp.id,
+                              ((conf + 1) % 4) as 0 | 1 | 2 | 3
+                            )
                           }
                           title={
-                            stopwatch?.topicId === tp.id
-                              ? stopwatch.running
-                                ? `Pause stopwatch for ${tp.name}`
-                                : `Resume stopwatch for ${tp.name}`
-                              : `Start study stopwatch for ${tp.name}`
+                            isParent
+                              ? `Status: ${CONFIDENCE_META[conf].label} (click to cycle parent + sub-topics)`
+                              : `Status: ${CONFIDENCE_META[conf].label} (click to cycle)`
                           }
-                          className={`sd-btn px-2.5 py-1 text-xs whitespace-nowrap shrink-0 ${
-                            stopwatch?.topicId === tp.id
-                              ? 'border-[var(--e3)] text-[var(--e3)]'
-                              : ''
+                          aria-label={`Cycle confidence for ${tp.name}`}
+                          className="h-4 w-4 shrink-0 cursor-pointer rounded-full border border-[var(--line)] transition-transform hover:scale-110"
+                          style={{ backgroundColor: CONFIDENCE_META[conf].color }}
+                        />
+
+                        {tp.specCode && (
+                          <span className="font-mono-num shrink-0 text-xs font-semibold text-[var(--mute)]">
+                            {tp.specCode}
+                          </span>
+                        )}
+
+                        {isEditingThisTopic ? (
+                          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                            <input
+                              type="text"
+                              autoFocus
+                              value={editingTopicName}
+                              onChange={(e) => setEditingTopicName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleRenameSubtopic(tp.id);
+                                } else if (e.key === 'Escape') {
+                                  setEditingTopicId(null);
+                                }
+                              }}
+                              className="sd-input py-1 text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRenameSubtopic(tp.id)}
+                              className="sd-btn-pri px-2.5 py-1 text-xs whitespace-nowrap"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
+                            className="min-w-0 flex-1 cursor-pointer truncate text-left font-semibold text-[var(--ink)] hover:text-[var(--e3)]"
+                            title={`Open notes for ${tp.name}`}
+                          >
+                            {tp.name}
+                          </button>
+                        )}
+
+                        {isParent && (
+                          <span className="font-mono-num hidden shrink-0 text-xs text-[var(--e3)] sm:inline">
+                            · {node.childCount} sub-topic{node.childCount === 1 ? '' : 's'}
+                          </span>
+                        )}
+
+                        {topicCardsCount > 0 && (
+                          <span className="font-mono-num hidden shrink-0 text-xs text-[var(--mute)] md:inline">
+                            · {topicCardsCount} cards
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {onStartStopwatch && stopwatch?.topicId === tp.id && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onStartStopwatch({
+                                subjectId: subj.id,
+                                subjectName: subj.name,
+                                topicId: tp.id,
+                                topicName: tp.name,
+                              })
+                            }
+                            className="sd-btn border-[var(--e3)] px-2.5 py-1 text-xs text-[var(--e3)] whitespace-nowrap"
+                          >
+                            {stopwatch.running ? (
+                              <Pause className="h-3 w-3" aria-hidden="true" />
+                            ) : (
+                              <Play className="h-3 w-3" aria-hidden="true" />
+                            )}
+                            <span className="font-mono-num tabular-nums">{stopwatch.text}</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenTopicGearId((cur) => (cur === tp.id ? null : tp.id))
+                          }
+                          aria-expanded={isGearOpen}
+                          aria-label={`Topic actions for ${tp.name}`}
+                          title="Topic actions"
+                          className={`sd-btn h-8 w-8 p-0 transition-colors ${
+                            isGearOpen
+                              ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))] text-[var(--e3)]'
+                              : 'text-[var(--mute)] hover:text-[var(--ink)]'
                           }`}
                         >
-                          {stopwatch?.topicId === tp.id ? (
-                            stopwatch.running ? (
-                              <>
-                                <Pause className="h-3 w-3" aria-hidden="true" />
-                                <span className="font-mono-num tabular-nums">{stopwatch.text}</span>
-                              </>
-                            ) : (
-                              <>
-                                <Play className="h-3 w-3" aria-hidden="true" />
-                                <span className="font-mono-num tabular-nums">{stopwatch.text}</span>
-                              </>
-                            )
-                          ) : (
-                            <>
-                              <Timer className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
-                              <span>Stopwatch</span>
-                            </>
-                          )}
+                          <Settings
+                            className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                              isGearOpen ? 'rotate-45' : ''
+                            }`}
+                            aria-hidden="true"
+                          />
                         </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => setNewParentTopicId(tp.id)}
-                        title={`Add a sub-topic under ${tp.name}`}
-                        className="sd-btn px-2 py-1 text-xs whitespace-nowrap shrink-0"
-                      >
-                        <Plus className="h-3 w-3" aria-hidden="true" />
-                        <span>Sub-topic</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
-                        className="sd-btn px-2.5 py-1 text-xs text-[var(--e3)] whitespace-nowrap shrink-0"
-                      >
-                        Open Notes →
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingTopicId(tp.id);
-                          setEditingTopicName(tp.name);
-                        }}
-                        aria-label={`Rename ${tp.name}`}
-                        className="sd-btn h-7 w-7 p-0 text-[var(--mute)]"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSubtopic(tp.id)}
-                        aria-label={`Delete ${tp.name}`}
-                        className="sd-btn h-7 w-7 p-0 text-[var(--bad)]"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
+                      </div>
                     </div>
+
+                    {isGearOpen && (
+                      <div
+                        className={`flex flex-wrap items-center justify-between gap-2.5 border-t border-[var(--line)]/60 bg-[var(--bg)]/80 py-2.5 pr-4 sm:pr-5 ${
+                          node.depth === 0
+                            ? 'pl-4 sm:pl-5'
+                            : node.depth === 1
+                            ? 'pl-9 sm:pl-11'
+                            : 'pl-14 sm:pl-16'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div
+                            className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--card)] p-0.5"
+                            role="group"
+                            aria-label={`Confidence rating for ${tp.name}`}
+                          >
+                            {([1, 2, 3] as const).map((lvl) => (
+                              <button
+                                key={lvl}
+                                type="button"
+                                onClick={() =>
+                                  handleSetTopicConfidence(tp.id, conf === lvl ? 0 : lvl)
+                                }
+                                title={
+                                  isParent
+                                    ? `${CONFIDENCE_META[lvl].label} (applies to sub-topics too)`
+                                    : CONFIDENCE_META[lvl].label
+                                }
+                                className={`cursor-pointer rounded px-2.5 py-1 text-[11px] font-bold transition-colors whitespace-nowrap ${
+                                  conf === lvl
+                                    ? 'text-white'
+                                    : 'text-[var(--mute)] hover:text-[var(--ink)]'
+                                }`}
+                                style={
+                                  conf === lvl
+                                    ? { backgroundColor: CONFIDENCE_META[lvl].color }
+                                    : undefined
+                                }
+                              >
+                                {CONFIDENCE_META[lvl].short}
+                              </button>
+                            ))}
+                          </div>
+
+                          {onStartStopwatch && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onStartStopwatch({
+                                  subjectId: subj.id,
+                                  subjectName: subj.name,
+                                  topicId: tp.id,
+                                  topicName: tp.name,
+                                })
+                              }
+                              className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                            >
+                              <Timer className="h-3 w-3 text-[var(--e3)]" aria-hidden="true" />
+                              <span>
+                                {stopwatch?.topicId === tp.id
+                                  ? stopwatch.running
+                                    ? 'Pause Stopwatch'
+                                    : 'Resume Stopwatch'
+                                  : 'Stopwatch'}
+                              </span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewParentTopicId(tp.id);
+                              setOpenTopicGearId(null);
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                          >
+                            <Plus className="h-3 w-3" aria-hidden="true" />
+                            <span>+ Sub-topic</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => onOpenSubjectNotes(subj.id, tp.id)}
+                            className="sd-btn px-2.5 py-1 text-xs text-[var(--e3)] whitespace-nowrap"
+                          >
+                            <BookOpen className="h-3 w-3" aria-hidden="true" />
+                            <span>Open Notes →</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTopicId(tp.id);
+                              setEditingTopicName(tp.name);
+                              setOpenTopicGearId(null);
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs text-[var(--ink)] whitespace-nowrap"
+                          >
+                            <Edit3 className="h-3 w-3" aria-hidden="true" />
+                            <span>Rename</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenTopicGearId(null);
+                              handleDeleteSubtopic(tp.id);
+                            }}
+                            className="sd-btn px-2.5 py-1 text-xs text-[var(--bad)] whitespace-nowrap"
+                          >
+                            <Trash2 className="h-3 w-3" aria-hidden="true" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1399,20 +1512,21 @@ export function SubjectsView({
                 const topicTotal = Math.max(1, topics.length);
 
                 return (
-                  <div key={subj.id} className="sd-card flex flex-col justify-between p-5">
+                  <div
+                    key={subj.id}
+                    onClick={() => {
+                      setActiveTopicsSubjId(subj.id);
+                      setTopicFilterConf('all');
+                      setTopicSearch('');
+                      setBulkTopicsOpen(false);
+                      setOpenTopicGearId(null);
+                    }}
+                    className="sd-card flex cursor-pointer flex-col justify-between p-5 transition-colors hover:border-[var(--e3)]"
+                  >
                     <div>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveTopicsSubjId(subj.id);
-                              setTopicFilterConf('all');
-                              setTopicSearch('');
-                              setBulkTopicsOpen(false);
-                            }}
-                            className="flex cursor-pointer items-center gap-2.5 text-left hover:text-[var(--e3)]"
-                          >
+                          <div className="flex items-center gap-2.5 text-left">
                             <span
                               className="h-3.5 w-3.5 shrink-0 rounded-full"
                               style={{ backgroundColor: subj.color }}
@@ -1420,7 +1534,7 @@ export function SubjectsView({
                             <h3 className="font-display truncate text-lg font-bold text-[var(--ink)]">
                               {subj.name}
                             </h3>
-                          </button>
+                          </div>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--mute)]">
                             <span>{subj.examBoard || 'Revision'}</span>
                             {subj.targetGrade && (
@@ -1441,7 +1555,10 @@ export function SubjectsView({
                           </div>
                         </div>
 
-                        <div className="flex shrink-0 items-center gap-1">
+                        <div
+                          className="flex shrink-0 items-center gap-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <button
                             type="button"
                             onClick={() => onShareSubject(subj.id)}
@@ -1528,7 +1645,10 @@ export function SubjectsView({
                       )}
                     </div>
 
-                    <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--line)] pt-3">
+                    <div
+                      className="mt-4 flex flex-wrap gap-2 border-t border-[var(--line)] pt-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <button
                         type="button"
                         onClick={() => onOpenSubjectNotes(subj.id)}
@@ -1552,6 +1672,7 @@ export function SubjectsView({
                           setTopicFilterConf('all');
                           setTopicSearch('');
                           setBulkTopicsOpen(false);
+                          setOpenTopicGearId(null);
                         }}
                         className="sd-btn px-3.5 py-1.5 text-xs whitespace-nowrap"
                       >

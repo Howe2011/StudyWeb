@@ -27,6 +27,7 @@ import {
   lookupSharedItemByCode,
 } from '../lib/communityService';
 import { getTableSurfaceStyles, renderRichInline } from '../lib/inlineRichText';
+import { renderDocumentHtmlWithLatex, renderKatexToHtml } from '../lib/latexRenderer';
 import { NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
 import { groupSectionPoints } from '../lib/noteFormat';
 import { FlowchartBlock } from './FlowchartBlock';
@@ -117,7 +118,10 @@ function StructuredNoteReader({
     >
       {docHtml && notes.preferOriginalFormat && (
         <div className="sd-doc-canvas">
-          <div className="sd-doc-sheet" dangerouslySetInnerHTML={{ __html: docHtml }} />
+          <div
+            className="sd-doc-sheet"
+            dangerouslySetInnerHTML={{ __html: renderDocumentHtmlWithLatex(docHtml) }}
+          />
         </div>
       )}
 
@@ -266,6 +270,82 @@ function StructuredNoteReader({
                           </figcaption>
                         )}
                       </figure>
+                    );
+                  }
+                  if (blk.kind === 'math') {
+                    return (
+                      <div
+                        key={i}
+                        className="my-4 overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--card)] p-4 text-center shadow-xs"
+                      >
+                        <div
+                          dangerouslySetInnerHTML={{
+                            __html: renderKatexToHtml(blk.latex, true),
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+                  if (blk.kind === 'code') {
+                    return (
+                      <div
+                        key={i}
+                        className="my-4 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--card)] shadow-xs"
+                      >
+                        <div className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg)] px-4 py-2 text-xs font-semibold text-[var(--mute)]">
+                          <span>{blk.lang || 'code'}</span>
+                        </div>
+                        <pre className="overflow-x-auto p-4 font-mono text-sm text-[var(--ink)]">
+                          <code>{blk.code}</code>
+                        </pre>
+                      </div>
+                    );
+                  }
+                  if (blk.kind === 'callout') {
+                    return (
+                      <div
+                        key={i}
+                        className={`my-4 rounded-xl border px-4 py-3.5 shadow-xs sd-callout-${blk.type}`}
+                      >
+                        <div className="text-sm font-bold text-[var(--note-accent)] uppercase tracking-wider">
+                          {blk.title || blk.type}
+                        </div>
+                        <div className="mt-1 text-[15.5px] leading-[1.68] text-[var(--ink)]">
+                          {renderRichInline(blk.text)}
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (blk.kind === 'divider') {
+                    return <hr key={i} className="my-5 border-t border-[var(--line)]" />;
+                  }
+                  if (blk.kind === 'ordered') {
+                    return (
+                      <ol key={i} className="my-3 list-decimal space-y-1.5 pl-6 text-[15.5px] leading-[1.7] text-[var(--ink)]">
+                        {blk.items.map((it, ii) => (
+                          <li key={ii} value={it.num}>
+                            {renderRichInline(it.text)}
+                          </li>
+                        ))}
+                      </ol>
+                    );
+                  }
+                  if (blk.kind === 'checklist') {
+                    return (
+                      <div key={i} className="my-3 space-y-2">
+                        {blk.items.map((it, ii) => (
+                          <div key={ii} className="flex items-start gap-2.5 text-[15.5px] text-[var(--ink)]">
+                            <input
+                              type="checkbox"
+                              defaultChecked={it.checked}
+                              className="mt-1 h-4 w-4 rounded border-[var(--line)] text-[var(--note-accent)]"
+                            />
+                            <span className={it.checked ? 'line-through opacity-70' : ''}>
+                              {renderRichInline(it.text)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     );
                   }
                   if (blk.kind === 'paragraph') {

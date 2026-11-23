@@ -45,14 +45,12 @@ import {
   Zap,
 } from 'lucide-react';
 import { isNoteEmpty } from '../lib/noteFormat';
-import { parseBackupJsonToWorkspace } from '../lib/smartImporter';
 import {
   addLoggedStudyMinutes,
   DEFAULT_HOME_LAYOUT,
   getUnifiedExamsForWorkspace,
   homeWidgetsFromLayout,
   makeId,
-  mergeWorkspaces,
   UnifiedExamItem,
 } from '../lib/workspaceStore';
 import {
@@ -482,7 +480,7 @@ export function HomeDashboardView({
   const [widgetSearch, setWidgetSearch] = useState('');
 
   // Full-size calendar widget state
-  const [fullCalMode, setFullCalMode] = useState<'month' | 'week'>('month');
+  const [fullCalMode, setFullCalMode] = useState<'month' | 'week' | 'day'>('month');
   const [fullCalRefDate, setFullCalRefDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [fullCalSelectedDay, setFullCalSelectedDay] = useState(() => new Date().toISOString().slice(0, 10));
   const [fullCalQuickTitle, setFullCalQuickTitle] = useState('');
@@ -501,37 +499,6 @@ export function HomeDashboardView({
   const [notesWidgetSubjId, setNotesWidgetSubjId] = useState('ALL');
   const [checklistSubjId, setChecklistSubjId] = useState('');
   const [checklistFilter, setChecklistFilter] = useState<'all' | '0' | '1' | '2' | '3'>('all');
-
-  const [importingHowes, setImportingHowes] = useState(false);
-  const [howesImportMsg, setHowesImportMsg] = useState<{ ok: boolean; msg: string } | null>(null);
-
-  const handleImportHowesNotes = async () => {
-    setImportingHowes(true);
-    setHowesImportMsg(null);
-    try {
-      const resp = await fetch('/assets/aistudio/revision-backup-2026-11-17_b59c0c72.json');
-      if (!resp.ok) {
-        throw new Error(`Could not load backup file (HTTP ${resp.status}).`);
-      }
-      const raw = await resp.text();
-      const bundle = parseBackupJsonToWorkspace(raw);
-      if (!bundle) {
-        throw new Error('Failed to parse backup file.');
-      }
-      onUpdateWorkspace((prev) => mergeWorkspaces(prev, bundle.workspace));
-      setHowesImportMsg({
-        ok: true,
-        msg: `Imported Howe's notes: ${bundle.counts.notes} structured notes, ${bundle.counts.flashcards} flashcards, and ${bundle.counts.timelines} timeline nodes.`,
-      });
-    } catch (err) {
-      setHowesImportMsg({
-        ok: false,
-        msg: err instanceof Error ? err.message : "Failed to import Howe's notes.",
-      });
-    } finally {
-      setImportingHowes(false);
-    }
-  };
 
   const gridRef = useRef<HTMLDivElement | null>(null);
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -1588,7 +1555,7 @@ export function HomeDashboardView({
               </button>
               <button
                 type="button"
-                onClick={() => onNavigate('planner', { plannerTab: 'timer' })}
+                onClick={() => onNavigate('timer')}
                 className="sd-btn px-3 py-2 text-xs whitespace-nowrap shrink-0"
               >
                 <span>Full Timer</span>
@@ -3150,8 +3117,12 @@ export function HomeDashboardView({
             const dt = new Date(`${fullCalRefDate.slice(0, 8)}01T12:00:00`);
             dt.setMonth(dt.getMonth() + dir);
             setFullCalRefDate(dt.toISOString().slice(0, 10));
-          } else {
+          } else if (fullCalMode === 'week') {
             setFullCalRefDate(addIso(fullCalRefDate, dir * 7));
+          } else {
+            const nextDay = addIso(fullCalSelectedDay, dir);
+            setFullCalSelectedDay(nextDay);
+            setFullCalRefDate(nextDay);
           }
         };
 
@@ -3159,6 +3130,13 @@ export function HomeDashboardView({
           fullCalMode === 'month'
             ? new Date(`${fullCalRefDate}T12:00:00`).toLocaleDateString('en-GB', {
                 month: 'long',
+                year: 'numeric',
+              })
+            : fullCalMode === 'day'
+            ? new Date(`${fullCalSelectedDay}T12:00:00`).toLocaleDateString('en-GB', {
+                weekday: 'short',
+                day: 'numeric',
+                month: 'short',
                 year: 'numeric',
               })
             : (() => {
@@ -3188,6 +3166,9 @@ export function HomeDashboardView({
         const dayExams = examsByDate.get(fullCalSelectedDay) || [];
         const dayBlocks = nonExamBlocksByDate.get(fullCalSelectedDay) || [];
         const dayTodos = todosByDate.get(fullCalSelectedDay) || [];
+        const dayTotalMins = dayBlocks
+          .filter((b) => b.kind !== 'busy')
+          .reduce((acc, b) => acc + (b.durationMins || 25), 0);
 
         return (
           <div className="space-y-4">
@@ -3223,6 +3204,17 @@ export function HomeDashboardView({
                     className="sd-seg-btn"
                   >
                     Week
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={fullCalMode === 'day'}
+                    onClick={() => {
+                      setFullCalRefDate(fullCalSelectedDay);
+                      setFullCalMode('day');
+                    }}
+                    className="sd-seg-btn"
+                  >
+                    Day
                   </button>
                 </div>
 
@@ -3467,38 +3459,221 @@ export function HomeDashboardView({
               </div>
             )}
 
+            {/* Day View Timeline */}
+            {fullCalMode === 'day' && (
+              <div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2.5">
+                  <div>
+                    <div className="font-display text-base font-bold text-[var(--ink)]">
+                      {new Date(`${fullCalSelectedDay}T12:00:00`).toLocaleDateString('en-GB', {
+                        weekday: 'long',
+                        day: 'numeric',
+                        month: 'long',
+                      })}
+                      {fullCalSelectedDay === todayStr ? ' · Today' : ''}
+                    </div>
+                    <div className="font-mono-num mt-0.5 text-xs text-[var(--mute)]">
+                      {dayExams.length} exam{dayExams.length === 1 ? '' : 's'} · {dayBlocks.length} session
+                      {dayBlocks.length === 1 ? '' : 's'} ({dayTotalMins}m planned) · {dayTodos.length} task
+                      {dayTodos.length === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {Array.from({ length: 7 }, (_, i) => {
+                      const mon = addIso(fullCalSelectedDay, -calDow(fullCalSelectedDay));
+                      const dIso = addIso(mon, i);
+                      const isCur = dIso === fullCalSelectedDay;
+                      const hasEx = (examsByDate.get(dIso)?.length || 0) > 0;
+                      return (
+                        <button
+                          key={dIso}
+                          type="button"
+                          onClick={() => {
+                            setFullCalSelectedDay(dIso);
+                            setFullCalRefDate(dIso);
+                          }}
+                          className={`flex h-8 min-w-[34px] cursor-pointer flex-col items-center justify-center rounded-lg border px-1.5 text-[10px] font-bold transition-colors ${
+                            isCur
+                              ? 'border-[var(--e3)] bg-[var(--e3)] text-white'
+                              : hasEx
+                              ? 'border-[#111827] bg-[#FDE047] text-[#111827]'
+                              : 'border-[var(--line)] bg-[var(--card)] text-[var(--ink)] hover:border-[var(--e3)]'
+                          }`}
+                        >
+                          <span>{WEEK_LABELS[i].slice(0, 2)}</span>
+                          <span className="font-mono-num text-[9px] opacity-85">{Number(dIso.slice(8))}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {dayExams.length === 0 && dayBlocks.length === 0 && dayTodos.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--card)] p-6 text-center text-xs text-[var(--mute)]">
+                    No exams, revision blocks, or due tasks on this day. Schedule a session below.
+                  </div>
+                )}
+
+                {dayExams.length > 0 && (
+                  <div className="space-y-1.5">
+                    {dayExams.map((ex) => (
+                      <div
+                        key={ex.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-[#111827] bg-[#FDE047] px-3.5 py-2.5 text-sm font-extrabold text-[#111827]"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="rounded bg-[#111827] px-1.5 py-0.5 text-[10px] font-black uppercase text-[#FDE047]">
+                            EXAM
+                          </span>
+                          <span>{ex.displayLabel}</span>
+                        </span>
+                        <span className="font-mono-num text-xs">
+                          {ex.startTime} · {ex.durationMins}m
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {dayBlocks.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                      Timeline Schedule
+                    </div>
+                    {dayBlocks.map((b) => {
+                      const subj = b.subjectId ? subjectMap.get(b.subjectId) : undefined;
+                      const col = b.kind === 'busy' ? 'var(--mute)' : subj?.color || 'var(--e3)';
+                      return (
+                        <div
+                          key={b.id}
+                          style={{ borderLeftColor: col }}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] border-l-4 bg-[var(--card)] px-3 py-2 text-xs"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleBlockDone(b.id)}
+                            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
+                          >
+                            <span
+                              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                b.done
+                                  ? 'border-[var(--ok)] bg-[var(--ok)] text-white'
+                                  : 'border-[var(--mute)]'
+                              }`}
+                            >
+                              {b.done && <Check className="h-2.5 w-2.5" aria-hidden="true" />}
+                            </span>
+                            <span className="font-mono-num shrink-0 font-bold text-[var(--mute)]">
+                              {b.startTime}
+                            </span>
+                            <span className={`truncate font-semibold ${b.done ? 'line-through opacity-55' : 'text-[var(--ink)]'}`}>
+                              {b.title}
+                            </span>
+                          </button>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                              {b.durationMins}m
+                            </span>
+                            {b.kind !== 'busy' && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onNavigate('timer', {
+                                    subjectId: subj?.id,
+                                  })
+                                }
+                                className="cursor-pointer rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-0.5 text-[11px] font-semibold text-[var(--e3)] hover:border-[var(--e3)]"
+                              >
+                                Focus
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {dayTodos.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                      Tasks Due
+                    </div>
+                    {dayTodos.map((td) => (
+                      <button
+                        key={td.id}
+                        type="button"
+                        onClick={() => toggleTodoDone(td.id)}
+                        className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-left text-xs hover:border-[var(--e3)]"
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                              td.done
+                                ? 'border-[var(--ok)] bg-[var(--ok)] text-white'
+                                : 'border-[var(--mute)]'
+                            }`}
+                          >
+                            {td.done && <Check className="h-2.5 w-2.5" aria-hidden="true" />}
+                          </span>
+                          <span className={`truncate font-semibold ${td.done ? 'line-through opacity-55' : 'text-[var(--ink)]'}`}>
+                            {td.title}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-[11px] text-[var(--mute)]">Due Task</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Selected Day Detail & Quick-Add Drawer */}
             <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2">
-                <div className="text-xs font-bold text-[var(--ink)]">
-                  {formatShortDate(fullCalSelectedDay)}
-                  {fullCalSelectedDay === todayStr ? ' · Today' : ''}
-                </div>
-                <span className="font-mono-num text-[11px] text-[var(--mute)]">
-                  {dayExams.length} exam{dayExams.length === 1 ? '' : 's'} · {dayBlocks.length} session
-                  {dayBlocks.length === 1 ? '' : 's'} · {dayTodos.length} task
-                  {dayTodos.length === 1 ? '' : 's'}
-                </span>
-              </div>
-
-              {(dayExams.length > 0 || dayBlocks.length > 0 || dayTodos.length > 0) && (
-                <div className="mt-2.5 space-y-1.5">
-                  {dayExams.map((ex) => (
-                    <div
-                      key={ex.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border-2 border-[#111827] bg-[#FDE047] px-3 py-1.5 text-xs font-extrabold text-[#111827]"
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className="rounded bg-[#111827] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#FDE047]">
-                          EXAM
-                        </span>
-                        <span>{ex.displayLabel}</span>
-                      </span>
-                      <span className="font-mono-num text-[11px]">
-                        {ex.startTime} · {ex.durationMins}m
-                      </span>
+              {fullCalMode !== 'day' && (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] pb-2">
+                    <div className="text-xs font-bold text-[var(--ink)]">
+                      {formatShortDate(fullCalSelectedDay)}
+                      {fullCalSelectedDay === todayStr ? ' · Today' : ''}
                     </div>
-                  ))}
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono-num text-[11px] text-[var(--mute)]">
+                        {dayExams.length} exam{dayExams.length === 1 ? '' : 's'} · {dayBlocks.length} session
+                        {dayBlocks.length === 1 ? '' : 's'} · {dayTodos.length} task
+                        {dayTodos.length === 1 ? '' : 's'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFullCalRefDate(fullCalSelectedDay);
+                          setFullCalMode('day');
+                        }}
+                        className="cursor-pointer text-[11px] font-semibold text-[var(--e3)] hover:underline whitespace-nowrap"
+                      >
+                        Day View →
+                      </button>
+                    </div>
+                  </div>
+
+                  {(dayExams.length > 0 || dayBlocks.length > 0 || dayTodos.length > 0) && (
+                    <div className="mt-2.5 space-y-1.5">
+                      {dayExams.map((ex) => (
+                        <div
+                          key={ex.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border-2 border-[#111827] bg-[#FDE047] px-3 py-1.5 text-xs font-extrabold text-[#111827]"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="rounded bg-[#111827] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#FDE047]">
+                              EXAM
+                            </span>
+                            <span>{ex.displayLabel}</span>
+                          </span>
+                          <span className="font-mono-num text-[11px]">
+                            {ex.startTime} · {ex.durationMins}m
+                          </span>
+                        </div>
+                      ))}
 
                   {dayTodos.map((td) => (
                     <button
@@ -3558,8 +3733,7 @@ export function HomeDashboardView({
                             <button
                               type="button"
                               onClick={() =>
-                                onNavigate('planner', {
-                                  plannerTab: 'timer',
+                                onNavigate('timer', {
                                   subjectId: subj?.id,
                                 })
                               }
@@ -3572,7 +3746,9 @@ export function HomeDashboardView({
                       </div>
                     );
                   })}
-                </div>
+                    </div>
+                  )}
+                </>
               )}
 
               <form onSubmit={handleAddQuickCalendarSession} className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2.5">
@@ -4268,17 +4444,8 @@ export function HomeDashboardView({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={importingHowes}
-              onClick={() => void handleImportHowesNotes()}
-              className="sd-btn-pri px-3.5 py-2 text-xs whitespace-nowrap shrink-0"
-            >
-              <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{importingHowes ? "Importing Howe's notes…" : "Import Howe's notes"}</span>
-            </button>
-            <button
-              type="button"
               onClick={onOpenImport}
-              className="sd-btn px-3.5 py-2 text-xs whitespace-nowrap shrink-0"
+              className="sd-btn-pri px-3.5 py-2 text-xs whitespace-nowrap shrink-0"
             >
               <Upload className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Import Notes / Quizlet</span>
@@ -4296,27 +4463,6 @@ export function HomeDashboardView({
             </button>
           </div>
         </div>
-
-        {howesImportMsg && (
-          <div
-            role="status"
-            className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-xs font-semibold ${
-              howesImportMsg.ok
-                ? 'border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_9%,var(--card))] text-[var(--ink)]'
-                : 'border-[var(--bad)] bg-[var(--card)] text-[var(--bad)]'
-            }`}
-          >
-            <span>{howesImportMsg.msg}</span>
-            <button
-              type="button"
-              onClick={() => setHowesImportMsg(null)}
-              aria-label="Dismiss import message"
-              className="cursor-pointer p-1 text-[var(--mute)] hover:text-[var(--ink)]"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </div>
-        )}
 
         {/* Interactive Widget Customizer Tray with Categories */}
         {customizeOpen && (

@@ -93,6 +93,36 @@ function extractInlineText($: cheerio.CheerioAPI, el: Element): string {
     if (n.type !== 'tag') return;
     const tag = (n.tagName || '').toLowerCase();
     const cls = (n.attribs?.class || '').toLowerCase();
+    // Math extraction: MathML <math>, Wikipedia .mwe-math-element, KaTeX, MathJax
+    if (tag === 'math') {
+      const $el = $(n as Element);
+      const annot = $el.find('annotation[encoding="application/x-tex"], annotation[encoding="text/x-tex"]').text().trim();
+      const alt = (n.attribs?.alttext || '').trim();
+      const latex = annot || alt;
+      if (latex) {
+        const isDisplay = n.attribs?.display === 'block';
+        parts.push(isDisplay ? ` $$${latex}$$ ` : ` $${latex}$ `);
+        return;
+      }
+    }
+    if (cls.includes('mwe-math-element') || cls.includes('mwe-math-fallback-image-inline')) {
+      const $el = $(n as Element);
+      const alt = ($el.find('img').attr('alt') || n.attribs?.alt || '').trim();
+      const annot = $el.find('annotation[encoding="application/x-tex"]').text().trim();
+      let latex = (annot || alt).replace(/^\{\\displaystyle\s*/, '').replace(/\}$/, '').trim();
+      if (latex) {
+        parts.push(` $${latex}$ `);
+        return;
+      }
+    }
+    if (tag === 'script' && (n.attribs?.type === 'math/tex' || n.attribs?.type === 'math/tex; mode=display')) {
+      const latex = (n.children?.[0] as { data?: string })?.data?.trim();
+      if (latex) {
+        const isDisplay = n.attribs?.type?.includes('display');
+        parts.push(isDisplay ? ` $$${latex}$$ ` : ` $${latex}$ `);
+      }
+      return;
+    }
     if (
       tag === 'script' ||
       tag === 'style' ||
@@ -129,6 +159,22 @@ function extractInlineText($: cheerio.CheerioAPI, el: Element): string {
     } else if (tag === 'code') {
       const t = inner.trim();
       if (t) parts.push(` \`${t}\` `);
+    } else if (tag === 's' || tag === 'del' || tag === 'strike') {
+      const t = inner.trim();
+      if (t) parts.push(` ~~${t}~~ `);
+    } else if (tag === 'mark') {
+      const t = inner.trim();
+      if (t) parts.push(` ==${t}== `);
+    } else if (tag === 'sub') {
+      const t = inner.trim();
+      if (t) parts.push(` ~${t}~ `);
+    } else if (tag === 'sup') {
+      const t = inner.trim();
+      if (t) parts.push(` ^${t}^ `);
+    } else if (tag === 'a' && n.attribs?.href && /^https?:\/\//i.test(n.attribs.href)) {
+      const t = inner.trim();
+      if (t) parts.push(` [${t}](${n.attribs.href}) `);
+      else parts.push(inner);
     } else {
       parts.push(inner);
     }
@@ -482,7 +528,31 @@ function extractArticleMarkdownFromRoot(
       return;
     }
 
-    if (tag === 'p' || tag === 'blockquote') {
+    if (tag === 'pre') {
+      const codeEl = $(el).find('code').first();
+      const rawCode = (codeEl.length ? codeEl.text() : $(el).text()).replace(/\r\n/g, '\n').trimEnd();
+      if (rawCode.trim()) {
+        const langClass =
+          (codeEl.attr('class') || $(el).attr('class') || '').match(/(?:language-|lang-)([A-Za-z0-9_+-]+)/i)?.[1] ||
+          '';
+        pushLine(`\`\`\`${langClass}`, true);
+        for (const cLine of rawCode.split('\n')) {
+          lines.push(cLine);
+        }
+        pushLine('```', true);
+      }
+      return;
+    }
+
+    if (tag === 'blockquote') {
+      const txt = extractInlineText($, el);
+      if (txt && txt.length > 2) {
+        pushLine(`> ${txt}`);
+      }
+      return;
+    }
+
+    if (tag === 'p') {
       const txt = extractInlineText($, el);
       if (txt && txt.length > 2) pushLine(txt);
       return;

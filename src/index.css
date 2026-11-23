@@ -1096,3 +1096,114 @@ mark .sd-bold-term,
   color: color-mix(in srgb, var(--mute) 62%, transparent);
   pointer-events: none;
 }
+
+/* ============================================================================
+   KaTeX Math & Extended Formatting (Code, Callouts, Presentation Mode)
+   ============================================================================ */
+.katex {
+  font-size: 1.05em;
+  color: inherit;
+  text-rendering: auto;
+}
+
+.katex-display {
+  margin: 0.75em 0 !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.4em 0;
+}
+
+.sd-inline-math {
+  display: inline-block;
+  vertical-align: baseline;
+  padding: 0 0.15em;
+}
+
+.sd-math-card {
+  position: relative;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--note-accent, var(--e3)) 28%, var(--line));
+  background: color-mix(in srgb, var(--note-accent, var(--e3)) 5%, var(--card));
+  padding: 1.1em 1.4em;
+  margin: 1.1em 0;
+  overflow-x: auto;
+}
+
+.sd-code-card {
+  position: relative;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 4%, var(--card));
+  margin: 1.1em 0;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sd-code-card {
+    background: #0d121a;
+  }
+}
+
+:root.dark .sd-code-card,
+[data-theme="dark"] .sd-code-card {
+  background: #0d121a;
+}
+
+.sd-code-content {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+  line-height: 1.65;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.sd-callout-card {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  padding: 1em 1.25em;
+  margin: 1em 0;
+}
+
+/* Stage / Fullscreen Presentation Mode */
+.sd-present-viewport {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sd-present-slide-stage {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1rem, 3vw, 3rem);
+}
+
+.sd-present-slide-card {
+  width: 100%;
+  max-width: 1100px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+  padding: clamp(1.75rem, 4vw, 3.5rem);
+  animation: slideFadeIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slideFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

@@ -53,7 +53,8 @@ service cloud.firestore {
           'uid', 'role', 'displayName', 'encryptionMode',
           'keySalt', 'wrappedDek', 'wrappedDekIv',
           'recoveryWrappedDek', 'recoveryWrappedDekIv',
-          'keyVersion', 'createdAt', 'updatedAt'
+          'keyVersion', 'disabled', 'suspendedReason', 'adminNote',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.uid)
         && data.role in ['student', 'educator', 'admin']
@@ -65,6 +66,9 @@ service cloud.firestore {
         && (!('recoveryWrappedDek' in data) || (data.recoveryWrappedDek is string && data.recoveryWrappedDek.size() >= 16 && data.recoveryWrappedDek.size() <= 512))
         && (!('recoveryWrappedDekIv' in data) || (data.recoveryWrappedDekIv is string && data.recoveryWrappedDekIv.size() >= 12 && data.recoveryWrappedDekIv.size() <= 64))
         && data.keyVersion is number && data.keyVersion >= 1 && data.keyVersion <= 1000
+        && (!('disabled' in data) || data.disabled is bool)
+        && (!('suspendedReason' in data) || (data.suspendedReason is string && data.suspendedReason.size() <= 280))
+        && (!('adminNote' in data) || (data.adminNote is string && data.adminNote.size() <= 500))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -249,6 +253,9 @@ service cloud.firestore {
         && isOwner(userId)
         && isValidUserAccount(incoming())
         && incoming().uid == userId
+        && !('disabled' in incoming())
+        && !('suspendedReason' in incoming())
+        && !('adminNote' in incoming())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && (incoming().role == 'student' || isBootstrapAdmin());
@@ -259,7 +266,11 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])) ||
+          (isAdmin()
+            && !(userId == request.auth.uid && 'disabled' in incoming() && incoming().disabled == true)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'role', 'displayName', 'disabled', 'suspendedReason', 'adminNote', 'updatedAt'
+            ])) ||
           (isOwner(userId)
             && incoming().role == existing().role
             && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -295,12 +306,12 @@ service cloud.firestore {
             'ciphertext', 'iv', 'alg', 'keyVersion', 'updatedAt'
           ]);
 
-        allow delete: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || (isAdmin() && userId != request.auth.uid));
       }
 
       match /syncDocs/{docId} {
         allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow list: if (isOwner(userId) && resource.data.ownerId == request.auth.uid) || (isAdmin() && resource.data.ownerId == userId);
 
         allow create: if isValidId(userId)
           && isValidId(docId)
@@ -324,12 +335,12 @@ service cloud.firestore {
             'checksum', 'deviceId', 'deviceName', 'keyVersion', 'updatedAt'
           ]);
 
-        allow delete: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || (isAdmin() && userId != request.auth.uid));
       }
 
       match /devices/{deviceId} {
-        allow get: if isValidId(userId) && isValidId(deviceId) && isOwner(userId);
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow get: if isValidId(userId) && isValidId(deviceId) && (isOwner(userId) || isAdmin());
+        allow list: if (isOwner(userId) && resource.data.ownerId == request.auth.uid) || (isAdmin() && resource.data.ownerId == userId);
 
         allow create: if isValidId(userId)
           && isValidId(deviceId)
@@ -352,12 +363,12 @@ service cloud.firestore {
             'deviceName', 'platform', 'lastSeenAt'
           ]);
 
-        allow delete: if isValidId(userId) && isValidId(deviceId) && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(deviceId) && (isOwner(userId) || (isAdmin() && userId != request.auth.uid));
       }
 
       match /activity/{activityId} {
         allow get: if isValidId(userId) && isValidId(activityId) && (isOwner(userId) || isAdmin());
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow list: if (isOwner(userId) && resource.data.ownerId == request.auth.uid) || (isAdmin() && resource.data.ownerId == userId);
 
         allow create: if isValidId(userId)
           && isValidId(activityId)
@@ -367,7 +378,7 @@ service cloud.firestore {
           && incoming().createdAt == request.time;
 
         allow update: if false;
-        allow delete: if isValidId(userId) && isValidId(activityId) && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(activityId) && (isOwner(userId) || (isAdmin() && userId != request.auth.uid));
       }
     }
 
@@ -413,6 +424,10 @@ service cloud.firestore {
           && incoming().ownerId == existing().ownerId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'subjectName', 'examBoard', 'summary', 'visibility',
+            'ownerName', 'itemCount', 'payloadJson', 'updatedAt'
+          ])
         ) || (
           isSignedIn()
           && incoming().diff(existing()).affectedKeys().hasOnly(['copyCount'])

@@ -64,6 +64,7 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
   flashcards: 'Flashcards',
   calendar: 'Calendar',
   planner: 'Planner',
+  timer: 'Focus Timer',
   community: 'Community Share',
   quiz: 'Live Quiz',
   progress: 'Progress',
@@ -74,7 +75,6 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
 const PLANNER_SUBTAB_LABELS: Record<PlannerSubTab, string> = {
   calendar: 'To-Do List',
   todo: 'To-Do List',
-  timer: 'Focus Timer',
 };
 
 function getInitials(name: string | null | undefined, email: string | null | undefined): string {
@@ -188,10 +188,10 @@ export function TopBar({
 
       {/* Right: Timer, Quick Import, Theme Toggle, Customize, and Google Profile Avatar Menu */}
       <div className="flex shrink-0 items-center gap-2">
-        {liveTimer.active && !(activeTab === 'planner' && plannerSubTab === 'timer') && (
+        {liveTimer.active && activeTab !== 'timer' && (
           <button
             type="button"
-            onClick={() => onSelectTab('planner', { plannerTab: 'timer' })}
+            onClick={() => onSelectTab('timer')}
             title={`Active ${liveTimer.mode} session: ${liveTimer.subject}`}
             className="sd-btn font-mono-num hidden px-2.5 py-1.5 text-xs whitespace-nowrap text-[var(--e3)] sm:inline-flex"
           >

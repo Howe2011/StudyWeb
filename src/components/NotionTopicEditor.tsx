@@ -18,6 +18,7 @@ import {
   Bold,
   BookOpen,
   CheckCircle2,
+  CheckSquare,
   Code,
   Copy,
   Eraser,
@@ -32,12 +33,17 @@ import {
   Italic,
   Layers,
   List,
+  ListOrdered,
   Loader2,
+  Minus,
   Outdent,
   Palette,
   Quote,
   Redo2,
+  Sigma,
+  Square,
   Table2,
+  Terminal,
   Trash2,
   Type,
   Underline,
@@ -60,8 +66,15 @@ import {
   fileToOptimizedDataUrl,
   NoteImageWidth,
 } from '../lib/imageUtils';
+import { renderKatexToHtml } from '../lib/latexRenderer';
 import { NOTE_COLOR_OPTIONS, NOTE_PART_ROLE_MAP, normalizeNoteColor } from '../lib/noteColors';
-import { groupSectionPoints, makeNoteId } from '../lib/noteFormat';
+import {
+  encodeCalloutPoint,
+  encodeCodePoint,
+  encodeMathPoint,
+  groupSectionPoints,
+  makeNoteId,
+} from '../lib/noteFormat';
 import { countRightArrows, normalizeStudySymbols, splitRightArrowSteps } from '../lib/noteSymbols';
 import { parsePdfFile } from '../lib/pdfImporter';
 import { NoteAccentColor, NotePartRole, NoteSectionBlock, StructuredNoteData } from '../types';
@@ -72,6 +85,11 @@ export type NotionBlockType =
   | 'subheading'
   | 'paragraph'
   | 'bullet'
+  | 'ordered'
+  | 'checklist'
+  | 'math'
+  | 'code'
+  | 'divider'
   | 'factbox'
   | 'flow'
   | 'table'
@@ -88,6 +106,8 @@ export interface NotionBlock {
   text: string;
   extra?: string;
   indent?: number;
+  checked?: boolean;
+  orderNum?: number;
   steps?: string[];
   rows?: string[][];
   src?: string;
@@ -176,6 +196,36 @@ const SLASH_OPTIONS: Array<{
     keywords: 'flow arrow diagram process steps chain',
   },
   {
+    type: 'ordered',
+    label: 'Numbered List',
+    hint: 'Ordered step list (shortcut: 1. )',
+    keywords: 'numbered ordered list steps 1',
+  },
+  {
+    type: 'checklist',
+    label: 'Checklist / To-Do',
+    hint: 'Checkable study item (shortcut: [ ] )',
+    keywords: 'checklist todo task check box',
+  },
+  {
+    type: 'math',
+    label: 'LaTeX Equation Block',
+    hint: 'Rendered math equation with KaTeX (shortcut: $$ )',
+    keywords: 'latex math equation formula katex integral fraction',
+  },
+  {
+    type: 'code',
+    label: 'Code Block',
+    hint: 'Syntax-clean monospace snippet (shortcut: ``` )',
+    keywords: 'code snippet python pseudocode js sql programming',
+  },
+  {
+    type: 'divider',
+    label: 'Divider Line',
+    hint: 'Clean horizontal section break (shortcut: ---)',
+    keywords: 'divider line separator hr break',
+  },
+  {
     type: 'summary',
     label: 'Topic Overview',
     hint: 'Top syllabus overview box',
@@ -191,6 +241,16 @@ function blockTypeIcon(type: SlashActionType) {
       return <Heading3 className="h-3.5 w-3.5" aria-hidden="true" />;
     case 'bullet':
       return <List className="h-3.5 w-3.5" aria-hidden="true" />;
+    case 'ordered':
+      return <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />;
+    case 'checklist':
+      return <CheckSquare className="h-3.5 w-3.5" aria-hidden="true" />;
+    case 'math':
+      return <Sigma className="h-3.5 w-3.5" aria-hidden="true" />;
+    case 'code':
+      return <Terminal className="h-3.5 w-3.5" aria-hidden="true" />;
+    case 'divider':
+      return <Minus className="h-3.5 w-3.5" aria-hidden="true" />;
     case 'paragraph':
       return <Type className="h-3.5 w-3.5" aria-hidden="true" />;
     case 'image':
@@ -279,6 +339,51 @@ export function structuredNoteToBlocks(note: StructuredNoteData): NotionBlock[] 
           text: item.caption || '',
           src: item.src,
           imageWidth: item.width || 'wide',
+        });
+      } else if (item.kind === 'math') {
+        blocks.push({
+          id: makeNoteId('blk'),
+          type: 'math',
+          text: item.latex,
+          extra: item.label || '',
+        });
+      } else if (item.kind === 'code') {
+        blocks.push({
+          id: makeNoteId('blk'),
+          type: 'code',
+          text: item.code,
+          extra: item.lang || 'text',
+        });
+      } else if (item.kind === 'callout') {
+        blocks.push({
+          id: makeNoteId('blk'),
+          type: 'factbox',
+          text: item.text,
+          extra: item.title || item.type.toUpperCase(),
+        });
+      } else if (item.kind === 'ordered') {
+        for (const it of item.items) {
+          blocks.push({
+            id: makeNoteId('blk'),
+            type: 'ordered',
+            text: it.text,
+            orderNum: it.num,
+          });
+        }
+      } else if (item.kind === 'checklist') {
+        for (const it of item.items) {
+          blocks.push({
+            id: makeNoteId('blk'),
+            type: 'checklist',
+            text: it.text,
+            checked: it.checked,
+          });
+        }
+      } else if (item.kind === 'divider') {
+        blocks.push({
+          id: makeNoteId('blk'),
+          type: 'divider',
+          text: '',
         });
       } else if (item.kind === 'table') {
         const rows = [[...item.headers], ...item.rows.map((r) => [...r])].filter((r) =>
@@ -432,6 +537,31 @@ export function blocksToStructuredNote(
           })
         );
       }
+    } else if (b.type === 'ordered') {
+      if (b.text.trim()) {
+        const num = b.orderNum && b.orderNum > 0 ? b.orderNum : 1;
+        ensureSection().points.push(
+          `@ol:${num}|${normalizeStudySymbols(b.text, { preserveLeadingFlowMarker: false })}`
+        );
+      }
+    } else if (b.type === 'checklist') {
+      if (b.text.trim()) {
+        ensureSection().points.push(
+          `@check:${b.checked ? '1' : '0'}|${normalizeStudySymbols(b.text, {
+            preserveLeadingFlowMarker: false,
+          })}`
+        );
+      }
+    } else if (b.type === 'math') {
+      if (b.text.trim()) {
+        ensureSection().points.push(encodeMathPoint(b.text, b.extra || undefined));
+      }
+    } else if (b.type === 'code') {
+      if (b.text.trim()) {
+        ensureSection().points.push(encodeCodePoint(b.text, (b.extra || 'text').trim() || 'text'));
+      }
+    } else if (b.type === 'divider') {
+      ensureSection().points.push('@divider');
     } else if (b.type === 'key_term') {
       if (b.text.trim() || (b.extra || '').trim()) {
         keyTerms.push({
@@ -446,6 +576,9 @@ export function blocksToStructuredNote(
       tips.push(b.text);
     }
   }
+
+  // Keep encodeCalloutPoint referenced cleanly for future callout serialization if needed
+  void encodeCalloutPoint;
 
   return {
     ...prevNote,
@@ -646,7 +779,14 @@ function makeDefaultBlock(type: NotionBlockType, text = ''): NotionBlock {
     type,
     text,
     indent: type === 'bullet' ? 0 : undefined,
-    extra: type === 'key_term' || type === 'factbox' || type === 'flow' ? '' : undefined,
+    checked: type === 'checklist' ? false : undefined,
+    orderNum: type === 'ordered' ? 1 : undefined,
+    extra:
+      type === 'key_term' || type === 'factbox' || type === 'flow' || type === 'math'
+        ? ''
+        : type === 'code'
+        ? 'text'
+        : undefined,
     steps: type === 'flow' ? ['', ''] : undefined,
     rows:
       type === 'table'
@@ -1096,8 +1236,12 @@ export function NotionTopicEditor({
         ...base,
         id: b.id,
         extra:
-          nextType === 'key_term' || nextType === 'factbox' || nextType === 'flow'
-            ? b.extra ?? ''
+          nextType === 'key_term' ||
+          nextType === 'factbox' ||
+          nextType === 'flow' ||
+          nextType === 'math' ||
+          nextType === 'code'
+            ? b.extra ?? (nextType === 'code' ? 'text' : '')
             : undefined,
         steps: nextSteps,
         rows: nextRows,
@@ -1106,7 +1250,12 @@ export function NotionTopicEditor({
     commitBlocks(next, true, true);
     setSlashBlockId(null);
     setOpenMenuBlockId(null);
-    if (nextType !== 'table' && nextType !== 'flow' && nextType !== 'image') {
+    if (
+      nextType !== 'table' &&
+      nextType !== 'flow' &&
+      nextType !== 'image' &&
+      nextType !== 'divider'
+    ) {
       focusBlock(id);
     }
   };
@@ -1295,6 +1444,46 @@ export function NotionTopicEditor({
           b.id === block.id ? { ...makeDefaultBlock('flow', ''), id: b.id } : b
         );
         commitBlocks(next, true, true);
+        return;
+      }
+      if (rawVal === '$$ ' || rawVal === '$$') {
+        const next = blocks.map((b) =>
+          b.id === block.id ? { ...makeDefaultBlock('math', ''), id: b.id } : b
+        );
+        commitBlocks(next, true, true);
+        focusBlock(block.id);
+        return;
+      }
+      if (rawVal === '``` ' || rawVal === '```') {
+        const next = blocks.map((b) =>
+          b.id === block.id ? { ...makeDefaultBlock('code', ''), id: b.id } : b
+        );
+        commitBlocks(next, true, true);
+        focusBlock(block.id);
+        return;
+      }
+      if (rawVal === '---' || rawVal === '***') {
+        const next = blocks.map((b) =>
+          b.id === block.id ? { ...makeDefaultBlock('divider', ''), id: b.id } : b
+        );
+        commitBlocks(next, true, true);
+        return;
+      }
+      if (block.type === 'paragraph' && (rawVal === '[ ] ' || rawVal === '[] ')) {
+        const next = blocks.map((b) =>
+          b.id === block.id ? { ...makeDefaultBlock('checklist', ''), id: b.id } : b
+        );
+        commitBlocks(next, true, true);
+        focusBlock(block.id);
+        return;
+      }
+      if (block.type === 'paragraph' && /^\d+\.\s$/.test(rawVal)) {
+        const num = parseInt(rawVal, 10) || 1;
+        const next = blocks.map((b) =>
+          b.id === block.id ? { ...makeDefaultBlock('ordered', ''), id: b.id, orderNum: num } : b
+        );
+        commitBlocks(next, true, true);
+        focusBlock(block.id);
         return;
       }
     }
@@ -1651,12 +1840,20 @@ export function NotionTopicEditor({
       'heading',
       'subheading',
       'bullet',
+      'ordered',
+      'checklist',
       'paragraph',
     ];
     if (e.key === 'Enter' && !e.shiftKey && splittableTypes.includes(block.type)) {
       e.preventDefault();
 
-      if ((block.type === 'bullet' || block.type === 'subheading') && !block.text.trim()) {
+      if (
+        (block.type === 'bullet' ||
+          block.type === 'ordered' ||
+          block.type === 'checklist' ||
+          block.type === 'subheading') &&
+        !block.text.trim()
+      ) {
         if (block.type === 'bullet' && (block.indent || 0) > 0) {
           updateBlock(block.id, { indent: (block.indent || 0) - 1 });
         } else {
@@ -1674,6 +1871,7 @@ export function NotionTopicEditor({
 
       const created = makeDefaultBlock(nextType, after);
       if (nextType === 'bullet') created.indent = nextIndent;
+      if (nextType === 'ordered') created.orderNum = (block.orderNum || 1) + 1;
 
       const updatedBlocks = blocks.map((b) =>
         b.id === block.id ? { ...b, text: before } : b
@@ -2091,12 +2289,17 @@ export function NotionTopicEditor({
             [
               ['image', 'Image', ImagePlus],
               ['pdf_pages', 'PDF', FileText],
+              ['math', 'Math (LaTeX)', Sigma],
+              ['code', 'Code', Terminal],
+              ['checklist', 'Checklist', CheckSquare],
+              ['ordered', 'Numbered', ListOrdered],
               ['table', 'Table', Table2],
               ['exam_tip', 'Examiner Tip', AlertCircle],
               ['worked_example', 'Worked Example', CheckCircle2],
               ['factbox', 'Fact Box', Quote],
               ['key_term', 'Key Term', Layers],
               ['flow', 'Flow Steps', GitBranch],
+              ['divider', 'Divider', Minus],
               ['heading', 'Section', Heading2],
             ] as const
           ).map(([type, label, Icon]) => (
@@ -2478,6 +2681,188 @@ export function NotionTopicEditor({
                       </div>
                     )}
 
+                    {block.type === 'ordered' && (() => {
+                      let stepNum = 1;
+                      for (let j = idx - 1; j >= 0; j--) {
+                        if (blocks[j].type === 'ordered') stepNum++;
+                        else break;
+                      }
+                      return (
+                        <div className="flex items-start gap-2.5 py-0.5 pl-1">
+                          <span className="font-mono-num mt-[3px] min-w-[22px] shrink-0 text-[15px] font-bold text-[var(--note-accent,var(--e3))]">
+                            {stepNum}.
+                          </span>
+                          <RichTextEditable
+                            syncKey={blockSyncKey}
+                            elRef={(el) => registerEditableRef(block.id, el)}
+                            value={block.text}
+                            onFocusEl={(el) =>
+                              bindRichEditable(el, (dom) =>
+                                updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                              )
+                            }
+                            onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                            onPasteEl={(e, el) => handlePasteMultiLine(e, el, block, idx)}
+                            onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                            placeholder="Numbered step…"
+                            className="min-h-[28px] text-[16px] leading-[1.7] text-[var(--ink)]"
+                          />
+                        </div>
+                      );
+                    })()}
+
+                    {block.type === 'checklist' && (
+                      <div className="flex items-start gap-2.5 py-0.5 pl-1">
+                        <button
+                          type="button"
+                          onClick={() => updateBlock(block.id, { checked: !block.checked })}
+                          aria-label={block.checked ? 'Uncheck item' : 'Check item'}
+                          className="mt-[4px] shrink-0 cursor-pointer text-[var(--note-accent,var(--e3))]"
+                        >
+                          {block.checked ? (
+                            <CheckSquare className="h-4 w-4 text-[var(--ok)]" aria-hidden="true" />
+                          ) : (
+                            <Square className="h-4 w-4 text-[var(--mute)]" aria-hidden="true" />
+                          )}
+                        </button>
+                        <RichTextEditable
+                          syncKey={blockSyncKey}
+                          elRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          onFocusEl={(el) =>
+                            bindRichEditable(el, (dom) =>
+                              updateBlock(block.id, { text: domNodeToInlineMarkup(dom) })
+                            )
+                          }
+                          onKeyDownEl={(e, el) => handleEditableKeyDown(e, el, block, idx)}
+                          onPasteEl={(e, el) => handlePasteMultiLine(e, el, block, idx)}
+                          onChangeValue={(val) => handleTextChangeWithShortcuts(block, val)}
+                          placeholder="Checklist item…"
+                          className={`min-h-[28px] text-[16px] leading-[1.7] ${
+                            block.checked ? 'text-[var(--mute)] line-through' : 'text-[var(--ink)]'
+                          }`}
+                        />
+                      </div>
+                    )}
+
+                    {block.type === 'math' && (
+                      <div className="sd-math-card my-2 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-[var(--note-accent,var(--e3))]">
+                              <Sigma className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>LaTeX Equation</span>
+                            </span>
+                            <input
+                              type="text"
+                              value={block.extra || ''}
+                              onFocus={() => setFocusedBlockId(block.id)}
+                              onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                              placeholder="Optional label (e.g. Quadratic Formula)"
+                              className="rounded border border-transparent bg-[var(--bg)] px-2 py-0.5 text-xs font-medium text-[var(--ink)] outline-none focus:border-[var(--e3)]"
+                            />
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1">
+                            {[
+                              ['\\frac{a}{b}', 'a/b'],
+                              ['\\sqrt{x}', '√'],
+                              ['\\sum_{i=1}^{n}', 'Σ'],
+                              ['\\int_{a}^{b}', '∫'],
+                              ['\\alpha', 'α'],
+                              ['\\Delta', 'Δ'],
+                              ['\\pm', '±'],
+                            ].map(([tex, lbl]) => (
+                              <button
+                                key={lbl}
+                                type="button"
+                                onClick={() =>
+                                  updateBlock(block.id, {
+                                    text: `${block.text}${block.text && !block.text.endsWith(' ') ? ' ' : ''}${tex}`,
+                                  })
+                                }
+                                title={`Insert ${tex}`}
+                                className="cursor-pointer rounded border border-[var(--line)] bg-[var(--card)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--ink)] hover:border-[var(--e3)]"
+                              >
+                                {lbl}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => deleteBlockAt(idx)}
+                              aria-label="Remove math block"
+                              className="ml-1 cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                            >
+                              <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                        <AutoGrowTextarea
+                          inputRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          minHeight={36}
+                          onFocus={() => setFocusedBlockId(block.id)}
+                          onChange={(e) => updateBlock(block.id, { text: e.target.value })}
+                          placeholder="E = mc^2  or  x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"
+                          className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-2 font-mono text-sm text-[var(--ink)] focus:border-[var(--e3)]"
+                        />
+                        {block.text.trim() && (
+                          <div
+                            className="overflow-x-auto rounded-lg bg-[var(--card)] px-3 py-2.5 text-center"
+                            dangerouslySetInnerHTML={{ __html: renderKatexToHtml(block.text, true) }}
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    {block.type === 'code' && (
+                      <div className="sd-code-card my-2 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Terminal className="h-3.5 w-3.5 text-[var(--note-accent,var(--e3))]" aria-hidden="true" />
+                            <input
+                              type="text"
+                              value={block.extra || 'text'}
+                              onFocus={() => setFocusedBlockId(block.id)}
+                              onChange={(e) => updateBlock(block.id, { extra: e.target.value })}
+                              placeholder="Language (e.g. python, sql, js)"
+                              className="w-36 rounded border border-[var(--line)] bg-[var(--card)] px-2 py-0.5 font-mono text-[11px] font-bold text-[var(--ink)] outline-none focus:border-[var(--e3)]"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => deleteBlockAt(idx)}
+                            aria-label="Remove code block"
+                            className="cursor-pointer text-[var(--mute)] hover:text-[var(--bad)]"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+                        <AutoGrowTextarea
+                          inputRef={(el) => registerEditableRef(block.id, el)}
+                          value={block.text}
+                          minHeight={56}
+                          onFocus={() => setFocusedBlockId(block.id)}
+                          onChange={(e) => updateBlock(block.id, { text: e.target.value })}
+                          placeholder="Paste or type code / pseudocode…"
+                          className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-3 py-2 font-mono text-[13px] leading-relaxed text-[var(--ink)] focus:border-[var(--e3)]"
+                        />
+                      </div>
+                    )}
+
+                    {block.type === 'divider' && (
+                      <div className="my-3 flex items-center gap-2">
+                        <hr className="flex-1 border-t border-[var(--line)]" />
+                        <button
+                          type="button"
+                          onClick={() => deleteBlockAt(idx)}
+                          aria-label="Remove divider"
+                          className="cursor-pointer text-[var(--mute)] opacity-0 transition-opacity hover:text-[var(--bad)] group-hover:opacity-100"
+                        >
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    )}
+
                     {block.type === 'paragraph' && (
                       <RichTextEditable
                         syncKey={blockSyncKey}
@@ -2494,7 +2879,7 @@ export function NotionTopicEditor({
                         placeholder={
                           idx === 0
                             ? 'Start typing your notes, press Ctrl+V to paste an image, or use Insert above…'
-                            : 'Continue typing… (/ for blocks, Ctrl+V for images)'
+                            : 'Continue typing… (/ for blocks, $$ for LaTeX, Ctrl+V for images)'
                         }
                         className="min-h-[28px] py-0.5 text-[16px] leading-[1.72] text-[var(--ink)]"
                       />

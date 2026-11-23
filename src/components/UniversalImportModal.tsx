@@ -59,6 +59,7 @@ import {
   signInWithGoogleDocs,
 } from '../lib/googleDocsImport';
 import { getTableSurfaceStyles, renderRichInline } from '../lib/inlineRichText';
+import { renderDocumentHtmlWithLatex, renderKatexToHtml } from '../lib/latexRenderer';
 import {
   applyVerifiedPartColors,
   NOTE_PART_ROLE_MAP,
@@ -2684,7 +2685,7 @@ export function UniversalImportModal({
                         <div className="sd-doc-canvas">
                           <div
                             className="sd-doc-sheet"
-                            dangerouslySetInnerHTML={{ __html: originalHtml }}
+                            dangerouslySetInnerHTML={{ __html: renderDocumentHtmlWithLatex(originalHtml) }}
                           />
                         </div>
                       </div>
@@ -2850,6 +2851,112 @@ export function UniversalImportModal({
                                         </p>
                                       );
                                     }
+                                    if (blk.kind === 'math') {
+                                      return (
+                                        <div key={bi} className="sd-math-card">
+                                          {blk.label && (
+                                            <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                                              {blk.label}
+                                            </div>
+                                          )}
+                                          <div
+                                            className="overflow-x-auto text-center"
+                                            dangerouslySetInnerHTML={{
+                                              __html: renderKatexToHtml(blk.latex, true),
+                                            }}
+                                          />
+                                        </div>
+                                      );
+                                    }
+                                    if (blk.kind === 'code') {
+                                      return (
+                                        <div key={bi} className="sd-code-card">
+                                          {blk.lang && blk.lang !== 'text' && (
+                                            <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                                              {blk.lang}
+                                            </div>
+                                          )}
+                                          <pre className="overflow-x-auto font-mono text-[13px] leading-relaxed text-[var(--ink)]">
+                                            <code>{blk.code}</code>
+                                          </pre>
+                                        </div>
+                                      );
+                                    }
+                                    if (blk.kind === 'callout') {
+                                      return (
+                                        <div
+                                          key={bi}
+                                          className={`sd-callout-card sd-callout-${blk.type}`}
+                                        >
+                                          <div className="text-xs font-bold uppercase tracking-wider text-[var(--note-accent)]">
+                                            {blk.title || blk.type}
+                                          </div>
+                                          <div className="mt-1 text-[14.5px] leading-relaxed text-[var(--ink)]">
+                                            {renderRichInline(blk.text)}
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                    if (blk.kind === 'divider') {
+                                      return (
+                                        <hr
+                                          key={bi}
+                                          className="my-4 border-t border-[var(--line)]"
+                                        />
+                                      );
+                                    }
+                                    if (blk.kind === 'ordered') {
+                                      return (
+                                        <ol key={bi} className="space-y-1.5 pl-1">
+                                          {blk.items.map((it, oi) => (
+                                            <li
+                                              key={oi}
+                                              className="flex items-start gap-2.5 leading-[1.68]"
+                                            >
+                                              <span className="font-mono-num min-w-[20px] shrink-0 font-bold text-[var(--note-accent)]">
+                                                {it.num}.
+                                              </span>
+                                              <span className="min-w-0 flex-1 text-[var(--ink)]">
+                                                {renderRichInline(it.text)}
+                                              </span>
+                                            </li>
+                                          ))}
+                                        </ol>
+                                      );
+                                    }
+                                    if (blk.kind === 'checklist') {
+                                      return (
+                                        <ul key={bi} className="space-y-1.5 pl-1">
+                                          {blk.items.map((it, ci) => (
+                                            <li
+                                              key={ci}
+                                              className="flex items-start gap-2.5 leading-[1.68]"
+                                            >
+                                              <span
+                                                className={`mt-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${
+                                                  it.checked
+                                                    ? 'border-[var(--ok)] bg-[var(--ok)] text-white'
+                                                    : 'border-[var(--line)] bg-[var(--card)]'
+                                                }`}
+                                                aria-hidden="true"
+                                              >
+                                                {it.checked ? '✓' : ''}
+                                              </span>
+                                              <span
+                                                className={
+                                                  it.checked
+                                                    ? 'text-[var(--mute)] line-through'
+                                                    : 'text-[var(--ink)]'
+                                                }
+                                              >
+                                                {renderRichInline(it.text)}
+                                              </span>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      );
+                                    }
+                                    if (blk.kind !== 'bullet') return null;
                                     const isSub = Boolean(blk.indent && blk.indent > 0);
                                     return (
                                       <div

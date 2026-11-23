@@ -16,9 +16,11 @@ import { ProgressView } from './components/ProgressView';
 import { ShareItemModal, ShareTargetConfig } from './components/ShareItemModal';
 import { Sidebar } from './components/Sidebar';
 import { SubjectsView } from './components/SubjectsView';
+import { TimerEngineMode, TimerView } from './components/TimerView';
 import { TopBar } from './components/TopBar';
 import { OfflineIndicator } from './components/PwaControls';
 import { UniversalImportModal } from './components/UniversalImportModal';
+import { FloatingTimerPipController } from './lib/floatingTimerPip';
 import {
   clearTrustedDeviceKey,
   loadTrustedDeviceKey,
@@ -31,6 +33,7 @@ import {
   updateSharedItem,
 } from './lib/communityService';
 import {
+  BOOTSTRAP_ADMIN_EMAIL,
   createUserAccountWithVault,
   ensureBootstrapAdminRole,
   fetchUserAccount,
@@ -275,11 +278,26 @@ export default function App() {
   );
   const [hasGuestData, setHasGuestData] = useState<boolean>(() => detectHasGuestWorkspaceData());
 
-  // Global live Focus Timer
+  // Global live Focus Timer & Pomodoro state
+  const [timerMode, setTimerMode] = useState<TimerEngineMode>('timer');
   const [timerDurationMins, setTimerDurationMins] = useState<number>(25);
   const [timerRemainingSec, setTimerRemainingSec] = useState<number>(25 * 60);
   const [timerRunning, setTimerRunning] = useState<boolean>(false);
   const [timerSubject, setTimerSubject] = useState<string>('General Study');
+  const [pomoFocusMins, setPomoFocusMins] = useState<number>(25);
+  const [pomoBreakMins, setPomoBreakMins] = useState<number>(5);
+  const [pomoPhase, setPomoPhase] = useState<'focus' | 'break'>('focus');
+  const [pomoRound, setPomoRound] = useState<number>(1);
+  const [timerNotice, setTimerNotice] = useState<string | null>(null);
+  const [autoFloatOnLeave, setAutoFloatOnLeave] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('studydeck_auto_float_pip') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const [floatingPipOpen, setFloatingPipOpen] = useState<boolean>(false);
+  const [floatingPipKind, setFloatingPipKind] = useState<'document-pip' | 'video-pip' | null>(null);
 
   // Global persistent Stopwatch (follows user across all tabs)
   const [swState, setSwState] = useState<{
@@ -337,7 +355,6 @@ export default function App() {
   });
   const [swNowMs, setSwNowMs] = useState<number>(() => Date.now());
   const [swToast, setSwToast] = useState<string | null>(null);
-  const [plannerTimerMode, setPlannerTimerMode] = useState<'timer' | 'pomo' | 'stopwatch'>('timer');
 
   const cloudHydratedRef = useRef<boolean>(false);
   const syncTimerRef = useRef<number | null>(null);
@@ -465,9 +482,18 @@ export default function App() {
     [firebaseUser?.uid]
   );
 
+  const isAccountSuspended = Boolean(
+    account?.disabled &&
+      firebaseUser?.email?.toLowerCase() !== BOOTSTRAP_ADMIN_EMAIL.toLowerCase()
+  );
+
   // Debounced encrypted cloud push whenever workspace changes while unlocked
   useEffect(() => {
     if (!vaultUnlocked || !firebaseUser || !account || !dek) return;
+    if (isAccountSuspended) {
+      setSyncState('error');
+      return;
+    }
     if (!cloudHydratedRef.current) return;
 
     if (syncTimerRef.current) {
@@ -491,23 +517,49 @@ export default function App() {
     return () => {
       if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current);
     };
-  }, [workspace, vaultUnlocked, firebaseUser, account, dek]);
+  }, [workspace, vaultUnlocked, firebaseUser, account, dek, isAccountSuspended]);
 
-  // Live Focus Timer tick loop
+  // Live Focus Timer & Pomodoro tick loop
   useEffect(() => {
     if (!timerRunning) return;
     const id = window.setInterval(() => {
       setTimerRemainingSec((prev) => {
         if (prev <= 1) {
           setTimerRunning(false);
+          if (timerMode === 'pomo') {
+            if (pomoPhase === 'focus') {
+              updateWorkspace((ws) => addLoggedStudyMinutes(ws, pomoFocusMins));
+              setPomoPhase('break');
+              setTimerDurationMins(pomoBreakMins);
+              setTimerNotice(
+                `Focus Round ${pomoRound} complete (+${pomoFocusMins}m logged). Break (${pomoBreakMins}m) is ready.`
+              );
+              return pomoBreakMins * 60;
+            }
+            setPomoPhase('focus');
+            setPomoRound((r) => r + 1);
+            setTimerDurationMins(pomoFocusMins);
+            setTimerNotice(`Break finished. Round ${pomoRound + 1} focus is ready.`);
+            return pomoFocusMins * 60;
+          }
           updateWorkspace((ws) => addLoggedStudyMinutes(ws, timerDurationMins));
+          setTimerNotice(`Session complete! Logged +${timerDurationMins}m to your study streak.`);
           return timerDurationMins * 60;
         }
         return prev - 1;
       });
     }, 1000);
     return () => window.clearInterval(id);
-  }, [timerRunning, timerDurationMins, updateWorkspace]);
+  }, [
+    timerRunning,
+    timerDurationMins,
+    timerMode,
+    pomoPhase,
+    pomoFocusMins,
+    pomoBreakMins,
+    pomoRound,
+    updateWorkspace,
+  ]);
 
   const liveTimer: LiveTimerState = useMemo(() => {
     const mm = String(Math.floor(timerRemainingSec / 60)).padStart(2, '0');
@@ -516,14 +568,12 @@ export default function App() {
       active: timerRunning || timerRemainingSec < timerDurationMins * 60,
       running: timerRunning,
       text: `${mm}:${ss}`,
-      mode: 'Focus',
+      mode: timerMode === 'pomo' ? `Pomo · ${pomoPhase === 'focus' ? 'Focus' : 'Break'}` : 'Focus',
       subject: timerSubject,
     };
-  }, [timerRunning, timerRemainingSec, timerDurationMins, timerSubject]);
+  }, [timerRunning, timerRemainingSec, timerDurationMins, timerSubject, timerMode, pomoPhase]);
 
-  const handleToggleTimer = useCallback(() => {
-    setTimerRunning((r) => !r);
-  }, []);
+  const pipControllerRef = useRef<FloatingTimerPipController | null>(null);
 
   const handleResetTimer = useCallback(
     (mins?: number) => {
@@ -534,6 +584,78 @@ export default function App() {
     },
     [timerDurationMins]
   );
+
+  const handleAddCountdownMins = useCallback((deltaMins: number) => {
+    const addedSec = Math.max(60, deltaMins * 60);
+    setTimerDurationMins((m) => m + deltaMins);
+    setTimerRemainingSec((s) => s + addedSec);
+  }, []);
+
+  const handleChangeTimerMode = useCallback(
+    (nextMode: TimerEngineMode) => {
+      setTimerMode(nextMode);
+      if (nextMode === 'pomo') {
+        setTimerRunning(false);
+        setPomoPhase('focus');
+        setTimerDurationMins(pomoFocusMins);
+        setTimerRemainingSec(pomoFocusMins * 60);
+      } else if (nextMode === 'timer' && timerMode === 'pomo') {
+        setTimerRunning(false);
+        setTimerDurationMins(25);
+        setTimerRemainingSec(25 * 60);
+      }
+    },
+    [pomoFocusMins, timerMode]
+  );
+
+  const handleChangePomoFocusMins = useCallback(
+    (mins: number) => {
+      setPomoFocusMins(mins);
+      if (timerMode === 'pomo' && pomoPhase === 'focus') {
+        setTimerRunning(false);
+        setTimerDurationMins(mins);
+        setTimerRemainingSec(mins * 60);
+      }
+    },
+    [timerMode, pomoPhase]
+  );
+
+  const handleChangePomoBreakMins = useCallback(
+    (mins: number) => {
+      setPomoBreakMins(mins);
+      if (timerMode === 'pomo' && pomoPhase === 'break') {
+        setTimerRunning(false);
+        setTimerDurationMins(mins);
+        setTimerRemainingSec(mins * 60);
+      }
+    },
+    [timerMode, pomoPhase]
+  );
+
+  const handleSkipPomoPhase = useCallback(() => {
+    setTimerRunning(false);
+    if (pomoPhase === 'focus') {
+      setPomoPhase('break');
+      setTimerDurationMins(pomoBreakMins);
+      setTimerRemainingSec(pomoBreakMins * 60);
+    } else {
+      setPomoPhase('focus');
+      setPomoRound((r) => r + 1);
+      setTimerDurationMins(pomoFocusMins);
+      setTimerRemainingSec(pomoFocusMins * 60);
+    }
+  }, [pomoPhase, pomoBreakMins, pomoFocusMins]);
+
+  const handleToggleTimer = useCallback(() => {
+    setTimerNotice(null);
+    setTimerRunning((r) => {
+      const nextRunning = !r;
+      if (nextRunning) {
+        pipControllerRef.current?.armAutoPipFromGesture();
+      }
+      return nextRunning;
+    });
+  }, []);
 
   // Global Stopwatch tick & persistence
   useEffect(() => {
@@ -593,6 +715,7 @@ export default function App() {
           dismissed: false,
         };
       }
+      pipControllerRef.current?.armAutoPipFromGesture();
       return {
         ...prev,
         running: true,
@@ -731,6 +854,132 @@ export default function App() {
         ...(subjectChanged ? { topicId: undefined, topicName: undefined } : {}),
       };
     });
+  }, []);
+
+  // Sync cross-tab floating mini timer controller (Document PiP + Canvas Video autoPictureInPicture)
+  useEffect(() => {
+    const ctrl = new FloatingTimerPipController({
+      onToggle: () => {
+        if (timerMode === 'stopwatch') handleToggleStopwatch();
+        else handleToggleTimer();
+      },
+      onReset: () => {
+        if (timerMode === 'stopwatch') handleResetStopwatch();
+        else handleResetTimer();
+      },
+      onAddFiveMins: () => handleAddCountdownMins(5),
+      onLap: () => handleLapStopwatch(),
+      onStatusChange: (open, kind) => {
+        setFloatingPipOpen(open);
+        setFloatingPipKind(kind);
+      },
+    });
+    ctrl.setAutoFloat(autoFloatOnLeave);
+    pipControllerRef.current = ctrl;
+    return () => {
+      ctrl.dispose();
+      pipControllerRef.current = null;
+    };
+    // Initialize controller once; callbacks are refreshed in the effect below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const ctrl = pipControllerRef.current;
+    if (!ctrl) return;
+    ctrl.setCallbacks({
+      onToggle: () => {
+        if (timerMode === 'stopwatch') handleToggleStopwatch();
+        else handleToggleTimer();
+      },
+      onReset: () => {
+        if (timerMode === 'stopwatch') handleResetStopwatch();
+        else handleResetTimer();
+      },
+      onAddFiveMins: () => handleAddCountdownMins(5),
+      onLap: () => handleLapStopwatch(),
+      onStatusChange: (open, kind) => {
+        setFloatingPipOpen(open);
+        setFloatingPipKind(kind);
+      },
+    });
+    ctrl.setAutoFloat(autoFloatOnLeave);
+  }, [
+    timerMode,
+    autoFloatOnLeave,
+    handleToggleStopwatch,
+    handleToggleTimer,
+    handleResetStopwatch,
+    handleResetTimer,
+    handleAddCountdownMins,
+    handleLapStopwatch,
+  ]);
+
+  useEffect(() => {
+    const ctrl = pipControllerRef.current;
+    if (!ctrl) return;
+    const isSw = timerMode === 'stopwatch';
+    const totalSec = Math.max(1, timerDurationMins * 60);
+    const progress = isSw
+      ? Math.min(1, (stopwatch.elapsedSec % 3600) / 3600)
+      : Math.max(0, Math.min(1, (totalSec - timerRemainingSec) / totalSec));
+
+    ctrl.updateSnapshot({
+      modeKind: timerMode,
+      modeLabel: isSw
+        ? 'Stopwatch'
+        : timerMode === 'pomo'
+        ? `${pomoPhase === 'focus' ? 'Focus' : 'Break'} · Round ${pomoRound}`
+        : 'Focus Timer',
+      subject: isSw
+        ? stopwatch.topicName
+          ? `${stopwatch.subjectName} · ${stopwatch.topicName}`
+          : stopwatch.subjectName
+        : timerSubject,
+      clockText: isSw ? stopwatch.text : liveTimer.text,
+      running: isSw ? stopwatch.running : timerRunning,
+      progress,
+    });
+  }, [
+    timerMode,
+    timerDurationMins,
+    timerRemainingSec,
+    timerRunning,
+    timerSubject,
+    pomoPhase,
+    pomoRound,
+    liveTimer.text,
+    stopwatch.elapsedSec,
+    stopwatch.running,
+    stopwatch.subjectName,
+    stopwatch.topicName,
+    stopwatch.text,
+    look,
+  ]);
+
+  const handleToggleAutoFloat = useCallback(
+    (enabled: boolean) => {
+      setAutoFloatOnLeave(enabled);
+      try {
+        localStorage.setItem('studydeck_auto_float_pip', enabled ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      pipControllerRef.current?.setAutoFloat(enabled);
+      if (enabled && (timerRunning || stopwatch.running)) {
+        pipControllerRef.current?.armAutoPipFromGesture();
+      }
+    },
+    [timerRunning, stopwatch.running]
+  );
+
+  const handleOpenFloatingPip = useCallback(async () => {
+    if (!pipControllerRef.current) return 'unsupported' as const;
+    return pipControllerRef.current.openFloatingBox();
+  }, []);
+
+  const handleCloseFloatingPip = useCallback(async () => {
+    await pipControllerRef.current?.closeFloatingBox();
   }, []);
 
   const formatAccountLoadError = useCallback((err: unknown): string => {
@@ -1726,6 +1975,10 @@ export default function App() {
 
   const handleForceSync = async () => {
     if (!firebaseUser || !account || !dek) return;
+    if (isAccountSuspended) {
+      setSyncState('error');
+      return;
+    }
     setSyncState('syncing');
     await registerOrHeartbeatDevice(firebaseUser.uid);
     await syncWorkspaceToCloud({
@@ -1738,7 +1991,7 @@ export default function App() {
   };
 
   const handleImportGuestNow = async () => {
-    if (!firebaseUser || !account || !dek) return;
+    if (!firebaseUser || !account || !dek || isAccountSuspended) return;
     await importGuestIntoCloud(firebaseUser.uid, dek, account.keyVersion);
   };
 
@@ -1815,14 +2068,20 @@ export default function App() {
       opts?: {
         subjectId?: string;
         topicId?: string;
-        plannerTab?: PlannerSubTab;
+        plannerTab?: PlannerSubTab | 'timer';
         vaultSection?: VaultSection;
         openQuickAdd?: boolean;
         communityTypeFilter?: CommunityTypeFilter;
         shareCode?: string;
       }
     ) => {
-      if (opts?.subjectId) setSelectedSubjectId(opts.subjectId);
+      if (opts?.subjectId) {
+        setSelectedSubjectId(opts.subjectId);
+        const matched = latestWorkspaceRef.current.subjects.find((s) => s.id === opts.subjectId);
+        if (matched && tab === 'timer') {
+          setTimerSubject(matched.name);
+        }
+      }
       if (opts?.topicId) setSelectedTopicId(opts.topicId);
       else if (tab === 'notes' && !opts?.topicId) setSelectedTopicId(null);
 
@@ -1833,6 +2092,10 @@ export default function App() {
       if (opts?.plannerTab) {
         if (opts.plannerTab === 'calendar') {
           setActiveTab('calendar');
+          return;
+        }
+        if (opts.plannerTab === 'timer') {
+          setActiveTab('timer');
           return;
         }
         setPlannerSubTab(opts.plannerTab);
@@ -1889,6 +2152,34 @@ export default function App() {
           onLockVault={handleLockVault}
           onSignOut={handleSignOut}
         />
+
+        {isAccountSuspended && (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 border-b border-[color-mix(in_srgb,var(--bad)_38%,var(--line))] bg-[color-mix(in_srgb,var(--bad)_12%,var(--card))] px-4 py-2.5 text-xs text-[var(--ink)]"
+          >
+            <div className="min-w-0 flex-1">
+              <span className="font-semibold text-[var(--bad)]">
+                Cloud account suspended:
+              </span>{' '}
+              <span>
+                Your cloud account has been suspended by an administrator. Cloud sync is paused while your local workspace remains readable.
+              </span>
+              {account?.suspendedReason?.trim() && (
+                <span className="ml-1.5 text-[var(--mute)]">
+                  Reason: {account.suspendedReason.trim()}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="sd-btn px-2.5 py-1 text-[11px] font-medium whitespace-nowrap shrink-0"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
 
         <main className="relative min-h-0 flex-1 overflow-hidden">
           {activeTab === 'home' && (
@@ -1959,9 +2250,8 @@ export default function App() {
               onUpdateWorkspace={updateWorkspace}
               onStartSession={(subjectName) => {
                 setTimerSubject(subjectName || 'General Study');
-                if (!timerRunning) setTimerRunning(true);
-                setPlannerSubTab('timer');
-                setActiveTab('planner');
+                if (!timerRunning) handleToggleTimer();
+                setActiveTab('timer');
               }}
             />
           )}
@@ -1969,9 +2259,21 @@ export default function App() {
           {activeTab === 'planner' && (
             <PlannerView
               workspace={workspace}
-              subTab={plannerSubTab}
-              onChangeSubTab={setPlannerSubTab}
               onUpdateWorkspace={updateWorkspace}
+              onStartStudySession={(subjectName) => {
+                if (subjectName) setTimerSubject(subjectName);
+                if (!timerRunning) handleToggleTimer();
+                setActiveTab('timer');
+              }}
+            />
+          )}
+
+          {activeTab === 'timer' && (
+            <TimerView
+              workspace={workspace}
+              onUpdateWorkspace={updateWorkspace}
+              timerMode={timerMode}
+              onChangeTimerMode={handleChangeTimerMode}
               liveTimer={liveTimer}
               timerRemainingSec={timerRemainingSec}
               timerDurationMins={timerDurationMins}
@@ -1979,13 +2281,28 @@ export default function App() {
               onChangeTimerSubject={setTimerSubject}
               onToggleTimer={handleToggleTimer}
               onResetTimer={handleResetTimer}
+              onAddCountdownMins={handleAddCountdownMins}
+              pomoFocusMins={pomoFocusMins}
+              pomoBreakMins={pomoBreakMins}
+              pomoPhase={pomoPhase}
+              pomoRound={pomoRound}
+              onChangePomoFocusMins={handleChangePomoFocusMins}
+              onChangePomoBreakMins={handleChangePomoBreakMins}
+              onSkipPomoPhase={handleSkipPomoPhase}
               stopwatch={stopwatch}
               onToggleStopwatch={handleToggleStopwatch}
               onLapStopwatch={handleLapStopwatch}
               onResetStopwatch={handleResetStopwatch}
               onStopAndLogStopwatch={handleStopAndLogStopwatch}
               onChangeStopwatchSubject={handleChangeStopwatchSubject}
-              onTimerModeChange={setPlannerTimerMode}
+              autoFloatOnLeave={autoFloatOnLeave}
+              onToggleAutoFloat={handleToggleAutoFloat}
+              floatingPipOpen={floatingPipOpen}
+              floatingPipKind={floatingPipKind}
+              onOpenFloatingPip={handleOpenFloatingPip}
+              onCloseFloatingPip={handleCloseFloatingPip}
+              completionNotice={timerNotice}
+              onDismissNotice={() => setTimerNotice(null)}
             />
           )}
 
@@ -2065,7 +2382,7 @@ export default function App() {
               onOpenCustomize={() => setCustomizeOpen(true)}
               onOpenUniversalImport={() => setImportModalOpen(true)}
               onOpenRevisionCards={() => handleNavigate('flashcards')}
-              onOpenPlannerOptions={() => handleNavigate('planner', { plannerTab: 'timer' })}
+              onOpenPlannerOptions={() => handleNavigate('timer')}
               onImportWorkspaceData={handleImportWorkspaceData}
               onResetWorkspace={handleResetWorkspace}
             />
@@ -2208,18 +2525,21 @@ export default function App() {
 
       <FloatingStopwatchTab
         stopwatch={stopwatch}
-        hidden={
-          activeTab === 'planner' &&
-          plannerSubTab === 'timer' &&
-          plannerTimerMode === 'stopwatch'
-        }
+        hidden={activeTab === 'timer' && timerMode === 'stopwatch'}
         toastMessage={swToast}
         onToggle={handleToggleStopwatch}
         onLap={handleLapStopwatch}
         onReset={handleResetStopwatch}
         onStopAndLog={handleStopAndLogStopwatch}
         onDismiss={handleDismissStopwatch}
-        onOpenPlannerTimer={() => handleNavigate('planner', { plannerTab: 'timer' })}
+        onOpenPlannerTimer={() => {
+          setTimerMode('stopwatch');
+          handleNavigate('timer');
+        }}
+        onFloatMiniBox={() => {
+          setTimerMode('stopwatch');
+          void handleOpenFloatingPip();
+        }}
       />
 
       <OfflineIndicator />

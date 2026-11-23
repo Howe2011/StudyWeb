@@ -11,13 +11,14 @@ export type WorkspaceTab =
   | 'flashcards'
   | 'calendar'
   | 'planner'
+  | 'timer'
   | 'quiz'
   | 'community'
   | 'progress'
   | 'vault'
   | 'admin';
 
-export type PlannerSubTab = 'calendar' | 'todo' | 'timer';
+export type PlannerSubTab = 'calendar' | 'todo';
 
 export interface UserAccountDoc {
   uid: string;
@@ -30,6 +31,9 @@ export interface UserAccountDoc {
   recoveryWrappedDek?: string;
   recoveryWrappedDekIv?: string;
   keyVersion: number;
+  disabled?: boolean;
+  suspendedReason?: string;
+  adminNote?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

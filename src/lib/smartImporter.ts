@@ -9,6 +9,11 @@ import { isNoteImagePoint } from './imageUtils';
 import { normalizeStudySymbols } from './noteSymbols';
 import { convertLegacyEntriesToWorkspace, normalizeWorkspace } from './workspaceStore';
 import { StructuredNoteData, TimelineEventItem, WorkspaceData } from '../types';
+import {
+  convertOmmlElementToLatex,
+  parseLatexDocumentToMarkdown,
+  renderKatexToHtml,
+} from './latexRenderer';
 
 export type QuizletDelimiterMode =
   | 'auto'
@@ -542,6 +547,17 @@ export async function parseDocxFile(
         } else {
           lineHtml += innerHtml;
         }
+      } else if (ch.localName === 'oMath' || ch.localName === 'oMathPara') {
+        const latex = convertOmmlElementToLatex(ch);
+        if (latex.trim()) {
+          const isPara = ch.localName === 'oMathPara';
+          const mathMd = isPara ? `\n$$\n${latex}\n$$\n` : ` $${latex}$ `;
+          const mathHtml = renderKatexToHtml(latex, isPara);
+          lineHtml += mathHtml;
+          lineText += ` ${latex} `;
+          markdownLine += mathMd;
+          hasTextRun = true;
+        }
       }
     };
 
@@ -910,7 +926,12 @@ export function parseUniversalStudyImport(
     preExtractedCards?: Array<{ q: string; a: string; sectionName: string }>;
   }
 ): SmartImportPreview {
-  const cleanText = normalizeStudySymbols(String(rawText || ''), {
+  const isLatex =
+    Boolean(opts?.sourceLabel?.endsWith('.tex')) ||
+    Boolean(opts?.sourceLabel?.endsWith('.latex')) ||
+    /\\documentclass\b|\\begin\{document\}/.test(String(rawText || ''));
+  const inputText = isLatex ? parseLatexDocumentToMarkdown(String(rawText || '')).markdown : String(rawText || '');
+  const cleanText = normalizeStudySymbols(inputText, {
     preserveLeadingFlowMarker: true,
   })
     .replace(/^\uFEFF/, '')

@@ -31,8 +31,25 @@ const ALLOWED_TAGS = new Set([
   'i',
   'img',
   'ins',
+  'kbd',
   'li',
   'mark',
+  'math',
+  'annotation',
+  'semantics',
+  'mrow',
+  'mi',
+  'mn',
+  'mo',
+  'msup',
+  'msub',
+  'msubsup',
+  'mfrac',
+  'msqrt',
+  'mroot',
+  'mtable',
+  'mtr',
+  'mtd',
   'ol',
   'p',
   'pre',
@@ -53,6 +70,7 @@ const ALLOWED_TAGS = new Set([
   'u',
   'ul',
 ]);
+export { renderDocumentHtmlWithLatex } from './latexRenderer';
 
 const ALLOWED_CSS_PROPS = new Set([
   'align-items',

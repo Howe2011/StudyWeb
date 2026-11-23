@@ -40,11 +40,14 @@ import {
   List,
   ListOrdered,
   ListPlus,
+  Maximize2,
+  Minimize2,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
   Plus,
+  Presentation,
   Quote,
   Redo2,
   RefreshCw,
@@ -67,6 +70,7 @@ import {
   extractHtmlImageSrcs,
   fileToOptimizedDataUrl,
 } from '../lib/imageUtils';
+import { renderDocumentHtmlWithLatex, renderKatexToHtml } from '../lib/latexRenderer';
 import { parsePdfFile } from '../lib/pdfImporter';
 import {
   getTableSurfaceStyles,
@@ -180,12 +184,14 @@ function cleanSectionTitle(heading: string): {
 }
 
 function splitTermBullet(text: string): { term: string; body: string } | null {
+  const trimmed = text.trim();
+  if (/^(?:\$|`)/.test(trimmed)) return null;
   const boldMatch = text.match(/^\*\*(.+?)\*\*:\s*(.+)$/);
-  if (boldMatch && boldMatch[1].length <= 80) {
+  if (boldMatch && boldMatch[1].length <= 80 && !boldMatch[1].includes('$')) {
     return { term: boldMatch[1].trim(), body: boldMatch[2].trim() };
   }
   const plainMatch = text.match(/^([A-Za-z0-9 ()/%'’&-]{2,52}):\s+(.{6,})$/);
-  if (plainMatch && !/^http/i.test(plainMatch[1])) {
+  if (plainMatch && !/^http/i.test(plainMatch[1]) && !plainMatch[1].includes('$')) {
     return { term: plainMatch[1].trim(), body: plainMatch[2].trim() };
   }
   return null;
@@ -323,9 +329,18 @@ export function NotesStudioView({
   const docTextColorRef = useRef<HTMLDivElement | null>(null);
   const docHighlightRef = useRef<HTMLDivElement | null>(null);
 
+  // Present Mode state
+  const [presentMode, setPresentMode] = useState(false);
+  const [presentSlideIdx, setPresentSlideIdx] = useState(0);
+  const [presentScale, setPresentScale] = useState<'normal' | 'large' | 'xlarge'>('large');
+  const [presentFullscreen, setPresentFullscreen] = useState(false);
+  const presentRootRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     setPublishShareNotice(null);
     setLightboxImage(null);
+    setPresentMode(false);
+    setPresentSlideIdx(0);
   }, [selectedTopicId]);
 
   useEffect(() => {
@@ -500,6 +515,105 @@ export function NotesStudioView({
 
   const hasDocHtml = activeDocHtml.length > 0;
   const isPdfPageDoc = hasDocHtml && activeDocHtml.includes('sd-pdf-page');
+
+  const presentSlides = useMemo(() => {
+    if (!activeTopic) return [];
+    const baseNote =
+      activeTopic.notes.sections.some((s) => s.points.length > 0 || s.heading.trim()) ||
+      activeTopic.notes.summary.trim() ||
+      activeTopic.notes.keyTerms.length > 0 ||
+      activeTopic.notes.workedExample.trim() ||
+      activeTopic.notes.examTip.trim()
+        ? activeTopic.notes
+        : activeDocHtml
+        ? legacyHtmlToStructuredNote(activeDocHtml)
+        : activeTopic.notes;
+
+    type SlideItem =
+      | { kind: 'cover'; title: string; subject: string; specCode?: string; summary: string }
+      | { kind: 'section'; heading: string; accent?: string; blocks: ReturnType<typeof groupSectionPoints> }
+      | { kind: 'exam'; workedExample: string; examTip: string }
+      | { kind: 'terms'; terms: Array<{ id: string; term: string; definition: string }> }
+      | { kind: 'doc'; html: string };
+
+    const slides: SlideItem[] = [
+      {
+        kind: 'cover',
+        title: activeTopic.name,
+        subject: activeSubject?.name || 'Study Topic',
+        specCode: activeTopic.specCode,
+        summary: baseNote.summary.trim(),
+      },
+    ];
+
+    const populated = baseNote.sections.filter((s) => s.points.length > 0 || s.heading.trim());
+    for (const sec of populated) {
+      slides.push({
+        kind: 'section',
+        heading: cleanSectionTitle(sec.heading).title,
+        accent: sec.accentColor,
+        blocks: groupSectionPoints(sec.points),
+      });
+    }
+
+    if (populated.length === 0 && activeDocHtml) {
+      slides.push({ kind: 'doc', html: renderDocumentHtmlWithLatex(activeDocHtml) });
+    }
+
+    if (baseNote.workedExample.trim() || baseNote.examTip.trim()) {
+      slides.push({
+        kind: 'exam',
+        workedExample: baseNote.workedExample.trim(),
+        examTip: baseNote.examTip.trim(),
+      });
+    }
+
+    if (baseNote.keyTerms.length > 0) {
+      for (let idx = 0; idx < baseNote.keyTerms.length; idx += 8) {
+        slides.push({
+          kind: 'terms',
+          terms: baseNote.keyTerms.slice(idx, idx + 8),
+        });
+      }
+    }
+
+    return slides;
+  }, [activeTopic, activeSubject, activeDocHtml]);
+
+  useEffect(() => {
+    if (!presentMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (document.fullscreenElement) {
+          void document.exitFullscreen().catch(() => undefined);
+        }
+        setPresentMode(false);
+      } else if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+        e.preventDefault();
+        setPresentSlideIdx((i) => Math.min(Math.max(0, presentSlides.length - 1), i + 1));
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        setPresentSlideIdx((i) => Math.max(0, i - 1));
+      }
+    };
+    const onFsChange = () => {
+      setPresentFullscreen(Boolean(document.fullscreenElement));
+    };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('fullscreenchange', onFsChange);
+    };
+  }, [presentMode, presentSlides.length]);
+
+  const togglePresentFullscreen = () => {
+    if (!document.fullscreenElement) {
+      void presentRootRef.current?.requestFullscreen?.().catch(() => undefined);
+    } else {
+      void document.exitFullscreen?.().catch(() => undefined);
+    }
+  };
 
   useEffect(() => {
     if (activeTopic && activeTopic.id !== selectedTopicId) {
@@ -2084,6 +2198,21 @@ export function NotesStudioView({
                   </div>
                 )}
 
+                {/* Present Slides Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (editingDocHtml) commitDocumentHtmlEdit(true);
+                    setPresentSlideIdx(0);
+                    setPresentMode(true);
+                  }}
+                  title="Open slide-by-slide Present Mode (arrow keys to advance)"
+                  className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap shrink-0"
+                >
+                  <Presentation className="h-3.5 w-3.5 text-[var(--note-accent)]" aria-hidden="true" />
+                  <span>Present</span>
+                </button>
+
                 {/* Compact Standalone Edit Toggle Button */}
                 <button
                   type="button"
@@ -2981,7 +3110,9 @@ export function NotesStudioView({
                                 }
                               }
                             }}
-                            dangerouslySetInnerHTML={{ __html: activeDocHtml }}
+                            dangerouslySetInnerHTML={{
+                              __html: renderDocumentHtmlWithLatex(activeDocHtml),
+                            }}
                           />
                         )}
                       </div>
@@ -3453,6 +3584,142 @@ export function NotesStudioView({
                                       </p>
                                     );
                                   }
+
+                                  if (blk.kind === 'math') {
+                                    return (
+                                      <div key={i} className="sd-math-card my-4">
+                                        {blk.label && (
+                                          <div className="mb-1.5 text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+                                            {blk.label}
+                                          </div>
+                                        )}
+                                        <div
+                                          className="overflow-x-auto text-center"
+                                          dangerouslySetInnerHTML={{
+                                            __html: renderKatexToHtml(blk.latex, true),
+                                          }}
+                                        />
+                                      </div>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'code') {
+                                    return (
+                                      <div key={i} className="sd-code-card my-4">
+                                        {blk.lang && blk.lang !== 'text' && (
+                                          <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+                                            {blk.lang}
+                                          </div>
+                                        )}
+                                        <pre className="overflow-x-auto font-mono text-[13.5px] leading-relaxed text-[var(--ink)]">
+                                          <code>{blk.code}</code>
+                                        </pre>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'callout') {
+                                    return (
+                                      <div
+                                        key={i}
+                                        className={`sd-callout-card sd-callout-${blk.type} my-4`}
+                                      >
+                                        <div className="text-xs font-bold uppercase tracking-wider text-[var(--note-accent)]">
+                                          {blk.title || blk.type}
+                                        </div>
+                                        <div className="mt-1.5 text-[16px] leading-[1.72] text-[var(--ink)]">
+                                          {renderRichInline(blk.text)}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'divider') {
+                                    return (
+                                      <hr
+                                        key={i}
+                                        className="my-5 border-t border-[var(--line)]"
+                                      />
+                                    );
+                                  }
+
+                                  if (blk.kind === 'ordered') {
+                                    return (
+                                      <ol key={i} className="space-y-2 pl-1">
+                                        {blk.items.map((it, oi) => (
+                                          <li
+                                            key={oi}
+                                            className="flex items-start gap-3 text-[16px] leading-[1.72] sm:text-[16.5px]"
+                                          >
+                                            <span className="font-mono-num min-w-[22px] shrink-0 font-bold text-[var(--note-accent)]">
+                                              {it.num}.
+                                            </span>
+                                            <span className="min-w-0 flex-1 text-[var(--ink)]">
+                                              {renderRichInline(it.text)}
+                                            </span>
+                                          </li>
+                                        ))}
+                                      </ol>
+                                    );
+                                  }
+
+                                  if (blk.kind === 'checklist') {
+                                    return (
+                                      <ul key={i} className="space-y-2 pl-1">
+                                        {blk.items.map((it, ci) => (
+                                          <li
+                                            key={ci}
+                                            className="flex items-start gap-3 text-[16px] leading-[1.72] sm:text-[16.5px]"
+                                          >
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                if (it.rawPointIndex === undefined) return;
+                                                const nextPts = sec.points.map((pt, pIdx) => {
+                                                  if (pIdx !== it.rawPointIndex) return pt;
+                                                  const toggled = !it.checked;
+                                                  return `@check:${toggled ? '1' : '0'}|${it.text}`;
+                                                });
+                                                replaceActiveNote({
+                                                  ...activeTopic.notes,
+                                                  sections: activeTopic.notes.sections.map((s) =>
+                                                    s.id === sec.id ? { ...s, points: nextPts } : s
+                                                  ),
+                                                });
+                                              }}
+                                              aria-label={
+                                                it.checked ? 'Uncheck item' : 'Check item'
+                                              }
+                                              className="mt-1 shrink-0 cursor-pointer text-[var(--note-accent)]"
+                                            >
+                                              {it.checked ? (
+                                                <CheckSquare
+                                                  className="h-4.5 w-4.5 text-[var(--ok)]"
+                                                  aria-hidden="true"
+                                                />
+                                              ) : (
+                                                <Square
+                                                  className="h-4.5 w-4.5 text-[var(--mute)]"
+                                                  aria-hidden="true"
+                                                />
+                                              )}
+                                            </button>
+                                            <span
+                                              className={`min-w-0 flex-1 ${
+                                                it.checked
+                                                  ? 'text-[var(--mute)] line-through'
+                                                  : 'text-[var(--ink)]'
+                                              }`}
+                                            >
+                                              {renderRichInline(it.text)}
+                                            </span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    );
+                                  }
+
+                                  if (blk.kind !== 'bullet') return null;
 
                                   const isSubBullet = Boolean(blk.indent && blk.indent > 0);
                                   const kv = splitTermBullet(blk.text);
@@ -5040,6 +5307,397 @@ export function NotesStudioView({
           </div>
         </div>
       )}
+      {/* Present Mode Slide Overlay */}
+      {presentMode && activeTopic && presentSlides.length > 0 && (() => {
+        const curIdx = Math.min(presentSlideIdx, presentSlides.length - 1);
+        const slide = presentSlides[curIdx];
+        const scaleClass =
+          presentScale === 'xlarge'
+            ? 'text-[19px] sm:text-[21px] leading-[1.75]'
+            : presentScale === 'large'
+            ? 'text-[17px] sm:text-[18.5px] leading-[1.72]'
+            : 'text-[15.5px] sm:text-[16px] leading-[1.68]';
+
+        return (
+          <div
+            ref={presentRootRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Presenting ${activeTopic.name}`}
+            className="sd-present-viewport sd-note-scope"
+            data-note-color={normalizeNoteColor(activeTopic.notes.accentColor)}
+          >
+            {/* Presenter Top Chrome */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--card)]/90 px-4 py-2.5 backdrop-blur sm:px-6">
+              <div className="flex min-w-0 items-center gap-2.5 text-xs">
+                <Presentation className="h-4 w-4 shrink-0 text-[var(--note-accent)]" aria-hidden="true" />
+                <span className="truncate font-bold text-[var(--ink)]">{activeTopic.name}</span>
+                <span className="text-[var(--mute)]">·</span>
+                <span className="font-mono-num shrink-0 font-semibold text-[var(--mute)]">
+                  Slide {curIdx + 1} / {presentSlides.length}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="sd-seg" role="group" aria-label="Presentation text size">
+                  {(
+                    [
+                      ['normal', 'A'],
+                      ['large', 'A+'],
+                      ['xlarge', 'A++'],
+                    ] as const
+                  ).map(([sz, label]) => (
+                    <button
+                      key={sz}
+                      type="button"
+                      aria-pressed={presentScale === sz}
+                      onClick={() => setPresentScale(sz)}
+                      className="sd-seg-btn px-2 py-0.5 text-xs font-bold"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={togglePresentFullscreen}
+                  title={presentFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                  className="sd-btn px-2.5 py-1 text-xs whitespace-nowrap"
+                >
+                  {presentFullscreen ? (
+                    <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  <span className="hidden sm:inline">
+                    {presentFullscreen ? 'Exit Full' : 'Fullscreen'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (document.fullscreenElement) {
+                      void document.exitFullscreen().catch(() => undefined);
+                    }
+                    setPresentMode(false);
+                  }}
+                  className="sd-btn px-3 py-1 text-xs font-semibold whitespace-nowrap"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Slide Stage */}
+            <div className="sd-present-slide-stage">
+              <div className={`sd-present-slide-card ${scaleClass}`}>
+                {slide.kind === 'cover' && (
+                  <div className="flex min-h-[320px] flex-col justify-center space-y-5 py-6">
+                    <div className="text-sm font-bold uppercase tracking-widest text-[var(--note-accent)]">
+                      {slide.subject}
+                      {slide.specCode ? ` · Spec ${slide.specCode}` : ''}
+                    </div>
+                    <h2 className="font-display text-3xl font-extrabold tracking-tight text-[var(--ink)] sm:text-5xl sm:leading-[1.12]">
+                      {slide.title}
+                    </h2>
+                    {slide.summary && (
+                      <div className="rounded-2xl border border-[color-mix(in_srgb,var(--note-accent)_26%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_6%,var(--bg))] px-6 py-4 text-[var(--ink)]">
+                        {renderRichInline(slide.summary)}
+                      </div>
+                    )}
+                    <div className="pt-2 text-xs text-[var(--mute)]">
+                      Use Arrow keys or Space to step through slides · {presentSlides.length} slides
+                    </div>
+                  </div>
+                )}
+
+                {slide.kind === 'section' && (
+                  <div
+                    className="space-y-6"
+                    data-note-color={slide.accent && slide.accent !== 'default' ? slide.accent : undefined}
+                  >
+                    <div className="border-b-2 border-[color-mix(in_srgb,var(--note-accent)_34%,var(--line))] pb-3">
+                      <h2 className="font-display text-2xl font-extrabold tracking-tight text-[var(--ink)] sm:text-3xl">
+                        {renderRichInline(slide.heading)}
+                      </h2>
+                    </div>
+
+                    <div className="space-y-4">
+                      {slide.blocks.map((blk, bi) => {
+                        if (blk.kind === 'subheading') {
+                          return (
+                            <h3
+                              key={bi}
+                              className="font-display pt-2 text-xl font-bold text-[var(--note-accent)]"
+                            >
+                              {renderRichInline(blk.text)}
+                            </h3>
+                          );
+                        }
+                        if (blk.kind === 'math') {
+                          return (
+                            <div key={bi} className="sd-math-card">
+                              {blk.label && (
+                                <div className="mb-1 text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+                                  {blk.label}
+                                </div>
+                              )}
+                              <div
+                                className="overflow-x-auto text-center"
+                                dangerouslySetInnerHTML={{
+                                  __html: renderKatexToHtml(blk.latex, true),
+                                }}
+                              />
+                            </div>
+                          );
+                        }
+                        if (blk.kind === 'code') {
+                          return (
+                            <div key={bi} className="sd-code-card">
+                              {blk.lang && blk.lang !== 'text' && (
+                                <div className="mb-1 text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+                                  {blk.lang}
+                                </div>
+                              )}
+                              <pre className="overflow-x-auto font-mono text-[0.82em] leading-relaxed text-[var(--ink)]">
+                                <code>{blk.code}</code>
+                              </pre>
+                            </div>
+                          );
+                        }
+                        if (blk.kind === 'callout') {
+                          return (
+                            <div key={bi} className={`sd-callout-card sd-callout-${blk.type}`}>
+                              <div className="text-xs font-bold uppercase tracking-wider text-[var(--note-accent)]">
+                                {blk.title || blk.type}
+                              </div>
+                              <div className="mt-1">{renderRichInline(blk.text)}</div>
+                            </div>
+                          );
+                        }
+                        if (blk.kind === 'factbox') {
+                          return (
+                            <div
+                              key={bi}
+                              className="rounded-xl border border-[color-mix(in_srgb,var(--note-accent)_30%,var(--line))] bg-[color-mix(in_srgb,var(--note-accent)_7%,var(--bg))] px-5 py-4"
+                            >
+                              <div className="text-xs font-bold uppercase tracking-wider text-[var(--note-accent)]">
+                                {blk.title || 'Key Fact'}
+                              </div>
+                              <div className="mt-1">{renderRichInline(blk.text)}</div>
+                            </div>
+                          );
+                        }
+                        if (blk.kind === 'flow') {
+                          return <FlowchartBlock key={bi} label={blk.label} steps={blk.steps} />;
+                        }
+                        if (blk.kind === 'table') {
+                          return (
+                            <div key={bi} className="overflow-x-auto rounded-xl border border-[var(--line)]">
+                              <table className="w-full border-collapse text-left text-[0.9em]">
+                                <thead className="border-b-2 border-[var(--line)] bg-[var(--bg)]">
+                                  <tr>
+                                    {blk.headers.map((h, hi) => (
+                                      <th key={hi} className="px-4 py-2.5 font-bold">
+                                        {renderRichInline(h)}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[var(--line)]">
+                                  {blk.rows.map((r, ri) => (
+                                    <tr key={ri}>
+                                      {r.map((c, ci) => (
+                                        <td key={ci} className="px-4 py-2.5 align-top">
+                                          {renderRichInline(c)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        }
+                        if (blk.kind === 'image') {
+                          return (
+                            <figure key={bi} className="mx-auto max-w-2xl text-center">
+                              <img
+                                src={blk.src}
+                                alt={blk.caption || 'Slide visual'}
+                                className="mx-auto max-h-[52vh] rounded-xl border border-[var(--line)] object-contain"
+                              />
+                              {blk.caption && (
+                                <figcaption className="mt-1.5 text-xs italic text-[var(--mute)]">
+                                  {blk.caption}
+                                </figcaption>
+                              )}
+                            </figure>
+                          );
+                        }
+                        if (blk.kind === 'divider') {
+                          return <hr key={bi} className="border-t border-[var(--line)]" />;
+                        }
+                        if (blk.kind === 'ordered') {
+                          return (
+                            <ol key={bi} className="space-y-2 pl-1">
+                              {blk.items.map((it, oi) => (
+                                <li key={oi} className="flex items-start gap-3">
+                                  <span className="font-mono-num font-bold text-[var(--note-accent)]">
+                                    {it.num}.
+                                  </span>
+                                  <span>{renderRichInline(it.text)}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          );
+                        }
+                        if (blk.kind === 'checklist') {
+                          return (
+                            <ul key={bi} className="space-y-2 pl-1">
+                              {blk.items.map((it, ci) => (
+                                <li key={ci} className="flex items-start gap-3">
+                                  <span className="font-bold text-[var(--note-accent)]">
+                                    {it.checked ? '✓' : '☐'}
+                                  </span>
+                                  <span className={it.checked ? 'line-through opacity-70' : ''}>
+                                    {renderRichInline(it.text)}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          );
+                        }
+                        if (blk.kind === 'paragraph') {
+                          return (
+                            <p key={bi} className="whitespace-pre-line">
+                              {renderRichInline(blk.text)}
+                            </p>
+                          );
+                        }
+                        if (blk.kind !== 'bullet') return null;
+                        return (
+                          <div
+                            key={bi}
+                            className={`flex items-start gap-3 ${blk.indent ? 'pl-7' : 'pl-1'}`}
+                          >
+                            <span
+                              className="mt-[0.55em] h-2 w-2 shrink-0 rounded-full bg-[var(--note-accent)]"
+                              aria-hidden="true"
+                            />
+                            <span className="min-w-0 flex-1">{renderRichInline(blk.text)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {slide.kind === 'doc' && (
+                  <div className="sd-doc-canvas rounded-xl p-4">
+                    <div className="sd-doc-sheet" dangerouslySetInnerHTML={{ __html: slide.html }} />
+                  </div>
+                )}
+
+                {slide.kind === 'exam' && (
+                  <div className="space-y-6">
+                    <h2 className="font-display border-b-2 border-[var(--line)] pb-3 text-2xl font-extrabold text-[var(--ink)]">
+                      Worked Example &amp; Examiner Advice
+                    </h2>
+                    {slide.workedExample && (
+                      <div className="rounded-2xl border border-[color-mix(in_srgb,var(--ok)_35%,var(--line))] bg-[color-mix(in_srgb,var(--ok)_7%,var(--bg))] p-6">
+                        <div className="text-sm font-bold uppercase tracking-wider text-[var(--ok)]">
+                          Worked Example
+                        </div>
+                        <p className="mt-2 whitespace-pre-line">
+                          {renderRichInline(slide.workedExample)}
+                        </p>
+                      </div>
+                    )}
+                    {slide.examTip && (
+                      <div className="rounded-2xl border border-[color-mix(in_srgb,var(--e2)_38%,var(--line))] bg-[color-mix(in_srgb,var(--e2)_7%,var(--bg))] p-6">
+                        <div className="text-sm font-bold uppercase tracking-wider text-[var(--e2)]">
+                          Examiner Tip
+                        </div>
+                        <p className="mt-2 whitespace-pre-line">
+                          {renderRichInline(slide.examTip)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {slide.kind === 'terms' && (
+                  <div className="space-y-5">
+                    <h2 className="font-display border-b-2 border-[var(--line)] pb-3 text-2xl font-extrabold text-[var(--ink)]">
+                      Key Terms &amp; Definitions
+                    </h2>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {slide.terms.map((kt) => (
+                        <div
+                          key={kt.id}
+                          className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4"
+                        >
+                          <div className="font-bold text-[var(--note-accent)]">
+                            {renderRichInline(kt.term)}
+                          </div>
+                          <div className="mt-1 text-[0.92em] text-[var(--ink)]">
+                            {renderRichInline(kt.definition)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Bottom Presenter Controls */}
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--line)] bg-[var(--card)]/90 px-4 py-3 backdrop-blur sm:px-6">
+              <button
+                type="button"
+                disabled={curIdx === 0}
+                onClick={() => setPresentSlideIdx((i) => Math.max(0, i - 1))}
+                className="sd-btn px-4 py-2 text-xs font-bold whitespace-nowrap disabled:opacity-40"
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                <span>Previous</span>
+              </button>
+
+              <div className="flex max-w-[55vw] items-center gap-1.5 overflow-x-auto px-2 py-1">
+                {presentSlides.map((_s, sIdx) => (
+                  <button
+                    key={sIdx}
+                    type="button"
+                    aria-label={`Go to slide ${sIdx + 1}`}
+                    onClick={() => setPresentSlideIdx(sIdx)}
+                    className={`h-2.5 shrink-0 cursor-pointer rounded-full transition-all ${
+                      sIdx === curIdx
+                        ? 'w-7 bg-[var(--note-accent)]'
+                        : 'w-2.5 bg-[var(--line)] hover:bg-[var(--mute)]'
+                    }`}
+                  />
+                ))}
+              </div>
+
+              <button
+                type="button"
+                disabled={curIdx >= presentSlides.length - 1}
+                onClick={() =>
+                  setPresentSlideIdx((i) => Math.min(presentSlides.length - 1, i + 1))
+                }
+                className="sd-btn-pri px-4 py-2 text-xs font-bold whitespace-nowrap disabled:opacity-40"
+              >
+                <span>Next</span>
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

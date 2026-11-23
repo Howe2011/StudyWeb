@@ -9,7 +9,7 @@ interface ProgressViewProps {
   workspace: WorkspaceData;
   onNavigate: (
     tab: WorkspaceTab,
-    opts?: { subjectId?: string; plannerTab?: 'calendar' | 'todo' | 'timer' }
+    opts?: { subjectId?: string; plannerTab?: 'calendar' | 'todo' }
   ) => void;
 }
 

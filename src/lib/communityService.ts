@@ -128,6 +128,36 @@ export async function fetchUserSharedItems(uid: string): Promise<SharedStudyItem
   }
 }
 
+export async function fetchAllSharedItemsForAdmin(): Promise<SharedStudyItem[]> {
+  const path = 'sharedItems(admin)';
+  try {
+    const q = query(collection(db, 'sharedItems'), limit(120));
+    const snap = await getDocs(q);
+    return snap.docs
+      .map((d) => parseSharedDoc(d.id, d.data() as Record<string, unknown>))
+      .filter((x): x is SharedStudyItem => Boolean(x))
+      .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+export async function adminUpdateSharedItemVisibility(
+  shareId: string,
+  visibility: SharedItemVisibility
+): Promise<void> {
+  const path = `sharedItems/${shareId}`;
+  try {
+    await updateDoc(doc(db, 'sharedItems', shareId), {
+      visibility,
+      updatedAt: serverTimestamp(),
+    });
+    cachedPublicItems = null;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
 export async function lookupSharedItemByCode(rawCode: string): Promise<SharedStudyItem | null> {
   const code = rawCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!code) return null;

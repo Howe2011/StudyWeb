@@ -1,5 +1,6 @@
 import { CSSProperties, Fragment, ReactNode } from 'react';
 import { normalizeStudySymbols } from './noteSymbols';
+import { parseMathSegments, renderKatexToHtml } from './latexRenderer';
 
 export interface ColorSwatchOption {
   id: string;
@@ -137,11 +138,11 @@ function isOpaqueLightColor(color: string): boolean {
 }
 
 const INLINE_TOKEN_RE =
-  /(<span\s+style="color:\s*([^";]+)\s*">([\s\S]*?)<\/span>|<mark\s+style="background-color:\s*([^";]+)\s*">([\s\S]*?)<\/mark>|<u>([\s\S]*?)<\/u>|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`)/i;
+  /(<span\s+style="color:\s*([^";]+)\s*">([\s\S]*?)<\/span>|<mark(?:\s+style="background-color:\s*([^";]+)\s*")?>([\s\S]*?)<\/mark>|==([^=\n]+)==|<u>([\s\S]*?)<\/u>|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`|~~([^~\n]+)~~|<(?:del|s)>([\s\S]*?)<\/(?:del|s)>|<sup>([\s\S]*?)<\/sup>|\^([^^ \t\n]+)\^|<sub>([\s\S]*?)<\/sub>|~([^~ \t\n]+)~|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)|<kbd>([\s\S]*?)<\/kbd>)/i;
 
 function parseInlineNodes(input: string, keyPrefix: string, depth = 0): ReactNode[] {
   if (!input) return [];
-  if (depth > 5) return [<Fragment key={`${keyPrefix}_end`}>{input}</Fragment>];
+  if (depth > 6) return [<Fragment key={`${keyPrefix}_end`}>{input}</Fragment>];
 
   const out: ReactNode[] = [];
   let remaining = input;
@@ -175,51 +176,92 @@ function parseInlineNodes(input: string, keyPrefix: string, depth = 0): ReactNod
           <Fragment key={tokenKey}>{inner}</Fragment>
         )
       );
-    } else if (match[4] !== undefined && match[5] !== undefined) {
-      const safeBg = sanitizeCssColor(match[4]);
-      const inner = parseInlineNodes(match[5], tokenKey, depth + 1);
+    } else if ((match[4] !== undefined && match[5] !== undefined) || match[6] !== undefined) {
+      const bgVal = match[4] ? sanitizeCssColor(match[4]) : '#FDE047';
+      const rawInner = match[5] ?? match[6] ?? '';
+      const inner = parseInlineNodes(rawInner, tokenKey, depth + 1);
       out.push(
-        safeBg ? (
-          <mark
-            key={tokenKey}
-            className="sd-mark-term rounded-[5px] px-1.5 py-0.5 font-bold"
-            style={{
-              backgroundColor: safeBg,
-              color: isOpaqueLightColor(safeBg) ? '#111827' : 'inherit',
-            }}
-          >
-            {inner}
-          </mark>
-        ) : (
-          <Fragment key={tokenKey}>{inner}</Fragment>
-        )
-      );
-    } else if (match[6] !== undefined) {
-      out.push(
-        <u key={tokenKey} className="decoration-[var(--note-accent,var(--e3))] decoration-2 underline-offset-2">
-          {parseInlineNodes(match[6], tokenKey, depth + 1)}
-        </u>
+        <mark
+          key={tokenKey}
+          className="sd-mark-term rounded-[5px] px-1.5 py-0.5 font-bold"
+          style={{
+            backgroundColor: bgVal || '#FDE047',
+            color: bgVal && isOpaqueLightColor(bgVal) ? '#111827' : 'inherit',
+          }}
+        >
+          {inner}
+        </mark>
       );
     } else if (match[7] !== undefined) {
       out.push(
-        <strong key={tokenKey} className="sd-bold-term font-extrabold">
+        <u key={tokenKey} className="decoration-[var(--note-accent,var(--e3))] decoration-2 underline-offset-2">
           {parseInlineNodes(match[7], tokenKey, depth + 1)}
-        </strong>
+        </u>
       );
     } else if (match[8] !== undefined) {
       out.push(
-        <em key={tokenKey} className="italic">
+        <strong key={tokenKey} className="sd-bold-term font-extrabold">
           {parseInlineNodes(match[8], tokenKey, depth + 1)}
-        </em>
+        </strong>
       );
     } else if (match[9] !== undefined) {
+      out.push(
+        <em key={tokenKey} className="italic">
+          {parseInlineNodes(match[9], tokenKey, depth + 1)}
+        </em>
+      );
+    } else if (match[10] !== undefined) {
       out.push(
         <code
           key={tokenKey}
           className="font-mono-num rounded bg-[var(--bg)] px-1.5 py-0.5 text-[0.9em] text-[var(--note-accent,var(--e3))]"
         >
-          {match[9]}
+          {match[10]}
         </code>
+      );
+    } else if (match[11] !== undefined || match[12] !== undefined) {
+      const content = match[11] ?? match[12] ?? '';
+      out.push(
+        <del key={tokenKey} className="line-through opacity-75 decoration-current">
+          {parseInlineNodes(content, tokenKey, depth + 1)}
+        </del>
+      );
+    } else if (match[13] !== undefined || match[14] !== undefined) {
+      const content = match[13] ?? match[14] ?? '';
+      out.push(
+        <sup key={tokenKey} className="text-[0.78em] font-semibold">
+          {parseInlineNodes(content, tokenKey, depth + 1)}
+        </sup>
+      );
+    } else if (match[15] !== undefined || match[16] !== undefined) {
+      const content = match[15] ?? match[16] ?? '';
+      out.push(
+        <sub key={tokenKey} className="text-[0.78em]">
+          {parseInlineNodes(content, tokenKey, depth + 1)}
+        </sub>
+      );
+    } else if (match[17] !== undefined && match[18] !== undefined) {
+      const label = match[17];
+      const url = match[18];
+      out.push(
+        <a
+          key={tokenKey}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold text-[var(--note-accent,var(--e3))] underline decoration-1 underline-offset-2 hover:opacity-80"
+        >
+          {parseInlineNodes(label, tokenKey, depth + 1)}
+        </a>
+      );
+    } else if (match[19] !== undefined) {
+      out.push(
+        <kbd
+          key={tokenKey}
+          className="font-mono-num rounded border border-[var(--line)] bg-[var(--bg)] px-1.5 py-0.5 text-[0.82em] font-bold shadow-2xs"
+        >
+          {match[19]}
+        </kbd>
       );
     } else {
       out.push(<Fragment key={tokenKey}>{match[0]}</Fragment>);
@@ -232,13 +274,53 @@ function parseInlineNodes(input: string, keyPrefix: string, depth = 0): ReactNod
 }
 
 /**
- * Safely renders inline study formatting (**bold**, *italic*, `code`, <u>underline</u>,
- * <span style="color:...">, <mark style="background-color:...">) without dangerouslySetInnerHTML.
+ * Safely renders inline study formatting:
+ * - LaTeX inline math ($...$, \(...\)) and display math ($$...$$, \[...\]) via KaTeX
+ * - **bold**, *italic*, `code`, <u>underline</u>, ~~strike~~, ==highlight==
+ * - <sub>/<sup>, [links](url), <kbd>
+ * - <span style="color:...">, <mark style="background-color:...">
  */
 export function renderRichInline(text: string): ReactNode {
   const src = normalizeStudySymbols(String(text || ''), { preserveLeadingFlowMarker: true });
   if (!src) return null;
-  return parseInlineNodes(src, 'rich');
+
+  // First tokenize LaTeX math expressions so math syntax ($x$, \frac, ^, _) is never treated as markdown
+  const mathSegments = parseMathSegments(src);
+  if (mathSegments.length === 1 && mathSegments[0].type === 'text') {
+    return parseInlineNodes(src, 'rich');
+  }
+
+  return (
+    <>
+      {mathSegments.map((seg, idx) => {
+        if (seg.type === 'text') {
+          return (
+            <Fragment key={`seg_t_${idx}`}>
+              {parseInlineNodes(seg.content, `rich_${idx}`)}
+            </Fragment>
+          );
+        }
+        if (seg.type === 'display-math') {
+          const renderedHtml = renderKatexToHtml(seg.content, true);
+          return (
+            <span
+              key={`seg_dm_${idx}`}
+              className="sd-math-block my-2 block overflow-x-auto text-center"
+              dangerouslySetInnerHTML={{ __html: renderedHtml }}
+            />
+          );
+        }
+        const renderedHtml = renderKatexToHtml(seg.content, false);
+        return (
+          <span
+            key={`seg_im_${idx}`}
+            className="sd-inline-math inline-block align-baseline"
+            dangerouslySetInnerHTML={{ __html: renderedHtml }}
+          />
+        );
+      })}
+    </>
+  );
 }
 
 /**
@@ -247,8 +329,13 @@ export function renderRichInline(text: string): ReactNode {
 export function stripInlineRichTags(text: string): string {
   return String(text || '')
     .replace(/<span\s+style="color:[^"]*">([\s\S]*?)<\/span>/gi, '$1')
-    .replace(/<mark\s+style="background-color:[^"]*">([\s\S]*?)<\/mark>/gi, '$1')
-    .replace(/<\/?u>/gi, '')
+    .replace(/<mark(?:\s+style="[^"]*")?>([\s\S]*?)<\/mark>/gi, '$1')
+    .replace(/==([^=\n]+)==/g, '$1')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .replace(/<\/?(?:u|del|s|sub|sup|kbd)>/gi, '')
+    .replace(/\[([^\]\n]+)\]\([^)]+\)/g, '$1')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
     .trim();
 }
 
@@ -284,18 +371,32 @@ export function inlineMarkupToHtml(markup: string): string {
       const safe = sanitizeCssColor(match[2]);
       const inner = inlineMarkupToHtml(match[3]);
       out += safe ? `<span style="color:${safe}">${inner}</span>` : inner;
-    } else if (match[4] !== undefined && match[5] !== undefined) {
-      const safe = sanitizeCssColor(match[4]);
-      const inner = inlineMarkupToHtml(match[5]);
+    } else if ((match[4] !== undefined && match[5] !== undefined) || match[6] !== undefined) {
+      const safe = match[4] ? sanitizeCssColor(match[4]) : '#FDE047';
+      const rawInner = match[5] ?? match[6] ?? '';
+      const inner = inlineMarkupToHtml(rawInner);
       out += safe ? `<mark style="background-color:${safe}">${inner}</mark>` : inner;
-    } else if (match[6] !== undefined) {
-      out += `<u>${inlineMarkupToHtml(match[6])}</u>`;
     } else if (match[7] !== undefined) {
-      out += `<strong>${inlineMarkupToHtml(match[7])}</strong>`;
+      out += `<u>${inlineMarkupToHtml(match[7])}</u>`;
     } else if (match[8] !== undefined) {
-      out += `<em>${inlineMarkupToHtml(match[8])}</em>`;
+      out += `<strong>${inlineMarkupToHtml(match[8])}</strong>`;
     } else if (match[9] !== undefined) {
-      out += `<code>${escapeHtmlText(match[9])}</code>`;
+      out += `<em>${inlineMarkupToHtml(match[9])}</em>`;
+    } else if (match[10] !== undefined) {
+      out += `<code>${escapeHtmlText(match[10])}</code>`;
+    } else if (match[11] !== undefined || match[12] !== undefined) {
+      const raw = match[11] ?? match[12] ?? '';
+      out += `<del>${inlineMarkupToHtml(raw)}</del>`;
+    } else if (match[13] !== undefined || match[14] !== undefined) {
+      const raw = match[13] ?? match[14] ?? '';
+      out += `<sup>${inlineMarkupToHtml(raw)}</sup>`;
+    } else if (match[15] !== undefined || match[16] !== undefined) {
+      const raw = match[15] ?? match[16] ?? '';
+      out += `<sub>${inlineMarkupToHtml(raw)}</sub>`;
+    } else if (match[17] !== undefined && match[18] !== undefined) {
+      out += `<a href="${escapeHtmlText(match[18])}" target="_blank" rel="noopener noreferrer">${inlineMarkupToHtml(match[17])}</a>`;
+    } else if (match[19] !== undefined) {
+      out += `<kbd>${escapeHtmlText(match[19])}</kbd>`;
     } else {
       out += escapeHtmlText(match[0]);
     }
@@ -364,6 +465,22 @@ export function domNodeToInlineMarkup(root: HTMLElement): string {
     }
     if (tag === 'u') {
       return inner.trim() ? `<u>${inner}</u>` : inner;
+    }
+    if (tag === 'del' || tag === 's' || tag === 'strike') {
+      return inner.trim() ? `~~${inner}~~` : inner;
+    }
+    if (tag === 'sup') {
+      return inner.trim() ? `^${inner}^` : inner;
+    }
+    if (tag === 'sub') {
+      return inner.trim() ? `~${inner}~` : inner;
+    }
+    if (tag === 'kbd') {
+      return inner.trim() ? `<kbd>${inner}</kbd>` : inner;
+    }
+    if (tag === 'a') {
+      const href = el.getAttribute('href') || '';
+      return inner.trim() && href ? `[${inner}](${href})` : inner;
     }
     if (tag === 'mark') {
       const bg = normalizeBrowserColorToHex(el.style.backgroundColor || '');
