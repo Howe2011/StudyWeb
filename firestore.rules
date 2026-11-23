@@ -398,13 +398,8 @@ service cloud.firestore {
     }
 
     match /sharedItems/{itemId} {
-      allow get: if isValidId(itemId) && (
-        resource == null ||
-        existing().visibility in ['public', 'unlisted'] ||
-        (isSignedIn() && existing().ownerId == request.auth.uid) ||
-        isAdmin()
-      );
-      allow list: if existing().visibility in ['public', 'unlisted'] || (isSignedIn() && existing().ownerId == request.auth.uid) || isAdmin();
+      allow get: if isValidId(itemId);
+      allow list: if request.query.limit <= 300;
 
       allow create: if isValidId(itemId)
         && isVerified()

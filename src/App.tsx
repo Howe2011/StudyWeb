@@ -240,6 +240,11 @@ export default function App() {
     () => workspace.subjects[0]?.id || ''
   );
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  const [flashcardTopicLaunch, setFlashcardTopicLaunch] = useState<{
+    topicId: string;
+    autoStart: boolean;
+    nonce: number;
+  } | null>(null);
   const [communityTypeFilter, setCommunityTypeFilter] = useState<CommunityTypeFilter | null>(null);
   const [openQuickAddSignal, setOpenQuickAddSignal] = useState(false);
 
@@ -2068,6 +2073,7 @@ export default function App() {
       opts?: {
         subjectId?: string;
         topicId?: string;
+        startTopicFlashcards?: boolean;
         plannerTab?: PlannerSubTab | 'timer';
         vaultSection?: VaultSection;
         openQuickAdd?: boolean;
@@ -2082,8 +2088,18 @@ export default function App() {
           setTimerSubject(matched.name);
         }
       }
-      if (opts?.topicId) setSelectedTopicId(opts.topicId);
-      else if (tab === 'notes' && !opts?.topicId) setSelectedTopicId(null);
+      if (opts?.topicId) {
+        setSelectedTopicId(opts.topicId);
+        if (tab === 'flashcards') {
+          setFlashcardTopicLaunch({
+            topicId: opts.topicId,
+            autoStart: Boolean(opts.startTopicFlashcards),
+            nonce: Date.now(),
+          });
+        }
+      } else if (tab === 'notes' && !opts?.topicId) {
+        setSelectedTopicId(null);
+      }
 
       if (opts?.communityTypeFilter) setCommunityTypeFilter(opts.communityTypeFilter);
       if (opts?.shareCode) setInitialShareCode(opts.shareCode.trim().toUpperCase());
@@ -2226,6 +2242,13 @@ export default function App() {
               onBrowseCommunityNotes={() =>
                 handleNavigate('community', { communityTypeFilter: 'notes' })
               }
+              onStudyTopicFlashcards={(subjectId, topicId) =>
+                handleNavigate('flashcards', {
+                  subjectId,
+                  topicId,
+                  startTopicFlashcards: true,
+                })
+              }
               onNavigate={(tab) => handleNavigate(tab)}
             />
           )}
@@ -2240,6 +2263,8 @@ export default function App() {
               onShareDeck={handleShareDeck}
               getExistingDeckShare={findExistingDeckShare}
               onPublishDeckChanges={handlePublishDeckChanges}
+              launchTopicFilter={flashcardTopicLaunch}
+              onConsumeLaunchTopic={() => setFlashcardTopicLaunch(null)}
               onNavigate={(tab) => handleNavigate(tab)}
             />
           )}
@@ -2310,6 +2335,11 @@ export default function App() {
             <CommunityView
               workspace={workspace}
               firebaseUser={firebaseUser}
+              isAdmin={Boolean(
+                account?.role === 'admin' ||
+                  (firebaseUser?.email &&
+                    firebaseUser.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase())
+              )}
               initialShareCode={initialShareCode}
               initialTypeFilter={communityTypeFilter}
               onUpdateWorkspace={updateWorkspace}
@@ -2383,6 +2413,7 @@ export default function App() {
               onOpenUniversalImport={() => setImportModalOpen(true)}
               onOpenRevisionCards={() => handleNavigate('flashcards')}
               onOpenPlannerOptions={() => handleNavigate('timer')}
+              onOpenShareCode={(shareCode) => handleNavigate('community', { shareCode })}
               onImportWorkspaceData={handleImportWorkspaceData}
               onResetWorkspace={handleResetWorkspace}
             />

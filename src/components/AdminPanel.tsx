@@ -41,6 +41,7 @@ interface AdminPanelProps {
   currentAdminUid: string;
   currentAdminEmail?: string | null;
   currentAdminAccount?: UserAccountDoc | null;
+  onOpenShareCode?: (shareCode: string) => void;
 }
 
 type AdminSection = 'users' | 'community';
@@ -72,6 +73,7 @@ export function AdminPanel({
   currentAdminUid,
   currentAdminEmail,
   currentAdminAccount,
+  onOpenShareCode,
 }: AdminPanelProps) {
   const [section, setSection] = useState<AdminSection>('users');
 
@@ -705,6 +707,17 @@ export function AdminPanel({
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-end gap-1.5">
+                              {onOpenShareCode && (
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => onOpenShareCode(item.shareCode)}
+                                  className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                                >
+                                  <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                                  <span>Read</span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 disabled={busy}

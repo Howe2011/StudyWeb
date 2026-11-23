@@ -46,6 +46,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  Play,
   Plus,
   Presentation,
   Quote,
@@ -128,6 +129,7 @@ interface NotesStudioViewProps {
     topicId: string
   ) => Promise<{ ok: boolean; shareCode?: string; error?: string }>;
   onBrowseCommunityNotes?: () => void;
+  onStudyTopicFlashcards?: (subjectId: string, topicId: string) => void;
   onNavigate: (tab: WorkspaceTab) => void;
 }
 
@@ -248,6 +250,7 @@ export function NotesStudioView({
   sharedNoteByTopicId,
   onPublishTopicChanges,
   onBrowseCommunityNotes,
+  onStudyTopicFlashcards,
   onNavigate,
 }: NotesStudioViewProps) {
   const activeSubject = useMemo(
@@ -2391,6 +2394,22 @@ export function NotesStudioView({
                   </span>
                 </button>
 
+                {activeTopicLinkedCards.length > 0 && activeSubject && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onStudyTopicFlashcards
+                        ? onStudyTopicFlashcards(activeSubject.id, activeTopic.id)
+                        : onNavigate('flashcards')
+                    }
+                    title={`Study ${activeTopicLinkedCards.length} linked flashcard${activeTopicLinkedCards.length === 1 ? '' : 's'} for ${activeTopic.name}`}
+                    className="sd-btn-pri px-3 py-1.5 text-xs whitespace-nowrap shrink-0"
+                  >
+                    <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Do Flashcards ({activeTopicLinkedCards.length})</span>
+                  </button>
+                )}
+
                 {viewMode === 'read' && !isPdfPageDoc && (
                   <>
                     <button
@@ -3981,11 +4000,25 @@ export function NotesStudioView({
                             Linked Flashcards ({activeTopicLinkedCards.length})
                           </h2>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {activeTopicLinkedCards.length > 0 && activeSubject && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onStudyTopicFlashcards
+                                  ? onStudyTopicFlashcards(activeSubject.id, activeTopic.id)
+                                  : onNavigate('flashcards')
+                              }
+                              className="sd-btn-pri px-3 py-1 text-xs whitespace-nowrap shrink-0"
+                            >
+                              <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>Do Flashcards ({activeTopicLinkedCards.length})</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => setLinkDecksModalOpen(true)}
-                            className="sd-btn px-3 py-1 text-xs"
+                            className="sd-btn px-3 py-1 text-xs whitespace-nowrap shrink-0"
                           >
                             <FolderOpen className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
                             <span>Link Folders / Decks</span>
@@ -3993,7 +4026,7 @@ export function NotesStudioView({
                           <button
                             type="button"
                             onClick={() => setLinkedCardsExpanded((v) => !v)}
-                            className="sd-btn px-3 py-1 text-xs"
+                            className="sd-btn px-3 py-1 text-xs whitespace-nowrap shrink-0"
                           >
                             {linkedCardsExpanded ? 'Hide' : 'Show Cards'}
                           </button>

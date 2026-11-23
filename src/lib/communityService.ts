@@ -30,7 +30,7 @@ import {
 } from '../types';
 
 const SHARE_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 15 * 1000;
 
 let cachedPublicItems: { items: SharedStudyItem[]; fetchedAt: number } | null = null;
 
@@ -95,7 +95,7 @@ export async function fetchPublicSharedItems(forceRefresh = false): Promise<Shar
     const q = query(
       collection(db, 'sharedItems'),
       where('visibility', '==', 'public'),
-      limit(60)
+      limit(200)
     );
     const snap = await getDocs(q);
     const items = snap.docs
@@ -116,7 +116,7 @@ export async function fetchUserSharedItems(uid: string): Promise<SharedStudyItem
     const q = query(
       collection(db, 'sharedItems'),
       where('ownerId', '==', uid),
-      limit(60)
+      limit(200)
     );
     const snap = await getDocs(q);
     return snap.docs
@@ -131,7 +131,7 @@ export async function fetchUserSharedItems(uid: string): Promise<SharedStudyItem
 export async function fetchAllSharedItemsForAdmin(): Promise<SharedStudyItem[]> {
   const path = 'sharedItems(admin)';
   try {
-    const q = query(collection(db, 'sharedItems'), limit(120));
+    const q = query(collection(db, 'sharedItems'), limit(250));
     const snap = await getDocs(q);
     return snap.docs
       .map((d) => parseSharedDoc(d.id, d.data() as Record<string, unknown>))
@@ -200,11 +200,11 @@ export async function publishSharedItem(params: {
 
   const docRef = doc(db, 'sharedItems', id);
   const path = `sharedItems/${id}`;
-  const cleanTitle = (params.title || 'Untitled Share').trim().slice(0, 140);
-  const cleanSubject = (params.subjectName || 'General').trim().slice(0, 80);
-  const cleanBoard = (params.examBoard || 'GCSE / Revision').trim().slice(0, 80);
+  const cleanTitle = (params.title || '').trim().slice(0, 140) || 'Untitled Share';
+  const cleanSubject = (params.subjectName || '').trim().slice(0, 80) || 'General';
+  const cleanBoard = (params.examBoard || '').trim().slice(0, 80) || 'GCSE / Revision';
   const cleanSummary = (params.summary || '').trim().slice(0, 280);
-  const cleanOwner = (params.ownerName || 'StudyWeb Student').trim().slice(0, 100);
+  const cleanOwner = (params.ownerName || '').trim().slice(0, 100) || 'StudyWeb Student';
 
   try {
     await setDoc(docRef, {
@@ -281,11 +281,11 @@ export async function updateSharedItem(params: {
 
   const docRef = doc(db, 'sharedItems', params.id);
   const path = `sharedItems/${params.id}`;
-  const cleanTitle = (params.title || 'Untitled Share').trim().slice(0, 140);
-  const cleanSubject = (params.subjectName || 'General').trim().slice(0, 80);
-  const cleanBoard = (params.examBoard || 'GCSE / Revision').trim().slice(0, 80);
+  const cleanTitle = (params.title || '').trim().slice(0, 140) || 'Untitled Share';
+  const cleanSubject = (params.subjectName || '').trim().slice(0, 80) || 'General';
+  const cleanBoard = (params.examBoard || '').trim().slice(0, 80) || 'GCSE / Revision';
   const cleanSummary = (params.summary || '').trim().slice(0, 280);
-  const cleanOwner = (params.ownerName || 'StudyWeb Student').trim().slice(0, 100);
+  const cleanOwner = (params.ownerName || '').trim().slice(0, 100) || 'StudyWeb Student';
   const cleanCount = Math.max(0, Math.round(params.itemCount));
 
   try {
@@ -716,7 +716,7 @@ export function copySharedSubjectTopicIntoWorkspace(
 
 export async function updateCommunityAuthorName(uid: string, newAuthorName: string): Promise<void> {
   try {
-    const q = query(collection(db, 'sharedItems'), where('ownerId', '==', uid));
+    const q = query(collection(db, 'sharedItems'), where('ownerId', '==', uid), limit(200));
     const snap = await getDocs(q);
     await Promise.all(
       snap.docs.map((d) =>

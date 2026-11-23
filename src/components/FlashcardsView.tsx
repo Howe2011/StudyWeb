@@ -62,6 +62,8 @@ interface FlashcardsViewProps {
     sectionName?: string,
     topicId?: string
   ) => Promise<{ ok: boolean; shareCode?: string; error?: string }>;
+  launchTopicFilter?: { topicId: string; autoStart?: boolean; nonce: number } | null;
+  onConsumeLaunchTopic?: () => void;
   onNavigate: (tab: WorkspaceTab) => void;
 }
 
@@ -201,6 +203,8 @@ export function FlashcardsView({
   onShareDeck,
   getExistingDeckShare,
   onPublishDeckChanges,
+  launchTopicFilter,
+  onConsumeLaunchTopic,
   onNavigate,
 }: FlashcardsViewProps) {
   const [screen, setScreen] = useState<ViewScreen>('setup');
@@ -308,32 +312,116 @@ export function FlashcardsView({
   const [copyTargetSubjectId, setCopyTargetSubjectId] = useState<string>('');
   const [copyTargetDeckName, setCopyTargetDeckName] = useState<string>('');
 
-  const rightDragSelectRef = useRef<{
+  const dragSelectRef = useRef<{
     active: boolean;
+    anchorId: string | null;
+    dragged: boolean;
     mode: 'select' | 'deselect';
+    preSelection: Set<string>;
     justDragged: boolean;
-  }>({ active: false, mode: 'select', justDragged: false });
+    startX: number;
+    startY: number;
+  }>({
+    active: false,
+    anchorId: null,
+    dragged: false,
+    mode: 'select',
+    preSelection: new Set(),
+    justDragged: false,
+    startX: 0,
+    startY: 0,
+  });
 
   useEffect(() => {
-    const endRightDrag = () => {
-      if (!rightDragSelectRef.current.active) return;
-      rightDragSelectRef.current.active = false;
-      window.setTimeout(() => {
-        rightDragSelectRef.current.justDragged = false;
-      }, 80);
+    const applyDragRange = (targetId: string) => {
+      const ds = dragSelectRef.current;
+      if (!ds.anchorId) return;
+      const nodes = Array.from(document.querySelectorAll<HTMLElement>('[data-fc-card-id]'));
+      const orderedIds = nodes
+        .map((n) => n.getAttribute('data-fc-card-id') || '')
+        .filter(Boolean);
+      const startIdx = orderedIds.indexOf(ds.anchorId);
+      const endIdx = orderedIds.indexOf(targetId);
+      if (startIdx === -1 || endIdx === -1) return;
+      const lo = Math.min(startIdx, endIdx);
+      const hi = Math.max(startIdx, endIdx);
+      const next = new Set(ds.preSelection);
+      for (let i = lo; i <= hi; i++) {
+        if (ds.mode === 'select') next.add(orderedIds[i]);
+        else next.delete(orderedIds[i]);
+      }
+      setSelectedManageIds(next);
     };
-    window.addEventListener('pointerup', endRightDrag);
-    window.addEventListener('mouseup', endRightDrag);
-    window.addEventListener('blur', endRightDrag);
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const ds = dragSelectRef.current;
+      if (!ds.active || !ds.anchorId) return;
+      const movedDist = Math.hypot(e.clientX - ds.startX, e.clientY - ds.startY);
+      const elUnder = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      const rowEl = elUnder?.closest('[data-fc-card-id]') as HTMLElement | null;
+      const hoverId = rowEl?.getAttribute('data-fc-card-id') || null;
+
+      if (!ds.dragged) {
+        if (movedDist < 5 && (!hoverId || hoverId === ds.anchorId)) return;
+        ds.dragged = true;
+        ds.justDragged = true;
+        window.getSelection()?.removeAllRanges();
+        applyDragRange(hoverId || ds.anchorId);
+      } else if (hoverId) {
+        applyDragRange(hoverId);
+      }
+    };
+
+    const endLeftDrag = () => {
+      const ds = dragSelectRef.current;
+      if (!ds.active) return;
+      const didDrag = ds.dragged;
+      ds.active = false;
+      ds.anchorId = null;
+      ds.dragged = false;
+      if (didDrag) {
+        window.setTimeout(() => {
+          dragSelectRef.current.justDragged = false;
+        }, 120);
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', endLeftDrag);
+    window.addEventListener('pointercancel', endLeftDrag);
+    window.addEventListener('blur', endLeftDrag);
     return () => {
-      window.removeEventListener('pointerup', endRightDrag);
-      window.removeEventListener('mouseup', endRightDrag);
-      window.removeEventListener('blur', endRightDrag);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', endLeftDrag);
+      window.removeEventListener('pointercancel', endLeftDrag);
+      window.removeEventListener('blur', endLeftDrag);
     };
   }, []);
 
+  // Unselect all selected cards when user presses anywhere else on the screen
+  useEffect(() => {
+    if (screen !== 'manage' || selectedManageIds.size === 0) return;
+    const handleScreenPress = (e: MouseEvent) => {
+      if (dragSelectRef.current.justDragged) return;
+      const el = e.target as HTMLElement | null;
+      if (!el) return;
+      if (
+        el.closest(
+          '[data-fc-keep-selection="true"], [data-fc-card-checkbox="true"], [role="dialog"], button, a, input, select, textarea, label'
+        )
+      ) {
+        return;
+      }
+      setSelectedManageIds(new Set());
+      setConfirmBulkDelete(false);
+    };
+    window.addEventListener('click', handleScreenPress);
+    return () => window.removeEventListener('click', handleScreenPress);
+  }, [screen, selectedManageIds.size]);
+
   const menuRef = useRef<HTMLDivElement | null>(null);
   const prevSubjectIdRef = useRef<string>(selectedSubjectId);
+  const prevResetSubjectRef = useRef<string>(selectedSubjectId);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const swipeLockRef = useRef<boolean>(false);
@@ -594,24 +682,30 @@ export function FlashcardsView({
     );
   };
 
-  // Reset filters when subject changes
+  // Reset filters only when subject actually changes
   useEffect(() => {
-    setSelectedTopicFilter('ALL');
-    setManageTopicFilter('ALL');
-    setManageSectionFilter('ALL');
-    setManageFolderFilter('ALL');
-    setSelectedManageIds(new Set());
-    setConfirmBulkDelete(false);
-    setMoveFeedback(null);
-    setNewTopicId('');
-    setMoveTargetTopicId('__keep__');
-    setMoveTargetSubjectId('__keep__');
+    const subjectChanged = prevResetSubjectRef.current !== selectedSubjectId;
+    prevResetSubjectRef.current = selectedSubjectId;
+    if (subjectChanged) {
+      if (!launchTopicFilter?.topicId) {
+        setSelectedTopicFilter('ALL');
+      }
+      setManageTopicFilter('ALL');
+      setManageSectionFilter('ALL');
+      setManageFolderFilter('ALL');
+      setSelectedManageIds(new Set());
+      setConfirmBulkDelete(false);
+      setMoveFeedback(null);
+      setNewTopicId('');
+      setMoveTargetTopicId('__keep__');
+      setMoveTargetSubjectId('__keep__');
+    }
     if (selectedSubjectId && selectedSubjectId !== 'ALL') {
       setAddSubjectId(selectedSubjectId);
     } else if (!addSubjectId || !workspace.subjects.some((s) => s.id === addSubjectId)) {
       setAddSubjectId(workspace.subjects[0]?.id || '');
     }
-  }, [selectedSubjectId, workspace.subjects, addSubjectId]);
+  }, [selectedSubjectId, workspace.subjects, addSubjectId, launchTopicFilter]);
 
   // Ensure optional newTopicId stays valid for chosen subject, defaulting to '' (unlinked)
   useEffect(() => {
@@ -871,6 +965,50 @@ export function FlashcardsView({
     },
     [optShuffle, studyAlgo, sessionLimit, resetCardFaceForCurrent]
   );
+
+  // Launch linked flashcards directly when navigated from Notes
+  useEffect(() => {
+    if (!launchTopicFilter?.topicId) return;
+    const tid = launchTopicFilter.topicId;
+    setSelectedTopicFilter(tid);
+    const matching = workspace.flashcards.filter((c) => {
+      if (selectedSubjectId && selectedSubjectId !== 'ALL' && c.subjectId !== selectedSubjectId) {
+        return false;
+      }
+      return cardEffectiveTopicIds(c).includes(tid);
+    });
+    const keys = Array.from(
+      new Set(
+        matching.map(
+          (c) => `${c.subjectId}:::${(c.sectionName || 'Core Deck').trim() || 'Core Deck'}`
+        )
+      )
+    );
+    if (keys.length > 0) {
+      setSelectedSections(keys);
+    }
+    if (launchTopicFilter.autoStart && matching.length > 0) {
+      const now = Date.now();
+      const due = matching.filter((c) => c.dueAt <= now);
+      if (due.length > 0) {
+        setStudyAlgo('smart');
+        launchSession(due);
+      } else {
+        setStudyAlgo('cram');
+        launchSession(matching);
+      }
+    } else if (launchTopicFilter.autoStart) {
+      setScreen('setup');
+    }
+    onConsumeLaunchTopic?.();
+  }, [
+    launchTopicFilter,
+    workspace.flashcards,
+    selectedSubjectId,
+    cardEffectiveTopicIds,
+    launchSession,
+    onConsumeLaunchTopic,
+  ]);
 
   const flipCard = useCallback(() => {
     if (screen !== 'play' || busy || !currentCard) return;
@@ -3466,32 +3604,21 @@ export function FlashcardsView({
               <div
                 key={card.id}
                 data-fc-card-row="true"
+                data-fc-card-id={card.id}
                 onPointerDown={(e) => {
-                  if (e.button === 2) {
-                    e.preventDefault();
-                    const mode = selectedManageIds.has(card.id) ? 'deselect' : 'select';
-                    rightDragSelectRef.current = { active: true, mode, justDragged: true };
-                    setSelectedManageIds((prev) => {
-                      const next = new Set(prev);
-                      if (mode === 'select') next.add(card.id);
-                      else next.delete(card.id);
-                      return next;
-                    });
-                  }
-                }}
-                onPointerEnter={() => {
-                  if (!rightDragSelectRef.current.active) return;
-                  rightDragSelectRef.current.justDragged = true;
-                  const mode = rightDragSelectRef.current.mode;
-                  setSelectedManageIds((prev) => {
-                    const next = new Set(prev);
-                    if (mode === 'select') next.add(card.id);
-                    else next.delete(card.id);
-                    return next;
-                  });
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
+                  if (e.button !== 0) return;
+                  const targetEl = e.target as HTMLElement | null;
+                  if (targetEl?.closest('button, a, input, select, textarea, label')) return;
+                  dragSelectRef.current = {
+                    active: true,
+                    anchorId: card.id,
+                    dragged: false,
+                    mode: selectedManageIds.has(card.id) ? 'deselect' : 'select',
+                    preSelection: new Set(selectedManageIds),
+                    justDragged: false,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                  };
                 }}
                 className={`flex select-none flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm transition-colors ${
                   checked ? 'bg-[color-mix(in_srgb,var(--e3)_9%,var(--card))]' : ''
@@ -3500,6 +3627,7 @@ export function FlashcardsView({
                 <div className="flex min-w-0 flex-1 items-start gap-3">
                   <button
                     type="button"
+                    data-fc-card-checkbox="true"
                     onClick={() =>
                       setSelectedManageIds((prev) => {
                         const next = new Set(prev);
@@ -3627,22 +3755,7 @@ export function FlashcardsView({
               : addSubjectId || workspace.subjects[0]?.id || '';
 
           return (
-            <div
-              className="space-y-4"
-              onClick={(e) => {
-                if (selectedManageIds.size === 0 || rightDragSelectRef.current.justDragged) return;
-                const el = e.target as HTMLElement | null;
-                if (!el) return;
-                if (
-                  el.closest(
-                    '[data-fc-card-row="true"], [data-fc-keep-selection="true"], button, input, select, textarea, label, [role="dialog"]'
-                  )
-                ) {
-                  return;
-                }
-                setSelectedManageIds(new Set());
-              }}
-            >
+            <div className="space-y-4">
               {/* Top Manage Header */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-4">
                 <div className="flex items-center gap-3">
@@ -4114,8 +4227,8 @@ export function FlashcardsView({
                           </span>
                           <span className="hidden text-[11px] text-[var(--mute)] sm:inline">
                             {activeSelCount > 0
-                              ? '· Click empty space to clear'
-                              : '· Hold right-click & drag across cards to select'}
+                              ? '· Press anywhere to unselect'
+                              : '· Hold left-click & drag across cards to select'}
                           </span>
                         </div>
 

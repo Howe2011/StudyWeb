@@ -85,6 +85,7 @@ interface ProfileVaultViewProps {
   onOpenUniversalImport: () => void;
   onOpenRevisionCards: () => void;
   onOpenPlannerOptions: () => void;
+  onOpenShareCode?: (shareCode: string) => void;
   onImportWorkspaceData: (incoming: WorkspaceData, mode: 'merge' | 'replace') => Promise<void>;
   onResetWorkspace: () => Promise<void>;
 }
@@ -191,6 +192,7 @@ export function ProfileVaultView({
   onOpenUniversalImport,
   onOpenRevisionCards,
   onOpenPlannerOptions,
+  onOpenShareCode,
   onImportWorkspaceData,
   onResetWorkspace,
 }: ProfileVaultViewProps) {
@@ -1561,6 +1563,7 @@ export function ProfileVaultView({
               currentAdminUid={firebaseUser.uid}
               currentAdminEmail={firebaseUser.email}
               currentAdminAccount={account}
+              onOpenShareCode={onOpenShareCode}
             />
           </div>
         )}
