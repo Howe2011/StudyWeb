@@ -37,18 +37,62 @@ import {
   WorkspaceData,
 } from '../types';
 
-const CHUNK_SIZE = 200000;
+const MAX_CHUNK_UTF8_BYTES = 220_000;
+const MAX_CHUNKS_PER_ENTRY = 500;
 export const WORKSPACE_V2_CHUNK_KEY = 'workspace-v2';
 export const BOOTSTRAP_ADMIN_EMAIL = 'howezhou2011@gmail.com';
 
 const pushedChecksums = new Map<string, string>();
 const knownSyncDocIds = new Set<string>();
 const knownChunkCounts = new Map<string, number>();
+const knownSyncDocIdsByKey = new Map<string, Set<string>>();
 
 export function resetSyncMemoryCache() {
   pushedChecksums.clear();
   knownSyncDocIds.clear();
   knownChunkCounts.clear();
+  knownSyncDocIdsByKey.clear();
+}
+
+function splitTextByUtf8Bytes(text: string, maxBytes = MAX_CHUNK_UTF8_BYTES): string[] {
+  if (!text) return [''];
+  const encoder = new TextEncoder();
+  if (encoder.encode(text).length <= maxBytes) {
+    return [text];
+  }
+  const chunks: string[] = [];
+  let start = 0;
+  const len = text.length;
+
+  while (start < len) {
+    let end = Math.min(len, start + maxBytes);
+    if (end < len && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) {
+      end--;
+    }
+    let slice = text.slice(start, end);
+    let byteLen = encoder.encode(slice).length;
+
+    while (byteLen > maxBytes && end > start + 1) {
+      const ratio = maxBytes / byteLen;
+      let nextEnd = start + Math.max(1, Math.floor((end - start) * ratio * 0.95));
+      if (nextEnd >= end) nextEnd = end - 1;
+      if (
+        nextEnd > start + 1 &&
+        text.charCodeAt(nextEnd - 1) >= 0xd800 &&
+        text.charCodeAt(nextEnd - 1) <= 0xdbff
+      ) {
+        nextEnd--;
+      }
+      end = nextEnd;
+      slice = text.slice(start, end);
+      byteLen = encoder.encode(slice).length;
+    }
+
+    chunks.push(slice);
+    start = end;
+  }
+
+  return chunks;
 }
 
 async function makeSyncDocId(app: AppModule, chunkKey: string, chunkIndex: number): Promise<string> {
@@ -124,8 +168,12 @@ export async function createUserAccountWithVault(params: {
     studyNotes: '',
   };
   await saveEncryptedProfile(uid, dek, 1, initialProfile);
-  await registerOrHeartbeatDevice(uid);
-  await recordActivity(uid, 'Created encrypted vault');
+  await registerOrHeartbeatDevice(uid).catch((err) => {
+    console.warn('Initial device registration skipped:', err);
+  });
+  await recordActivity(uid, 'Created encrypted vault').catch((err) => {
+    console.warn('Initial activity log skipped:', err);
+  });
 
   const account = await fetchUserAccount(uid);
   if (!account) {
@@ -294,13 +342,23 @@ export async function pushEncryptedSyncEntry(params: {
   if (pushedChecksums.get(compositeKey) === checksum) {
     return;
   }
-  pushedChecksums.set(compositeKey, checksum);
 
-  const totalChunks = Math.max(1, Math.ceil(value.length / CHUNK_SIZE));
+  const slices = splitTextByUtf8Bytes(value, MAX_CHUNK_UTF8_BYTES);
+  const totalChunks = slices.length;
+  if (totalChunks > MAX_CHUNKS_PER_ENTRY) {
+    throw new Error(
+      'Workspace data exceeds the cloud sync chunk limit. Export a JSON backup or remove large embedded attachments.'
+    );
+  }
+
+  pushedChecksums.set(compositeKey, checksum);
+  const writtenDocIds = new Set<string>();
+
   for (let i = 0; i < totalChunks; i++) {
-    const slice = value.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    const slice = slices[i];
     const { ciphertext, iv } = await encryptText(slice, dek);
     const docId = await makeSyncDocId(app, chunkKey, i);
+    writtenDocIds.add(docId);
     const ref = doc(db, 'users', uid, 'syncDocs', docId);
     const path = `users/${uid}/syncDocs/${docId}`;
 
@@ -349,15 +407,26 @@ export async function pushEncryptedSyncEntry(params: {
   }
 
   const prevCount = knownChunkCounts.get(compositeKey) || 0;
-  knownChunkCounts.set(compositeKey, totalChunks);
+  const staleDocIds = new Set<string>();
+  const trackedSet = knownSyncDocIdsByKey.get(compositeKey);
+  if (trackedSet) {
+    for (const id of trackedSet) {
+      if (!writtenDocIds.has(id)) staleDocIds.add(id);
+    }
+  }
+  for (let i = totalChunks; i < prevCount; i++) {
+    staleDocIds.add(await makeSyncDocId(app, chunkKey, i));
+  }
 
-  if (prevCount > totalChunks) {
+  knownChunkCounts.set(compositeKey, totalChunks);
+  knownSyncDocIdsByKey.set(compositeKey, writtenDocIds);
+
+  if (staleDocIds.size > 0) {
     try {
       const batch = writeBatch(db);
-      for (let i = totalChunks; i < prevCount; i++) {
-        const docId = await makeSyncDocId(app, chunkKey, i);
-        knownSyncDocIds.delete(docId);
-        batch.delete(doc(db, 'users', uid, 'syncDocs', docId));
+      for (const staleId of staleDocIds) {
+        knownSyncDocIds.delete(staleId);
+        batch.delete(doc(db, 'users', uid, 'syncDocs', staleId));
       }
       await batch.commit();
     } catch (err) {
@@ -409,10 +478,17 @@ export function subscribeEncryptedSyncDocs(
         {
           app: AppModule;
           chunkKey: string;
-          totalChunks: number;
-          checksum: string;
-          deviceId: string;
-          chunks: Map<number, { ciphertext: string; iv: string }>;
+          docIds: Set<string>;
+          chunks: Map<
+            number,
+            {
+              ciphertext: string;
+              iv: string;
+              totalChunks: number;
+              checksum: string;
+              deviceId: string;
+            }
+          >;
         }
       >();
 
@@ -425,14 +501,19 @@ export function subscribeEncryptedSyncDocs(
           grp = {
             app: data.app,
             chunkKey: data.chunkKey,
-            totalChunks: data.totalChunks,
-            checksum: data.checksum,
-            deviceId: data.deviceId,
+            docIds: new Set(),
             chunks: new Map(),
           };
           groups.set(gk, grp);
         }
-        grp.chunks.set(data.chunkIndex, { ciphertext: data.ciphertext, iv: data.iv });
+        grp.docIds.add(d.id);
+        grp.chunks.set(data.chunkIndex, {
+          ciphertext: data.ciphertext,
+          iv: data.iv,
+          totalChunks: data.totalChunks,
+          checksum: data.checksum,
+          deviceId: data.deviceId,
+        });
       });
 
       const revision: Record<string, string> = {};
@@ -441,12 +522,20 @@ export function subscribeEncryptedSyncDocs(
       let anyFromRemote = false;
 
       for (const [gk, grp] of groups.entries()) {
-        if (grp.chunks.size < grp.totalChunks) continue;
+        knownSyncDocIdsByKey.set(gk, grp.docIds);
+        const maxIdx = Math.max(0, ...Array.from(grp.chunks.keys()));
+        const head = grp.chunks.get(0);
+        if (!head) continue;
+
+        knownChunkCounts.set(gk, Math.max(head.totalChunks, maxIdx + 1));
+        if (grp.chunks.size < head.totalChunks) continue;
+
         let assembled = '';
         let ok = true;
-        for (let i = 0; i < grp.totalChunks; i++) {
+        let decryptFailed = false;
+        for (let i = 0; i < head.totalChunks; i++) {
           const c = grp.chunks.get(i);
-          if (!c) {
+          if (!c || c.checksum !== head.checksum) {
             ok = false;
             break;
           }
@@ -454,16 +543,23 @@ export function subscribeEncryptedSyncDocs(
             assembled += await decryptText(c.ciphertext, c.iv, dek);
           } catch {
             ok = false;
+            decryptFailed = true;
             break;
           }
         }
+        if (decryptFailed) {
+          if (currentSeq === seq) {
+            onError(new Error('Could not decrypt synced cloud data with your current vault key.'));
+          }
+          return;
+        }
         if (!ok) continue;
+
         const prevChecksum = pushedChecksums.get(gk);
-        if (prevChecksum !== grp.checksum && grp.deviceId !== localDeviceId) {
+        if (prevChecksum !== head.checksum && head.deviceId !== localDeviceId) {
           anyFromRemote = true;
         }
-        knownChunkCounts.set(gk, grp.totalChunks);
-        pushedChecksums.set(gk, grp.checksum);
+        pushedChecksums.set(gk, head.checksum);
         if (grp.app === 'revision' && grp.chunkKey === WORKSPACE_V2_CHUNK_KEY) {
           workspaceV2Json = assembled;
         } else if (grp.app === 'revision') {

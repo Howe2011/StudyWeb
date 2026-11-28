@@ -69,10 +69,12 @@ interface ProfileVaultViewProps {
   activity: UserActivityDoc[];
   chunkCount: number;
   syncState: 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
+  syncError?: string | null;
   hasGuestData: boolean;
   initialSection?: VaultSection;
   onOpenAuth: () => void;
   onRetryAccountLoad?: () => Promise<void>;
+  onSendVerificationEmail?: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onLockVault: () => Promise<void>;
   onSaveProfile: (profile: DecryptedProfile) => Promise<void>;
@@ -176,10 +178,12 @@ export function ProfileVaultView({
   activity,
   chunkCount,
   syncState,
+  syncError,
   hasGuestData,
   initialSection = 'account',
   onOpenAuth,
   onRetryAccountLoad,
+  onSendVerificationEmail,
   onSignOut,
   onLockVault,
   onSaveProfile,
@@ -209,6 +213,10 @@ export function ProfileVaultView({
   });
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [retryingAccount, setRetryingAccount] = useState(false);
+  const [sendingVerification, setSendingVerification] = useState(false);
+  const [verificationSentMsg, setVerificationSentMsg] = useState<string | null>(null);
 
   const [devName, setDevName] = useState(currentDev.deviceName);
   const [newPass, setNewPass] = useState('');
@@ -317,10 +325,15 @@ export function ProfileVaultView({
     e.preventDefault();
     setSavingProfile(true);
     setProfileSaved(false);
+    setProfileError(null);
     try {
       await onSaveProfile(form);
       setProfileSaved(true);
       setTimeout(() => setProfileSaved(false), 2500);
+    } catch (err) {
+      setProfileError(
+        err instanceof Error ? err.message : 'Unable to save encrypted profile right now.'
+      );
     } finally {
       setSavingProfile(false);
     }
@@ -1580,6 +1593,8 @@ export function ProfileVaultView({
                       ? 'Enable Encrypted Multi-Device Cloud Sync'
                       : accountError
                       ? 'Cloud Account Connection Issue'
+                      : !account
+                      ? 'Finish Encrypted Cloud Vault Setup'
                       : 'Your Vault Is Locked'}
                   </h2>
                   <p className="mt-1 max-w-2xl text-sm text-[var(--mute)]">
@@ -1587,25 +1602,72 @@ export function ProfileVaultView({
                       ? 'Sign in with Google to protect your flashcards, structured notes, planner schedule, and private profile with client-side AES-256-GCM encryption across every device.'
                       : accountError
                       ? accountError
+                      : !account
+                      ? 'Create a sync passphrase to initialize your encrypted cloud vault and synchronize your study workspace across devices.'
                       : 'Enter your sync passphrase or recovery code to decrypt your workspace and synchronize changes across devices.'}
                   </p>
+                  {verificationSentMsg && (
+                    <p className="mt-2 text-xs font-semibold text-[var(--ok)]">
+                      {verificationSentMsg}
+                    </p>
+                  )}
                 </div>
-                {accountError && onRetryAccountLoad ? (
-                  <button
-                    type="button"
-                    onClick={() => void onRetryAccountLoad()}
-                    className="sd-btn-pri shrink-0 px-5 py-2.5 text-sm whitespace-nowrap"
-                  >
-                    <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                    <span>Retry connection</span>
-                  </button>
+                {accountError ? (
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {firebaseUser && !firebaseUser.emailVerified && onSendVerificationEmail && (
+                      <button
+                        type="button"
+                        disabled={sendingVerification}
+                        onClick={async () => {
+                          setSendingVerification(true);
+                          setVerificationSentMsg(null);
+                          try {
+                            await onSendVerificationEmail();
+                            setVerificationSentMsg(
+                              `Verification email sent to ${firebaseUser.email || 'your email'}. Verify your email, then click Retry connection.`
+                            );
+                          } finally {
+                            setSendingVerification(false);
+                          }
+                        }}
+                        className="sd-btn px-4 py-2.5 text-sm whitespace-nowrap"
+                      >
+                        <span>{sendingVerification ? 'Sending…' : 'Send verification email'}</span>
+                      </button>
+                    )}
+                    {onRetryAccountLoad && (
+                      <button
+                        type="button"
+                        disabled={retryingAccount}
+                        onClick={async () => {
+                          setRetryingAccount(true);
+                          try {
+                            await onRetryAccountLoad();
+                          } finally {
+                            setRetryingAccount(false);
+                          }
+                        }}
+                        className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap"
+                      >
+                        <RefreshCw
+                          className={`h-4 w-4 ${retryingAccount ? 'animate-spin' : ''}`}
+                          aria-hidden="true"
+                        />
+                        <span>{retryingAccount ? 'Retrying…' : 'Retry connection'}</span>
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <button
                     type="button"
                     onClick={onOpenAuth}
                     className="sd-btn-pri shrink-0 px-5 py-2.5 text-sm whitespace-nowrap"
                   >
-                    {!firebaseUser ? 'Sign in with Google' : 'Unlock Vault'}
+                    {!firebaseUser
+                      ? 'Sign in with Google'
+                      : !account
+                      ? 'Set Up Cloud Vault'
+                      : 'Unlock Vault'}
                   </button>
                 )}
               </div>
@@ -1733,6 +1795,12 @@ export function ProfileVaultView({
                   </label>
                 </div>
 
+                {profileError && (
+                  <div className="mt-4 rounded-lg border border-[var(--bad)] bg-[var(--bg)] px-3 py-2 text-xs font-medium text-[var(--bad)]">
+                    {profileError}
+                  </div>
+                )}
+
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
                   <span className="text-xs text-[var(--mute)]">
                     {profileSaved ? (
@@ -1844,11 +1912,21 @@ export function ProfileVaultView({
                   </div>
                   <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
                     <div className="text-xs text-[var(--mute)]">Sync Status</div>
-                    <div className="mt-1 text-sm font-semibold capitalize text-[var(--e3)]">
+                    <div
+                      className={`mt-1 text-sm font-semibold capitalize ${
+                        syncState === 'error' ? 'text-[var(--bad)]' : 'text-[var(--e3)]'
+                      }`}
+                    >
                       {syncState}
                     </div>
                   </div>
                 </div>
+
+                {syncState === 'error' && syncError && (
+                  <div className="mt-3 rounded-xl border border-[var(--bad)] bg-[var(--bg)] p-3 text-xs leading-relaxed text-[var(--bad)]">
+                    {syncError}
+                  </div>
+                )}
 
                 {hasGuestData && (
                   <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs">

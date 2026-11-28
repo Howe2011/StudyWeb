@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import {
+  onAuthStateChanged,
+  sendEmailVerification,
+  signInWithPopup,
+  signOut,
+  User,
+} from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
 import { AuthVaultModal } from './components/AuthVaultModal';
 import { CalendarView } from './components/CalendarView';
@@ -278,6 +284,7 @@ export default function App() {
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [accountLoadError, setAccountLoadError] = useState<string | null>(null);
+  const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'synced' | 'error' | 'offline'>(
     navigator.onLine ? 'idle' : 'offline'
   );
@@ -512,10 +519,14 @@ export default function App() {
         keyVersion: account.keyVersion,
         workspace: latestWorkspaceRef.current,
       })
-        .then(() => setSyncState('synced'))
+        .then(() => {
+          setSyncState('synced');
+          setSyncErrorMessage(null);
+        })
         .catch((err) => {
           console.error(err);
           setSyncState('error');
+          setSyncErrorMessage(extractReadableFirestoreError(err));
         });
     }, 1500);
 
@@ -987,27 +998,67 @@ export default function App() {
     await pipControllerRef.current?.closeFloatingBox();
   }, []);
 
-  const formatAccountLoadError = useCallback((err: unknown): string => {
+  const extractReadableFirestoreError = useCallback((err: unknown): string => {
     const raw = err instanceof Error ? err.message : String(err || '');
-    if (
-      raw.includes('firestore.googleapis.com') ||
-      raw.includes('Cloud Firestore API has not been used') ||
-      raw.includes('it is disabled')
-    ) {
-      return 'Cloud Firestore API is currently disabled or not provisioned on the active Firebase project. Your account data has not been deleted—reconnect or enable Firestore on your Firebase project to restore cloud sync.';
+    let inner = raw;
+    try {
+      const parsed = JSON.parse(raw) as { error?: string; path?: string };
+      if (parsed && typeof parsed.error === 'string' && parsed.error.trim()) {
+        inner = parsed.error.trim();
+      }
+    } catch {
+      // plain string error
     }
-    if (raw.includes('offline') || raw.includes('Failed to get document')) {
+    const lower = inner.toLowerCase();
+    if (
+      lower.includes('firestore.googleapis.com') ||
+      lower.includes('cloud firestore api has not been used') ||
+      lower.includes('it is disabled')
+    ) {
+      return 'Cloud Firestore API is disabled or not provisioned on the active Firebase project. Your local study data is safe—enable Firestore on your project to restore cloud sync.';
+    }
+    if (lower.includes('database') && lower.includes('does not exist')) {
+      return 'The configured Cloud Firestore database does not exist on this Firebase project.';
+    }
+    if (lower.includes('missing or insufficient permissions') || lower.includes('permission-denied')) {
+      return 'Firestore denied access to your cloud account or sync data (Missing or insufficient permissions). Verify your email address and make sure the latest Firestore rules are deployed.';
+    }
+    if (lower.includes('resource-exhausted') || lower.includes('quota exceeded')) {
+      return 'Firebase Firestore quota has been temporarily exceeded. Your local data remains accessible; please retry later.';
+    }
+    if (lower.includes('offline') || lower.includes('failed to get document') || lower.includes('unavailable')) {
       return 'Could not reach Cloud Firestore right now. Showing your local cached workspace until connection is restored.';
     }
-    return 'Could not load your cloud account metadata right now. Please retry or check your Firebase project settings.';
+    return inner || 'Could not reach your cloud account right now. Please retry.';
   }, []);
+
+  const formatAccountLoadError = useCallback(
+    (err: unknown): string => extractReadableFirestoreError(err),
+    [extractReadableFirestoreError]
+  );
 
   const loadSignedInAccount = useCallback(
     async (user: User) => {
       setAccountLoadError(null);
       try {
-        let acc = await fetchUserAccount(user.uid);
-        acc = await ensureBootstrapAdminRole(user.uid, user.email, acc);
+        let activeUser = user;
+        if (!activeUser.emailVerified) {
+          await activeUser.reload().catch(() => undefined);
+          activeUser = auth.currentUser || activeUser;
+          await activeUser.getIdToken(true).catch(() => undefined);
+        }
+        if (!activeUser.emailVerified) {
+          setAccount(null);
+          setDek(null);
+          setSyncState('error');
+          setAccountLoadError(
+            `Your email (${activeUser.email || 'signed-in account'}) is not verified yet, so Firestore security rules block access to your cloud account and synced data. Verify your email and click Retry.`
+          );
+          return;
+        }
+
+        let acc = await fetchUserAccount(activeUser.uid);
+        acc = await ensureBootstrapAdminRole(activeUser.uid, activeUser.email, acc);
         setAccount(acc);
         if (!acc) {
           setDek(null);
@@ -1015,16 +1066,16 @@ export default function App() {
           setAuthModalOpen(true);
           return;
         }
-        const cachedKey = await loadTrustedDeviceKey(user.uid);
+        const cachedKey = await loadTrustedDeviceKey(activeUser.uid);
         if (cachedKey) {
           try {
-            const prof = await loadEncryptedProfile(user.uid, cachedKey);
+            const prof = await loadEncryptedProfile(activeUser.uid, cachedKey);
             if (prof) setProfile(prof);
             setDek(cachedKey);
             return;
           } catch (profErr) {
             if (profErr instanceof DOMException && profErr.name === 'OperationError') {
-              await clearTrustedDeviceKey(user.uid);
+              await clearTrustedDeviceKey(activeUser.uid);
             } else {
               console.warn('Could not load encrypted profile yet:', profErr);
               setDek(cachedKey);
@@ -1051,6 +1102,7 @@ export default function App() {
       cloudHydratedRef.current = false;
       setFirebaseUser(user);
       setAccountLoadError(null);
+      setSyncErrorMessage(null);
       setProfile(null);
       setDevices([]);
       setActivity([]);
@@ -1093,6 +1145,7 @@ export default function App() {
       .catch(console.error);
 
     setSyncState('syncing');
+    setSyncErrorMessage(null);
     const unsubDocs = subscribeEncryptedSyncDocs(
       uid,
       dek,
@@ -1100,6 +1153,7 @@ export default function App() {
         if (cancelled) return;
         setChunkCount(count);
         setSyncState('synced');
+        setSyncErrorMessage(null);
 
         if (workspaceV2Json) {
           if (!cloudHydratedRef.current || fromRemoteDevice) {
@@ -1110,6 +1164,10 @@ export default function App() {
               saveWorkspaceToLocal(cloudWs, uid);
             } catch {
               cloudHydratedRef.current = true;
+              setSyncState('error');
+              setSyncErrorMessage(
+                'Cloud workspace payload could not be parsed cleanly. Use Sync now or restore a backup if needed.'
+              );
             }
           }
         } else {
@@ -1127,7 +1185,13 @@ export default function App() {
                 dek,
                 keyVersion: account.keyVersion,
                 workspace: converted.workspace,
-              }).catch(console.error);
+              }).catch((err) => {
+                console.error(err);
+                if (!cancelled) {
+                  setSyncState('error');
+                  setSyncErrorMessage(extractReadableFirestoreError(err));
+                }
+              });
             }
           } else {
             cloudHydratedRef.current = true;
@@ -1136,7 +1200,10 @@ export default function App() {
       },
       (err) => {
         console.error(err);
-        if (!cancelled) setSyncState('error');
+        if (!cancelled) {
+          setSyncState('error');
+          setSyncErrorMessage(extractReadableFirestoreError(err));
+        }
       }
     );
 
@@ -1154,7 +1221,7 @@ export default function App() {
       unsubDevices();
       unsubActivity();
     };
-  }, [firebaseUser, account, dek]);
+  }, [firebaseUser, account, dek, extractReadableFirestoreError]);
 
   const deckSnapshot = useMemo(() => buildDeckSnapshot(workspace), [workspace]);
 
@@ -1866,6 +1933,11 @@ export default function App() {
     await signInWithPopup(auth, googleProvider);
   };
 
+  const handleSendVerificationEmail = async () => {
+    if (!firebaseUser) return;
+    await sendEmailVerification(firebaseUser);
+  };
+
   const handleSignOut = async () => {
     if (firebaseUser) {
       await clearTrustedDeviceKey(firebaseUser.uid);
@@ -1875,6 +1947,8 @@ export default function App() {
     setDek(null);
     setAccount(null);
     setProfile(null);
+    setAccountLoadError(null);
+    setSyncErrorMessage(null);
     await signOut(auth);
     setAuthModalOpen(false);
     setVaultSection('account');
@@ -1889,13 +1963,14 @@ export default function App() {
       setWorkspace(merged);
       saveWorkspaceToLocal(merged, uid);
       setSyncState('syncing');
+      setSyncErrorMessage(null);
       await syncWorkspaceToCloud({
         uid,
         dek: activeDek,
         keyVersion,
         workspace: merged,
       });
-      await recordActivity(uid, 'Merged browser study data into encrypted cloud');
+      await recordActivity(uid, 'Merged browser study data into encrypted cloud').catch(console.warn);
       setSyncState('synced');
     },
     []
@@ -1918,6 +1993,7 @@ export default function App() {
     }
     setAccount(newAcc);
     setDek(newDek);
+    setAccountLoadError(null);
     if (importGuest) {
       await importGuestIntoCloud(firebaseUser.uid, newDek, newAcc.keyVersion);
     }
@@ -1931,7 +2007,8 @@ export default function App() {
       await saveTrustedDeviceKey(firebaseUser.uid, unlockedDek);
     }
     setDek(unlockedDek);
-    await recordActivity(firebaseUser.uid, 'Unlocked vault with passphrase');
+    setAccountLoadError(null);
+    void recordActivity(firebaseUser.uid, 'Unlocked vault with passphrase').catch(console.warn);
   };
 
   const handleUnlockWithRecovery = async (recoveryCode: string, rememberDevice: boolean) => {
@@ -1941,7 +2018,8 @@ export default function App() {
       await saveTrustedDeviceKey(firebaseUser.uid, unlockedDek);
     }
     setDek(unlockedDek);
-    await recordActivity(firebaseUser.uid, 'Unlocked vault with recovery code');
+    setAccountLoadError(null);
+    void recordActivity(firebaseUser.uid, 'Unlocked vault with recovery code').catch(console.warn);
   };
 
   const handleLockVault = async () => {
@@ -1951,6 +2029,7 @@ export default function App() {
     cloudHydratedRef.current = false;
     setDek(null);
     setProfile(null);
+    setSyncErrorMessage(null);
     setAuthModalOpen(true);
   };
 
@@ -1963,7 +2042,7 @@ export default function App() {
       await updateCommunityAuthorName(firebaseUser.uid, nextProfile.fullName.trim());
     }
     setProfile(nextProfile);
-    await recordActivity(firebaseUser.uid, 'Updated encrypted profile');
+    await recordActivity(firebaseUser.uid, 'Updated encrypted profile').catch(console.warn);
   };
 
   const handleRotatePassphrase = async (newPassphrase: string) => {
@@ -1982,17 +2061,25 @@ export default function App() {
     if (!firebaseUser || !account || !dek) return;
     if (isAccountSuspended) {
       setSyncState('error');
+      setSyncErrorMessage('Cloud sync is paused because this account is suspended.');
       return;
     }
     setSyncState('syncing');
-    await registerOrHeartbeatDevice(firebaseUser.uid);
-    await syncWorkspaceToCloud({
-      uid: firebaseUser.uid,
-      dek,
-      keyVersion: account.keyVersion,
-      workspace: latestWorkspaceRef.current,
-    });
-    setSyncState('synced');
+    setSyncErrorMessage(null);
+    try {
+      await registerOrHeartbeatDevice(firebaseUser.uid).catch(console.warn);
+      await syncWorkspaceToCloud({
+        uid: firebaseUser.uid,
+        dek,
+        keyVersion: account.keyVersion,
+        workspace: latestWorkspaceRef.current,
+      });
+      setSyncState('synced');
+    } catch (err) {
+      console.error(err);
+      setSyncState('error');
+      setSyncErrorMessage(extractReadableFirestoreError(err));
+    }
   };
 
   const handleImportGuestNow = async () => {
@@ -2395,11 +2482,17 @@ export default function App() {
               activity={activity}
               chunkCount={chunkCount}
               syncState={syncState}
+              syncError={syncErrorMessage}
               hasGuestData={hasGuestData}
               initialSection={activeTab === 'admin' ? 'admin' : vaultSection}
               onOpenAuth={() => setAuthModalOpen(true)}
               onRetryAccountLoad={
                 firebaseUser ? () => loadSignedInAccount(firebaseUser) : undefined
+              }
+              onSendVerificationEmail={
+                firebaseUser && !firebaseUser.emailVerified
+                  ? handleSendVerificationEmail
+                  : undefined
               }
               onSignOut={handleSignOut}
               onLockVault={handleLockVault}
@@ -2547,6 +2640,9 @@ export default function App() {
         vaultUnlocked={vaultUnlocked}
         hasGuestData={hasGuestData}
         onRetryAccountLoad={firebaseUser ? () => loadSignedInAccount(firebaseUser) : undefined}
+        onSendVerificationEmail={
+          firebaseUser && !firebaseUser.emailVerified ? handleSendVerificationEmail : undefined
+        }
         onSignInGoogle={handleSignInGoogle}
         onSignOut={handleSignOut}
         onCreateVault={handleCreateVault}

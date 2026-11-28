@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
 import { Check, Copy, ExternalLink, KeyRound, Lock, LogIn, Shield, X } from 'lucide-react';
 import { firebaseProjectId } from '../firebase';
@@ -13,6 +13,7 @@ interface AuthVaultModalProps {
   vaultUnlocked: boolean;
   hasGuestData: boolean;
   onRetryAccountLoad?: () => Promise<void>;
+  onSendVerificationEmail?: () => Promise<void>;
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onCreateVault: (
@@ -39,6 +40,7 @@ export function AuthVaultModal({
   vaultUnlocked,
   hasGuestData,
   onRetryAccountLoad,
+  onSendVerificationEmail,
   onSignInGoogle,
   onSignOut,
   onCreateVault,
@@ -52,11 +54,32 @@ export function AuthVaultModal({
   const [rememberDevice, setRememberDevice] = useState(true);
   const [importGuest, setImportGuest] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [sendingVerify, setSendingVerify] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unauthorizedHost, setUnauthorizedHost] = useState<string | null>(null);
   const [copiedHost, setCopiedHost] = useState(false);
   const [generatedRecovery, setGeneratedRecovery] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setError(null);
+    setUnauthorizedHost(null);
+    setVerificationSent(false);
+    if (!open) {
+      setPassphrase('');
+      setConfirmPass('');
+      setRecoveryInput('');
+      setUseRecovery(false);
+    }
+  }, [open, firebaseUser?.uid]);
+
+  useEffect(() => {
+    if (open && vaultUnlocked && !generatedRecovery) {
+      onClose();
+    }
+  }, [open, vaultUnlocked, generatedRecovery, onClose]);
 
   if (!open) return null;
 
@@ -77,8 +100,12 @@ export function AuthVaultModal({
         );
       } else if (code === 'auth/popup-blocked') {
         setError('Your browser blocked the Google sign-in popup. Please allow popups for this site and try again.');
-      } else if (code === 'auth/popup-closed-by-user') {
+      } else if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
         setError('Sign-in popup was closed before completing.');
+      } else if (code === 'auth/network-request-failed') {
+        setError('Network error while contacting Google sign-in. Check your connection and try again.');
+      } else if (code === 'auth/operation-not-allowed') {
+        setError('Google Sign-In provider is not enabled in Firebase Authentication settings yet.');
       } else {
         setError(e instanceof Error ? e.message : 'Sign-in failed. Please try again.');
       }
@@ -318,8 +345,13 @@ export function AuthVaultModal({
                 Could not reach your cloud account on {firebaseProjectId}
               </div>
               <p className="mt-1 text-[var(--mute)]">{accountError}</p>
+              {verificationSent && (
+                <p className="mt-2 font-semibold text-[var(--ok)]">
+                  Verification email sent to {firebaseUser.email}. Check your inbox, verify, then click Retry.
+                </p>
+              )}
             </div>
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
               <button
                 type="button"
                 onClick={() => void onSignOut()}
@@ -327,15 +359,51 @@ export function AuthVaultModal({
               >
                 Sign out
               </button>
-              {onRetryAccountLoad && (
-                <button
-                  type="button"
-                  onClick={() => void onRetryAccountLoad()}
-                  className="sd-btn-pri px-4 py-2 text-xs"
-                >
-                  Retry connection
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {!firebaseUser.emailVerified && onSendVerificationEmail && (
+                  <button
+                    type="button"
+                    disabled={sendingVerify}
+                    onClick={async () => {
+                      setSendingVerify(true);
+                      setError(null);
+                      try {
+                        await onSendVerificationEmail();
+                        setVerificationSent(true);
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Failed to send verification email.'
+                        );
+                      } finally {
+                        setSendingVerify(false);
+                      }
+                    }}
+                    className="sd-btn px-3 py-2 text-xs"
+                  >
+                    {sendingVerify ? 'Sending…' : 'Send verification email'}
+                  </button>
+                )}
+                {onRetryAccountLoad && (
+                  <button
+                    type="button"
+                    disabled={retrying}
+                    onClick={async () => {
+                      setRetrying(true);
+                      setError(null);
+                      try {
+                        await onRetryAccountLoad();
+                      } finally {
+                        setRetrying(false);
+                      }
+                    }}
+                    className="sd-btn-pri px-4 py-2 text-xs"
+                  >
+                    {retrying ? 'Retrying…' : 'Retry connection'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ) : !account ? (
