@@ -198,6 +198,7 @@ service cloud.firestore {
           'code', 'hostUid', 'deckId', 'deckTitle', 'selectedSectionsJson',
           'timerSeconds', 'status', 'totalQuestions', 'currentIndex', 'roundId',
           'questionStartedAt', 'questionEndsAt', 'currentQuestionJson',
+          'gameMode', 'questionFormat', 'brawlDifficulty', 'brawlDeckJson',
           'createdAt', 'updatedAt'
         ])
         && isRoomCode(data.code)
@@ -213,6 +214,10 @@ service cloud.firestore {
         && (!('questionStartedAt' in data) || data.questionStartedAt == null || data.questionStartedAt is number)
         && (!('questionEndsAt' in data) || data.questionEndsAt == null || data.questionEndsAt is number)
         && data.currentQuestionJson is string && data.currentQuestionJson.size() >= 2 && data.currentQuestionJson.size() <= 50000
+        && (!('gameMode' in data) || data.gameMode in ['classic', 'monster-brawl'])
+        && (!('questionFormat' in data) || data.questionFormat in ['typed', 'mcq'])
+        && (!('brawlDifficulty' in data) || data.brawlDifficulty in ['easy', 'medium', 'hard', 'impossible'])
+        && (!('brawlDeckJson' in data) || (data.brawlDeckJson is string && data.brawlDeckJson.size() <= 400000))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -226,7 +231,7 @@ service cloud.firestore {
           'id', 'uid', 'nickname', 'isHost', 'score', 'streak', 'bestStreak',
           'correctCount', 'connected', 'hasSubmitted', 'gradingStatus',
           'pendingAnswer', 'pendingSubmittedAt', 'pendingQuestionIndex',
-          'pendingRoundId', 'lastSubmissionJson', 'updatedAt'
+          'pendingRoundId', 'lastSubmissionJson', 'brawlStatsJson', 'updatedAt'
         ])
         && isValidId(data.id)
         && isValidId(data.uid)
@@ -244,6 +249,7 @@ service cloud.firestore {
         && (!('pendingQuestionIndex' in data) || data.pendingQuestionIndex is number)
         && (!('pendingRoundId' in data) || (data.pendingRoundId is string && data.pendingRoundId.size() <= 128))
         && (!('lastSubmissionJson' in data) || data.lastSubmissionJson == null || (data.lastSubmissionJson is string && data.lastSubmissionJson.size() <= 10000))
+        && (!('brawlStatsJson' in data) || data.brawlStatsJson == null || (data.brawlStatsJson is string && data.brawlStatsJson.size() <= 10000))
         && data.updatedAt is timestamp;
     }
 

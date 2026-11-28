@@ -429,6 +429,10 @@
         "selectedSectionsJson": { "type": "string", "minLength": 2, "maxLength": 50000 },
         "timerSeconds": { "type": "number" },
         "status": { "type": "string", "enum": ["lobby", "question", "reveal", "finished"] },
+        "gameMode": { "type": "string", "enum": ["classic", "monster-brawl"] },
+        "questionFormat": { "type": "string", "enum": ["typed", "mcq"] },
+        "brawlDifficulty": { "type": "string", "enum": ["easy", "medium", "hard", "impossible"] },
+        "brawlDeckJson": { "type": "string", "maxLength": 400000 },
         "totalQuestions": { "type": "number" },
         "currentIndex": { "type": "number" },
         "roundId": { "type": "string", "maxLength": 128 },
@@ -465,6 +469,7 @@
         "pendingQuestionIndex": { "type": "number" },
         "pendingRoundId": { "type": "string", "maxLength": 128 },
         "lastSubmissionJson": { "type": "string", "maxLength": 10000 },
+        "brawlStatsJson": { "type": ["string", "null"], "maxLength": 10000 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
