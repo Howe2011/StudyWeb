@@ -8,7 +8,7 @@ export interface DeviceInfo {
 }
 
 function detectBrowserAndOs(): { browser: string; os: string } {
-  const ua = navigator.userAgent;
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
   let browser = 'Browser';
   if (/Edg\//.test(ua)) browser = 'Edge';
   else if (/Chrome\//.test(ua) && !/Chromium/.test(ua)) browser = 'Chrome';
@@ -33,8 +33,11 @@ export function getDeviceInfo(): DeviceInfo {
     // ignore
   }
   if (!deviceId || !/^[a-zA-Z0-9_-]{1,128}$/.test(deviceId)) {
-    const rand = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-    deviceId = `dev_${rand}`;
+    const rawRand =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID().replace(/-/g, '')
+        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+    deviceId = `dev_${rawRand.slice(0, 16)}`;
     try {
       localStorage.setItem(DEVICE_ID_KEY, deviceId);
     } catch {

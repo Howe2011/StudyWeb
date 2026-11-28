@@ -11,6 +11,7 @@ import { AuthVaultModal } from './components/AuthVaultModal';
 import { CalendarView } from './components/CalendarView';
 import { CommunityTypeFilter, CommunityView } from './components/CommunityView';
 import { CustomizeModal } from './components/CustomizeModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { FlashcardsView } from './components/FlashcardsView';
 import { FloatingStopwatchTab } from './components/FloatingStopwatchTab';
 import { HomeDashboardView } from './components/HomeDashboardView';
@@ -2035,11 +2036,12 @@ export default function App() {
 
   const handleSaveProfile = async (nextProfile: DecryptedProfile) => {
     if (!firebaseUser || !account || !dek) return;
+    const cleanFullName = (nextProfile.fullName || '').trim();
     await saveEncryptedProfile(firebaseUser.uid, dek, account.keyVersion, nextProfile);
-    if (nextProfile.fullName.trim() && nextProfile.fullName.trim() !== account.displayName) {
-      await updateDisplayName(firebaseUser.uid, nextProfile.fullName.trim());
-      setAccount({ ...account, displayName: nextProfile.fullName.trim() });
-      await updateCommunityAuthorName(firebaseUser.uid, nextProfile.fullName.trim());
+    if (cleanFullName && cleanFullName !== account.displayName) {
+      await updateDisplayName(firebaseUser.uid, cleanFullName);
+      setAccount({ ...account, displayName: cleanFullName });
+      await updateCommunityAuthorName(firebaseUser.uid, cleanFullName);
     }
     setProfile(nextProfile);
     await recordActivity(firebaseUser.uid, 'Updated encrypted profile').catch(console.warn);
@@ -2285,6 +2287,11 @@ export default function App() {
         )}
 
         <main className="relative min-h-0 flex-1 overflow-hidden">
+          <ErrorBoundary
+            key={activeTab}
+            contextLabel={activeTab === 'vault' || activeTab === 'admin' ? 'Account & Data' : activeTab}
+            onReset={() => setActiveTab('home')}
+          >
           {activeTab === 'home' && (
             <HomeDashboardView
               workspace={workspace}
@@ -2521,6 +2528,7 @@ export default function App() {
               }}
             />
           )}
+          </ErrorBoundary>
         </main>
       </div>
 

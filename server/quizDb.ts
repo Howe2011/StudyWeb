@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
+import { parseQuizInputText } from '../src/lib/quizMcq.ts';
 
 export interface StoredQuizCard {
   id: string;
@@ -9,6 +10,7 @@ export interface StoredQuizCard {
   answer: string;
   section: string;
   position: number;
+  options?: string[];
 }
 
 export interface StoredQuizDeckSummary {
@@ -27,6 +29,7 @@ export interface ParsedCsvCard {
   question: string;
   answer: string;
   section: string;
+  options?: string[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -55,90 +58,30 @@ export function getQuizDb(): DatabaseSync {
       answer TEXT NOT NULL,
       section TEXT NOT NULL DEFAULT 'General',
       position INTEGER NOT NULL DEFAULT 0,
+      options_json TEXT,
       FOREIGN KEY (deck_id) REFERENCES quiz_decks(id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_quiz_cards_deck_pos
       ON quiz_cards (deck_id, position);
   `);
+
+  // Migrate existing SQLite DBs created before options_json existed
+  const cols = db.prepare('PRAGMA table_info(quiz_cards)').all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'options_json')) {
+    db.exec('ALTER TABLE quiz_cards ADD COLUMN options_json TEXT');
+  }
+
   dbInstance = db;
   return db;
 }
 
 /**
- * RFC-4180 compliant CSV parser handling commas and newlines inside quotes,
- * escaped double quotes (""), and optional header row (Question, Answer, Section).
- * Blank or omitted 3rd column defaults to "General".
+ * Parses CSV (standard or MCQ columns) as well as pasted MCQ text blocks (`Q:`, `A)`, `Answer:`).
  */
 export function parseCsvCards(csvText: string): ParsedCsvCard[] {
-  const input = String(csvText || '').replace(/^\uFEFF/, '');
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (input[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ',') {
-      row.push(field);
-      field = '';
-    } else if (ch === '\r') {
-      if (input[i + 1] === '\n') i++;
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-    } else if (ch === '\n') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-    } else {
-      field += ch;
-    }
-  }
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-
-  const nonEmptyRows = rows.filter((r) => r.some((cell) => cell.trim().length > 0));
-  if (!nonEmptyRows.length) return [];
-
-  // Detect header row (q/question, a/answer, optional section/topic)
-  const first = nonEmptyRows[0].map((c) => c.trim().toLowerCase());
-  const looksLikeHeader =
-    (first[0] === 'q' || first[0] === 'question' || first[0] === 'prompt') &&
-    (first[1] === 'a' || first[1] === 'answer' || first[1] === 'response');
-
-  const dataRows = looksLikeHeader ? nonEmptyRows.slice(1) : nonEmptyRows;
-  const parsed: ParsedCsvCard[] = [];
-
-  for (const r of dataRows) {
-    const question = (r[0] || '').trim();
-    const answer = (r[1] || '').trim();
-    const rawSection = (r[2] || '').trim();
-    if (!question || !answer) continue;
-    parsed.push({
-      question,
-      answer,
-      section: rawSection || 'General',
-    });
-  }
-  return parsed;
+  const parsed = parseQuizInputText(csvText);
+  return parsed.cards;
 }
 
 function makeId(prefix: string): string {
@@ -186,7 +129,7 @@ export function getDeckById(deckId: string): StoredQuizDeckDetail | null {
 
   const cards = db
     .prepare(
-      `SELECT id, deck_id, question, answer, section, position
+      `SELECT id, deck_id, question, answer, section, position, options_json
        FROM quiz_cards
        WHERE deck_id = ?
        ORDER BY position ASC`
@@ -198,12 +141,24 @@ export function getDeckById(deckId: string): StoredQuizDeckDetail | null {
     answer: string;
     section: string;
     position: number;
+    options_json?: string | null;
   }>;
 
   const secMap = new Map<string, number>();
   const mappedCards: StoredQuizCard[] = cards.map((c) => {
     const sec = (c.section || 'General').trim() || 'General';
     secMap.set(sec, (secMap.get(sec) || 0) + 1);
+    let options: string[] | undefined;
+    if (c.options_json) {
+      try {
+        const raw = JSON.parse(c.options_json);
+        if (Array.isArray(raw) && raw.length >= 2) {
+          options = raw.map((x) => String(x || '').trim()).filter(Boolean);
+        }
+      } catch {
+        options = undefined;
+      }
+    }
     return {
       id: c.id,
       deckId: c.deck_id,
@@ -211,6 +166,7 @@ export function getDeckById(deckId: string): StoredQuizDeckDetail | null {
       answer: c.answer,
       section: sec,
       position: c.position,
+      ...(options && options.length >= 2 ? { options } : {}),
     };
   });
 
@@ -230,7 +186,7 @@ export function createDeck(title: string, cards: ParsedCsvCard[]): StoredQuizDec
     throw new Error('Deck title is required.');
   }
   if (!cards.length) {
-    throw new Error('At least one valid flashcard row (Question, Answer) is required.');
+    throw new Error('At least one valid question/answer row is required.');
   }
 
   const db = getQuizDb();
@@ -241,7 +197,7 @@ export function createDeck(title: string, cards: ParsedCsvCard[]): StoredQuizDec
     'INSERT INTO quiz_decks (id, title, created_at) VALUES (?, ?, ?)'
   );
   const insertCard = db.prepare(
-    'INSERT INTO quiz_cards (id, deck_id, question, answer, section, position) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO quiz_cards (id, deck_id, question, answer, section, position, options_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
 
   db.exec('BEGIN');
@@ -251,8 +207,12 @@ export function createDeck(title: string, cards: ParsedCsvCard[]): StoredQuizDec
       const q = String(c.question || '').trim();
       const a = String(c.answer || '').trim();
       const sec = String(c.section || '').trim() || 'General';
+      const opts = Array.isArray(c.options)
+        ? c.options.map((x) => String(x || '').trim()).filter(Boolean)
+        : [];
+      const optionsJson = opts.length >= 2 ? JSON.stringify(opts) : null;
       if (q && a) {
-        insertCard.run(makeId('card'), deckId, q, a, sec, idx);
+        insertCard.run(makeId('card'), deckId, q, a, sec, idx, optionsJson);
       }
     });
     db.exec('COMMIT');

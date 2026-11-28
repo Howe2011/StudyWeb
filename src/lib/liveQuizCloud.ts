@@ -15,9 +15,23 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { normalizeBrawlDifficulty } from './brawlDifficulty';
 import { getByokConfig } from './byokStore';
 import { fastLocalQuizCheck, smartSemanticFallbackCheck } from './quizGrader';
-import { QuizDeckSummary, QuizPlayerState, QuizRoomState } from '../types';
+import {
+  buildMcqChoices,
+  isMcqSelectionCorrect,
+  type QuizGameMode,
+  type QuizQuestionFormat,
+} from './quizMcq';
+import {
+  BrawlDifficulty,
+  QuizBrawlQuestion,
+  QuizBrawlStats,
+  QuizDeckSummary,
+  QuizPlayerState,
+  QuizRoomState,
+} from '../types';
 
 export interface CloudQuizCard {
   id: string;
@@ -25,6 +39,8 @@ export interface CloudQuizCard {
   answer: string;
   section: string;
   position: number;
+  options?: string[];
+  choices?: string[];
 }
 
 export interface CloudQuizDeck extends QuizDeckSummary {
@@ -48,6 +64,7 @@ export interface CloudPlayerDoc {
   pendingQuestionIndex?: number;
   pendingRoundId?: string;
   lastSubmissionJson?: string | null;
+  brawlStatsJson?: string | null;
 }
 
 const LOCAL_DECKS_KEY = 'studydeck_cloud_quiz_decks_v1';
@@ -243,18 +260,24 @@ export async function loadCloudDecks(): Promise<CloudQuizDeck[]> {
 
 export async function saveCloudDeck(
   title: string,
-  rawCards: Array<{ question: string; answer: string; section: string }>
+  rawCards: Array<{ question: string; answer: string; section: string; options?: string[] }>
 ): Promise<CloudQuizDeck> {
   const cleanTitle = title.trim().slice(0, 140);
   const deckId = makeId('deck');
   const cards: CloudQuizCard[] = rawCards
-    .map((c, idx) => ({
-      id: makeId('card'),
-      question: String(c.question || '').trim(),
-      answer: String(c.answer || '').trim(),
-      section: String(c.section || '').trim() || 'General',
-      position: idx,
-    }))
+    .map((c, idx) => {
+      const opts = Array.isArray(c.options)
+        ? c.options.map((x) => String(x || '').trim()).filter(Boolean)
+        : undefined;
+      return {
+        id: makeId('card'),
+        question: String(c.question || '').trim(),
+        answer: String(c.answer || '').trim(),
+        section: String(c.section || '').trim() || 'General',
+        position: idx,
+        ...(opts && opts.length >= 2 ? { options: opts } : {}),
+      };
+    })
     .filter((c) => c.question && c.answer);
 
   const sections = buildSectionsFromCards(cards);
@@ -308,8 +331,11 @@ export async function createCloudRoom(params: {
   deckTitle: string;
   selectedSections: string[];
   timerSeconds: 15 | 20 | 30;
+  gameMode?: QuizGameMode;
+  questionFormat?: QuizQuestionFormat;
+  brawlDifficulty?: BrawlDifficulty;
   nickname: string;
-  cards: Array<{ question: string; answer: string; section: string }>;
+  cards: Array<{ question: string; answer: string; section: string; options?: string[] }>;
 }): Promise<{
   code: string;
   playerId: string;
@@ -333,15 +359,27 @@ export async function createCloudRoom(params: {
     code = `QZ${Math.floor(10 + Math.random() * 89)}`;
   }
 
-  const questions: CloudQuizCard[] = shuffleCards(
+  const gameMode: QuizGameMode = params.gameMode === 'monster-brawl' ? 'monster-brawl' : 'classic';
+  const questionFormat: QuizQuestionFormat = params.questionFormat === 'mcq' ? 'mcq' : 'typed';
+  const brawlDifficulty: BrawlDifficulty = normalizeBrawlDifficulty(params.brawlDifficulty);
+
+  const baseShuffled = shuffleCards(
     params.cards.map((c, idx) => ({
       id: makeId('q'),
       question: c.question.trim(),
       answer: c.answer.trim(),
       section: c.section.trim() || 'General',
       position: idx,
+      ...(Array.isArray(c.options) && c.options.length >= 2 ? { options: c.options } : {}),
     }))
   );
+
+  const questions: CloudQuizCard[] = baseShuffled.map((q, idx) => ({
+    ...q,
+    ...(questionFormat === 'mcq'
+      ? { choices: buildMcqChoices(baseShuffled, idx, `${code}:${q.id}`) }
+      : {}),
+  }));
 
   const playerId = makeId('p');
   const activeSections = Array.from(new Set(questions.map((q) => q.section)));
@@ -355,6 +393,9 @@ export async function createCloudRoom(params: {
       deckTitle: (params.deckTitle || 'Live Flashcards').slice(0, 140),
       selectedSectionsJson: JSON.stringify(activeSections),
       timerSeconds: params.timerSeconds,
+      gameMode,
+      questionFormat,
+      brawlDifficulty,
       status: 'lobby',
       totalQuestions: questions.length,
       currentIndex: 0,
@@ -365,7 +406,21 @@ export async function createCloudRoom(params: {
         id: questions[0].id,
         question: questions[0].question,
         section: questions[0].section,
+        ...(questions[0].choices ? { choices: questions[0].choices } : {}),
       }),
+      ...(gameMode === 'monster-brawl'
+        ? {
+            brawlDeckJson: JSON.stringify(
+              questions.map((q) => ({
+                id: q.id,
+                question: q.question,
+                section: q.section,
+                answer: q.answer,
+                ...(q.choices ? { choices: q.choices } : {}),
+              }))
+            ),
+          }
+        : {}),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -387,6 +442,7 @@ export async function createCloudRoom(params: {
       pendingQuestionIndex: -1,
       pendingRoundId: '',
       lastSubmissionJson: null,
+      brawlStatsJson: null,
       updatedAt: serverTimestamp(),
     });
   } catch (err) {
@@ -518,6 +574,7 @@ export function subscribeCloudRoom(
           id: String(parsed.id || ''),
           question: String(parsed.question || ''),
           section: String(parsed.section || 'General'),
+          ...(Array.isArray(parsed.choices) ? { choices: parsed.choices.map(String) } : {}),
           officialAnswer:
             status === 'reveal' || status === 'finished'
               ? String(parsed.officialAnswer || '')
@@ -526,6 +583,18 @@ export function subscribeCloudRoom(
       }
     } catch {
       currentQuestion = null;
+    }
+
+    let brawlDeck: QuizBrawlQuestion[] | undefined;
+    if (latestRoomData.brawlDeckJson) {
+      try {
+        const parsedDeck = JSON.parse(String(latestRoomData.brawlDeckJson));
+        if (Array.isArray(parsedDeck)) {
+          brawlDeck = parsedDeck as QuizBrawlQuestion[];
+        }
+      } catch {
+        brawlDeck = undefined;
+      }
     }
 
     const mappedPlayers: QuizPlayerState[] = latestPlayers
@@ -557,6 +626,16 @@ export function subscribeCloudRoom(
             parsedSub = null;
           }
         }
+
+        let brawlStats: QuizBrawlStats | undefined;
+        if (p.brawlStatsJson) {
+          try {
+            brawlStats = JSON.parse(p.brawlStatsJson) as QuizBrawlStats;
+          } catch {
+            brawlStats = undefined;
+          }
+        }
+
         return {
           id: p.id,
           nickname: p.nickname,
@@ -569,6 +648,7 @@ export function subscribeCloudRoom(
           hasSubmitted: effectiveHasSubmitted,
           gradingStatus: effectiveGradingStatus,
           lastSubmission: parsedSub,
+          ...(brawlStats ? { brawlStats } : {}),
         };
       })
       .sort((a, b) => b.score - a.score || b.correctCount - a.correctCount);
@@ -580,6 +660,11 @@ export function subscribeCloudRoom(
         deckTitle: String(latestRoomData.deckTitle || 'Live Quiz'),
         selectedSections,
         timerSeconds: Number(latestRoomData.timerSeconds || 20) as 15 | 20 | 30,
+        gameMode:
+          latestRoomData.gameMode === 'monster-brawl' ? 'monster-brawl' : 'classic',
+        questionFormat:
+          latestRoomData.questionFormat === 'mcq' ? 'mcq' : 'typed',
+        brawlDifficulty: normalizeBrawlDifficulty(latestRoomData.brawlDifficulty),
         status,
         totalQuestions: Number(latestRoomData.totalQuestions || 0),
         currentIndex,
@@ -594,6 +679,7 @@ export function subscribeCloudRoom(
             : null,
         serverNow: Date.now(),
         currentQuestion,
+        ...(brawlDeck ? { brawlDeck } : {}),
         players: mappedPlayers,
       },
       latestPlayers
@@ -811,6 +897,7 @@ export async function hostStartCloudQuestion(params: {
         id: card.id,
         question: card.question,
         section: card.section,
+        ...(card.choices ? { choices: card.choices } : {}),
       }),
       updatedAt: serverTimestamp(),
     });
@@ -818,6 +905,63 @@ export async function hostStartCloudQuestion(params: {
   });
 
   return committed;
+}
+
+export async function hostStartCloudBrawl(code: string): Promise<void> {
+  await updateDoc(doc(db, 'quizRooms', code), {
+    status: 'question',
+    currentIndex: 0,
+    roundId: makeRoundId(0),
+    questionStartedAt: Date.now(),
+    questionEndsAt: null,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function hostFinishCloudBrawl(code: string): Promise<void> {
+  await updateDoc(doc(db, 'quizRooms', code), {
+    status: 'finished',
+    questionEndsAt: Date.now(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function submitCloudBrawlProgress(params: {
+  code: string;
+  playerId: string;
+  stats: QuizBrawlStats;
+  score: number;
+  correctCount?: number;
+  streak?: number;
+  bestStreak?: number;
+}): Promise<void> {
+  await updateDoc(doc(db, 'quizRooms', params.code, 'players', params.playerId), {
+    score: params.score,
+    ...(typeof params.correctCount === 'number' ? { correctCount: params.correctCount } : {}),
+    ...(typeof params.streak === 'number' ? { streak: params.streak } : {}),
+    ...(typeof params.bestStreak === 'number' ? { bestStreak: params.bestStreak } : {}),
+    brawlStatsJson: JSON.stringify(params.stats),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export function gradeBrawlAnswerLocalOrCloud(params: {
+  question: string;
+  officialAnswer: string;
+  studentAnswer: string;
+  isMcq: boolean;
+}): Promise<{ correct: boolean; source: 'local' | 'ai' | 'fallback' }> {
+  if (params.isMcq) {
+    return Promise.resolve({
+      correct: isMcqSelectionCorrect(params.studentAnswer, params.officialAnswer),
+      source: 'local',
+    });
+  }
+  return gradeAnswerViaVercelOrLocal(
+    params.question,
+    params.officialAnswer,
+    params.studentAnswer
+  );
 }
 
 export async function hostRevealCloudRound(params: {
@@ -918,6 +1062,7 @@ export async function hostRestartCloudRoom(params: {
           id: first.id,
           question: first.question,
           section: first.section,
+          ...(first.choices ? { choices: first.choices } : {}),
         })
       : '{}',
     updatedAt: serverTimestamp(),

@@ -26,6 +26,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { AdminPanel } from './AdminPanel';
+import { ErrorBoundary } from './ErrorBoundary';
 import {
   downloadFlashcardsCsvTemplate,
   downloadNotesMarkdownTemplate,
@@ -118,6 +119,29 @@ function downloadBlob(filename: string, content: string, mime: string) {
 
 function csvCell(val: string): string {
   return `"${String(val || '').replace(/"/g, '""')}"`;
+}
+
+function formatVaultTimestamp(ts: unknown, fallback: string): string {
+  if (!ts) return fallback;
+  try {
+    if (typeof (ts as { toDate?: unknown }).toDate === 'function') {
+      const date = (ts as { toDate: () => Date }).toDate();
+      return date instanceof Date && !Number.isNaN(date.getTime())
+        ? date.toLocaleString()
+        : fallback;
+    }
+    if (typeof (ts as { seconds?: unknown }).seconds === 'number') {
+      const date = new Date((ts as { seconds: number }).seconds * 1000);
+      return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString();
+    }
+    if (typeof ts === 'string' || typeof ts === 'number' || ts instanceof Date) {
+      const date = new Date(ts);
+      return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString();
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
 }
 
 function filterWorkspaceByCategories(
@@ -286,8 +310,20 @@ export function ProfileVaultView({
   }, [initialSection]);
 
   useEffect(() => {
-    if (profile) {
-      setForm(profile);
+    if (profile && typeof profile === 'object') {
+      setForm({
+        email: typeof profile.email === 'string' ? profile.email : firebaseUser?.email || '',
+        fullName:
+          typeof profile.fullName === 'string'
+            ? profile.fullName
+            : firebaseUser?.displayName || '',
+        school: typeof profile.school === 'string' ? profile.school : '',
+        yearGroup: typeof profile.yearGroup === 'string' ? profile.yearGroup : '',
+        examBoard:
+          typeof profile.examBoard === 'string' ? profile.examBoard : 'GCSE / Edexcel',
+        targetGrades: typeof profile.targetGrades === 'string' ? profile.targetGrades : '',
+        studyNotes: typeof profile.studyNotes === 'string' ? profile.studyNotes : '',
+      });
     } else if (firebaseUser) {
       setForm((prev) => ({
         ...prev,
@@ -298,26 +334,34 @@ export function ProfileVaultView({
   }, [profile, firebaseUser]);
 
   const summary = useMemo(() => {
-    const noteDocs = workspace.topics.filter((t) => !isNoteEmpty(t.notes)).length;
-    const timelineTopics = workspace.topics.filter(
-      (t) => t.timelineEvents && t.timelineEvents.length > 0
+    const topics = Array.isArray(workspace?.topics) ? workspace.topics : [];
+    const flashcards = Array.isArray(workspace?.flashcards) ? workspace.flashcards : [];
+    const subjects = Array.isArray(workspace?.subjects) ? workspace.subjects : [];
+    const todos = Array.isArray(workspace?.todos) ? workspace.todos : [];
+    const calendarBlocks = Array.isArray(workspace?.calendarBlocks)
+      ? workspace.calendarBlocks
+      : [];
+
+    const noteDocs = topics.filter((t) => t && !isNoteEmpty(t.notes)).length;
+    const timelineTopics = topics.filter(
+      (t) => Array.isArray(t?.timelineEvents) && t.timelineEvents.length > 0
     ).length;
-    const timelineEventsCount = workspace.topics.reduce(
-      (acc, t) => acc + (t.timelineEvents?.length || 0),
+    const timelineEventsCount = topics.reduce(
+      (acc, t) => acc + (Array.isArray(t?.timelineEvents) ? t.timelineEvents.length : 0),
       0
     );
-    const masteredCards = workspace.flashcards.filter((c) => c.box >= 4).length;
+    const masteredCards = flashcards.filter((c) => Number(c?.box) >= 4).length;
 
     return {
-      subjects: workspace.subjects.length,
-      topics: workspace.topics.length,
+      subjects: subjects.length,
+      topics: topics.length,
       noteDocs,
-      flashcards: workspace.flashcards.length,
+      flashcards: flashcards.length,
       masteredCards,
       timelineTopics,
       timelineEventsCount,
-      todos: workspace.todos.length,
-      calendarBlocks: workspace.calendarBlocks.length,
+      todos: todos.length,
+      calendarBlocks: calendarBlocks.length,
     };
   }, [workspace]);
 
@@ -1008,7 +1052,7 @@ export function ProfileVaultView({
             </h1>
             <p className="mt-1 text-sm text-[var(--mute)]">
               {firebaseUser
-                ? `${firebaseUser.email} · Role: ${account?.role ?? 'student'} · Key v${account?.keyVersion ?? 1}`
+                ? `${firebaseUser.email || 'Signed-in account'} · Role: ${String(account?.role ?? 'student')} · Key v${Number(account?.keyVersion) || 1}`
                 : 'Guest session · Selective backups, export tools & local browser storage'}
             </p>
           </div>
@@ -1572,12 +1616,18 @@ export function ProfileVaultView({
 
         {section === 'admin' && isAdmin && firebaseUser && (
           <div className="sd-card overflow-hidden">
-            <AdminPanel
-              currentAdminUid={firebaseUser.uid}
-              currentAdminEmail={firebaseUser.email}
-              currentAdminAccount={account}
-              onOpenShareCode={onOpenShareCode}
-            />
+            <ErrorBoundary
+              contextLabel="Admin Control Center"
+              onReset={() => setSection('account')}
+              resetLabel="Back to Account"
+            >
+              <AdminPanel
+                currentAdminUid={firebaseUser.uid}
+                currentAdminEmail={firebaseUser.email}
+                currentAdminAccount={account}
+                onOpenShareCode={onOpenShareCode}
+              />
+            </ErrorBoundary>
           </div>
         )}
 
@@ -1963,23 +2013,27 @@ export function ProfileVaultView({
                 </form>
 
                 <div className="mt-4 divide-y divide-[var(--line)]">
-                  {devices.map((d) => {
-                    const isCurrent = d.deviceId === currentDev.deviceId;
-                    const lastSeen =
-                      d.lastSeenAt && typeof d.lastSeenAt.toDate === 'function'
-                        ? d.lastSeenAt.toDate().toLocaleString()
-                        : 'Active now';
+                  {(Array.isArray(devices) ? devices : []).map((d, idx) => {
+                    if (!d || typeof d !== 'object') return null;
+                    const devId = typeof d.deviceId === 'string' && d.deviceId ? d.deviceId : `dev_${idx}`;
+                    const platform = typeof d.platform === 'string' && d.platform ? d.platform : 'Desktop Browser';
+                    const deviceName =
+                      typeof d.deviceName === 'string' && d.deviceName.trim()
+                        ? d.deviceName
+                        : 'Device';
+                    const isCurrent = devId === currentDev.deviceId;
+                    const lastSeen = formatVaultTimestamp(d.lastSeenAt, 'Active now');
                     return (
-                      <div key={d.deviceId} className="flex items-center justify-between gap-3 py-3">
+                      <div key={devId} className="flex items-center justify-between gap-3 py-3">
                         <div className="flex min-w-0 items-center gap-3">
-                          {d.platform.includes('iOS') || d.platform.includes('Android') ? (
+                          {platform.includes('iOS') || platform.includes('Android') ? (
                             <Smartphone className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
                           ) : (
                             <Laptop className="h-4 w-4 shrink-0 text-[var(--mute)]" aria-hidden="true" />
                           )}
                           <div className="min-w-0">
                             <div className="truncate text-sm font-semibold text-[var(--ink)]">
-                              {d.deviceName}
+                              {deviceName}
                               {isCurrent && (
                                 <span className="ml-2 text-xs font-semibold text-[var(--e3)]">
                                   · This device
@@ -1987,11 +2041,11 @@ export function ProfileVaultView({
                               )}
                             </div>
                             <div className="text-xs text-[var(--mute)]">
-                              {d.platform} · {lastSeen}
+                              {platform} · {lastSeen}
                             </div>
                           </div>
                         </div>
-                        {!isCurrent && (
+                        {!isCurrent && typeof d.deviceId === 'string' && d.deviceId && (
                           <button
                             type="button"
                             onClick={() => void onRemoveDevice(d.deviceId)}
@@ -2004,7 +2058,7 @@ export function ProfileVaultView({
                       </div>
                     );
                   })}
-                  {!devices.length && (
+                  {(!Array.isArray(devices) || devices.length === 0) && (
                     <p className="py-3 text-xs text-[var(--mute)]">
                       Registering device session...
                     </p>
@@ -2017,21 +2071,28 @@ export function ProfileVaultView({
                   Security Audit Trail
                 </h2>
                 <div className="mt-3 divide-y divide-[var(--line)]">
-                  {activity.slice(0, 8).map((a) => {
-                    const when =
-                      a.createdAt && typeof a.createdAt.toDate === 'function'
-                        ? a.createdAt.toDate().toLocaleString()
-                        : 'Just now';
+                  {(Array.isArray(activity) ? activity : []).slice(0, 8).map((a, idx) => {
+                    if (!a || typeof a !== 'object') return null;
+                    const actId = typeof a.id === 'string' && a.id ? a.id : `act_${idx}`;
+                    const actionText =
+                      typeof a.action === 'string' && a.action.trim()
+                        ? a.action
+                        : 'Account activity';
+                    const devNameText =
+                      typeof a.deviceName === 'string' && a.deviceName.trim()
+                        ? a.deviceName
+                        : 'Device';
+                    const when = formatVaultTimestamp(a.createdAt, 'Just now');
                     return (
-                      <div key={a.id} className="py-2.5 text-xs">
-                        <div className="font-semibold text-[var(--ink)]">{a.action}</div>
+                      <div key={actId} className="py-2.5 text-xs">
+                        <div className="font-semibold text-[var(--ink)]">{actionText}</div>
                         <div className="mt-0.5 text-[var(--mute)]">
-                          {a.deviceName} · {when}
+                          {devNameText} · {when}
                         </div>
                       </div>
                     );
                   })}
-                  {!activity.length && (
+                  {(!Array.isArray(activity) || activity.length === 0) && (
                     <p className="py-2 text-xs text-[var(--mute)]">
                       No recent security events.
                     </p>

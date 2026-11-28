@@ -11,7 +11,9 @@ import {
   Folder,
   FolderOpen,
   Gamepad2,
+  HelpCircle,
   Layers,
+  ListChecks,
   LogOut,
   Play,
   Plus,
@@ -19,6 +21,7 @@ import {
   RotateCcw,
   SkipForward,
   Sparkles,
+  Swords,
   Trash2,
   Trophy,
   Upload,
@@ -35,19 +38,48 @@ import {
   CloudQuizDeck,
   createCloudRoom,
   deleteCloudDeck,
-  gradeAnswerViaVercelOrLocal,
+  gradeBrawlAnswerLocalOrCloud,
   hostApplyPlayerGrade,
+  hostFinishCloudBrawl,
   hostRestartCloudRoom,
   hostRevealCloudRound,
+  hostStartCloudBrawl,
   hostStartCloudQuestion,
   joinCloudRoom,
   leaveCloudRoom,
   loadCloudDecks,
   saveCloudDeck,
   submitCloudAnswer,
+  submitCloudBrawlProgress,
   subscribeCloudRoom,
 } from '../lib/liveQuizCloud';
-import { DeckFlashcard, DeckGroup, DeckSnapshot, QuizDeckSummary, QuizRoomState } from '../types';
+import { BRAWL_DIFFICULTIES, BRAWL_DIFFICULTY_ORDER } from '../lib/brawlDifficulty';
+import { ARENA_MAP_URL, MONSTER_ARCHETYPES } from '../lib/monsterAssets';
+import {
+  parseQuizInputText,
+  QuizGameMode,
+  QuizQuestionFormat,
+  SAMPLE_MCQ_CSV,
+  SAMPLE_MCQ_TEXT,
+} from '../lib/quizMcq';
+import {
+  BrawlCoopActionPacket,
+  BrawlDifficulty,
+  BrawlHeroPacket,
+  BrawlWorldSnapshot,
+  DeckFlashcard,
+  DeckGroup,
+  DeckSnapshot,
+  QuizBrawlQuestion,
+  QuizBrawlStats,
+  QuizDeckSummary,
+  QuizRoomState,
+} from '../types';
+import {
+  BrawlAnswerFeedback,
+  BrawlCoopChannel,
+  MonsterBrawlArena,
+} from './MonsterBrawlArena';
 
 interface LiveQuizViewProps {
   deckSnapshot: DeckSnapshot;
@@ -85,68 +117,6 @@ const SAMPLE_CSV = `Question,Answer,Section
 `;
 
 const SESSION_STORAGE_KEY = 'studydeck_live_quiz_session';
-
-function parseCsvPreview(csvText: string): Array<{ question: string; answer: string; section: string }> {
-  const input = String(csvText || '').replace(/^\uFEFF/, '');
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (input[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ',') {
-      row.push(field);
-      field = '';
-    } else if (ch === '\r') {
-      if (input[i + 1] === '\n') i++;
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-    } else if (ch === '\n') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-    } else {
-      field += ch;
-    }
-  }
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-
-  const nonEmpty = rows.filter((r) => r.some((c) => c.trim().length > 0));
-  if (!nonEmpty.length) return [];
-  const first = nonEmpty[0].map((c) => c.trim().toLowerCase());
-  const isHeader =
-    (first[0] === 'q' || first[0] === 'question' || first[0] === 'prompt') &&
-    (first[1] === 'a' || first[1] === 'answer' || first[1] === 'response');
-  const data = isHeader ? nonEmpty.slice(1) : nonEmpty;
-
-  return data
-    .map((r) => ({
-      question: (r[0] || '').trim(),
-      answer: (r[1] || '').trim(),
-      section: (r[2] || '').trim() || 'General',
-    }))
-    .filter((c) => c.question && c.answer);
-}
 
 function playQuizTone(kind: 'submit' | 'correct' | 'wrong' | 'finish', muted: boolean) {
   if (muted) return;
@@ -208,10 +178,14 @@ export function LiveQuizView({
   const [showCurrentImporter, setShowCurrentImporter] = useState(false);
   const [importDeckTitle, setImportDeckTitle] = useState('');
   const [importSecIds, setImportSecIds] = useState<string[]>([]);
+  const [showFormatGuide, setShowFormatGuide] = useState(true);
   const csvFileRef = useRef<HTMLInputElement | null>(null);
 
   // Host setup state
   const [hostSource, setHostSource] = useState<HostQuestionSource>('current');
+  const [gameMode, setGameMode] = useState<QuizGameMode>('classic');
+  const [questionFormat, setQuestionFormat] = useState<QuizQuestionFormat>('mcq');
+  const [brawlDifficulty, setBrawlDifficulty] = useState<BrawlDifficulty>('easy');
   const [selectedDeckId, setSelectedDeckId] = useState<string>('');
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
   const [selectedCurrentSecIds, setSelectedCurrentSecIds] = useState<string[]>([]);
@@ -255,6 +229,20 @@ export function LiveQuizView({
   const cloudRoundIdRef = useRef<string>('');
   const cloudRoundStatusRef = useRef<string>('lobby');
   const hostActionPendingRef = useRef<boolean>(false);
+  const brawlPendingResolversRef = useRef<Map<string, (res: BrawlAnswerFeedback) => void>>(
+    new Map()
+  );
+  const brawlStatsTrackRef = useRef({
+    correctCount: 0,
+    streak: 0,
+    bestStreak: 0,
+    bonusPoints: 0,
+  });
+  const brawlCoopListenersRef = useRef<{
+    onWorld?: (world: BrawlWorldSnapshot) => void;
+    onHero?: (hero: BrawlHeroPacket) => void;
+    onAction?: (action: BrawlCoopActionPacket) => void;
+  }>({});
 
   useEffect(() => {
     onRequestDecks();
@@ -390,11 +378,12 @@ export function LiveQuizView({
                   if (!cloudGradingLocksRef.current.has(lockKey)) {
                     cloudGradingLocksRef.current.add(lockKey);
                     void (async () => {
-                      const outcome = await gradeAnswerViaVercelOrLocal(
-                        card.question,
-                        card.answer,
-                        p.pendingAnswer || ''
-                      );
+                      const outcome = await gradeBrawlAnswerLocalOrCloud({
+                        question: card.question,
+                        officialAnswer: card.answer,
+                        studentAnswer: p.pendingAnswer || '',
+                        isMcq: nextRoom.questionFormat === 'mcq',
+                      });
                       if (cloudRoundIdRef.current !== roundId) {
                         return;
                       }
@@ -495,10 +484,47 @@ export function LiveQuizView({
             playerId?: string;
             room?: QuizRoomState;
             message?: string;
+            requestId?: string;
+            correct?: boolean;
+            officialAnswer?: string;
+            pointsAwarded?: number;
+            streak?: number;
+            world?: BrawlWorldSnapshot;
+            hero?: BrawlHeroPacket;
+            action?: BrawlCoopActionPacket;
           };
 
           if (msg.type === 'quiz:error') {
             setErrorMsg(msg.message || 'Quiz error occurred.');
+            return;
+          }
+
+          if (msg.type === 'quiz:brawl-world' && msg.world) {
+            brawlCoopListenersRef.current.onWorld?.(msg.world);
+            return;
+          }
+
+          if (msg.type === 'quiz:brawl-hero' && msg.hero) {
+            brawlCoopListenersRef.current.onHero?.(msg.hero);
+            return;
+          }
+
+          if (msg.type === 'quiz:brawl-action' && msg.action) {
+            brawlCoopListenersRef.current.onAction?.(msg.action);
+            return;
+          }
+
+          if (msg.type === 'quiz:brawl-graded' && msg.requestId) {
+            const resolver = brawlPendingResolversRef.current.get(msg.requestId);
+            if (resolver) {
+              brawlPendingResolversRef.current.delete(msg.requestId);
+              resolver({
+                correct: Boolean(msg.correct),
+                officialAnswer: String(msg.officialAnswer || ''),
+                pointsAwarded: Number(msg.pointsAwarded || 0),
+                streak: Number(msg.streak || 0),
+              });
+            }
             return;
           }
 
@@ -508,6 +534,12 @@ export function LiveQuizView({
             setRoom(msg.room);
             setErrorMsg(null);
             setInfoMsg(null);
+            brawlStatsTrackRef.current = {
+              correctCount: 0,
+              streak: 0,
+              bestStreak: 0,
+              bonusPoints: 0,
+            };
             try {
               sessionStorage.setItem(
                 SESSION_STORAGE_KEY,
@@ -782,7 +814,7 @@ export function LiveQuizView({
   );
 
   const sendHostAction = useCallback(
-    async (action: 'start' | 'reveal' | 'next' | 'restart') => {
+    async (action: 'start' | 'reveal' | 'next' | 'restart' | 'finish-brawl') => {
       if (!room || hostActionPendingRef.current) return;
       hostActionPendingRef.current = true;
       setHostActionBusy(true);
@@ -799,14 +831,20 @@ export function LiveQuizView({
         }
         if (action === 'start') {
           cloudRevealingRoundRef.current = null;
-          await hostStartCloudQuestion({
-            code: room.code,
-            questions: cloudQuestionsRef.current,
-            index: 0,
-            expectedRoundId: currentRoundId,
-            timerSeconds: room.timerSeconds,
-            players: cloudPlayersRef.current,
-          });
+          if (room.gameMode === 'monster-brawl') {
+            await hostStartCloudBrawl(room.code);
+          } else {
+            await hostStartCloudQuestion({
+              code: room.code,
+              questions: cloudQuestionsRef.current,
+              index: 0,
+              expectedRoundId: currentRoundId,
+              timerSeconds: room.timerSeconds,
+              players: cloudPlayersRef.current,
+            });
+          }
+        } else if (action === 'finish-brawl') {
+          await hostFinishCloudBrawl(room.code);
         } else if (action === 'reveal') {
           cloudRevealingRoundRef.current = currentRoundId;
           await hostRevealCloudRound({
@@ -839,6 +877,12 @@ export function LiveQuizView({
           }
         } else if (action === 'restart') {
           cloudRevealingRoundRef.current = null;
+          brawlStatsTrackRef.current = {
+            correctCount: 0,
+            streak: 0,
+            bestStreak: 0,
+            bonusPoints: 0,
+          };
           const reshuffled = await hostRestartCloudRoom({
             code: room.code,
             questions: cloudQuestionsRef.current,
@@ -857,8 +901,9 @@ export function LiveQuizView({
     [backendMode, room, sendWs]
   );
 
-  // Parsed CSV live preview
-  const csvPreviewCards = useMemo(() => parseCsvPreview(csvText), [csvText]);
+  // Parsed MCQ/CSV live preview
+  const parsedImport = useMemo(() => parseQuizInputText(csvText), [csvText]);
+  const csvPreviewCards = parsedImport.cards;
   const csvPreviewSections = useMemo(() => {
     const map = new Map<string, number>();
     csvPreviewCards.forEach((c) => {
@@ -1060,7 +1105,11 @@ export function LiveQuizView({
 
   const persistQuizDeck = async (
     title: string,
-    payload: { csvText?: string; cards?: Array<{ question: string; answer: string; section: string }> }
+    payload: {
+      csvText?: string;
+      rawText?: string;
+      cards?: Array<{ question: string; answer: string; section: string; options?: string[] }>;
+    }
   ): Promise<QuizDeckSummary> => {
     if (backendMode === 'server') {
       const res = await fetch('/api/quiz/decks', {
@@ -1077,9 +1126,8 @@ export function LiveQuizView({
       setBackendMode('cloud');
     }
 
-    const cards = payload.csvText
-      ? parseCsvPreview(payload.csvText)
-      : (payload.cards || []);
+    const rawSource = payload.rawText ?? payload.csvText;
+    const cards = rawSource ? parseQuizInputText(rawSource).cards : payload.cards || [];
     return await saveCloudDeck(title, cards);
   };
 
@@ -1093,13 +1141,18 @@ export function LiveQuizView({
       return;
     }
     if (!csvPreviewCards.length) {
-      setErrorMsg('Paste CSV rows or upload a .csv file in format: Question, Answer, Section.');
+      setErrorMsg(
+        'Paste MCQ text blocks (Q: / A) * / B) ...), MCQ CSV, or Question, Answer, Section CSV first.'
+      );
       return;
     }
 
     setSavingDeck(true);
     try {
-      const deck = await persistQuizDeck(title, { csvText });
+      const deck = await persistQuizDeck(title, {
+        rawText: csvText,
+        cards: csvPreviewCards,
+      });
       await fetchDecks();
       setSelectedDeckId(deck.id);
       setSelectedSections(deck.sections.map((s) => s.name));
@@ -1109,7 +1162,7 @@ export function LiveQuizView({
       setInfoMsg(
         `Saved "${deck.title}" permanently (${deck.cardCount} cards across ${deck.sections.length} section${
           deck.sections.length === 1 ? '' : 's'
-        }). Ready to host!`
+        }${parsedImport.mcqCount > 0 ? `, including ${parsedImport.mcqCount} MCQ cards` : ''}). Ready to host!`
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save deck.');
@@ -1233,6 +1286,9 @@ export function LiveQuizView({
                   inlineDeckTitle: deckTitleToUse,
                   inlineCards,
                   timerSeconds,
+                  gameMode,
+                  questionFormat,
+                  brawlDifficulty,
                   nickname: hostNickname.trim(),
                   ...(byok ? { byok } : {}),
                 }
@@ -1241,6 +1297,9 @@ export function LiveQuizView({
                   deckId: deckIdToUse,
                   selectedSections: sectionsToUse,
                   timerSeconds,
+                  gameMode,
+                  questionFormat,
+                  brawlDifficulty,
                   nickname: hostNickname.trim(),
                   ...(byok ? { byok } : {}),
                 }
@@ -1254,15 +1313,24 @@ export function LiveQuizView({
     }
 
     try {
-      let cardsForCloud: Array<{ question: string; answer: string; section: string }> =
-        inlineCards || [];
+      let cardsForCloud: Array<{
+        question: string;
+        answer: string;
+        section: string;
+        options?: string[];
+      }> = inlineCards || [];
       if (!inlineCards && selectedDeck) {
         const cloudDecks = await loadCloudDecks();
         const found = cloudDecks.find((d) => d.id === selectedDeck.id) as CloudQuizDeck | undefined;
         const secSet = new Set(sectionsToUse);
         cardsForCloud = (found?.cards || [])
           .filter((c) => secSet.size === 0 || secSet.has(c.section))
-          .map((c) => ({ question: c.question, answer: c.answer, section: c.section }));
+          .map((c) => ({
+            question: c.question,
+            answer: c.answer,
+            section: c.section,
+            ...(c.options?.length ? { options: c.options } : {}),
+          }));
       }
       if (!cardsForCloud.length) {
         setErrorMsg('No flashcards found in the selected deck/sections.');
@@ -1273,6 +1341,9 @@ export function LiveQuizView({
         deckTitle: deckTitleToUse,
         selectedSections: sectionsToUse,
         timerSeconds,
+        gameMode,
+        questionFormat,
+        brawlDifficulty,
         nickname: hostNickname.trim(),
         cards: cardsForCloud,
       });
@@ -1323,35 +1394,169 @@ export function LiveQuizView({
     }
   };
 
+  const submitAnswerValue = useCallback(
+    async (answerText: string) => {
+      if (!room || room.status !== 'question') return;
+      const currentMe = playerId ? room.players.find((p) => p.id === playerId) : null;
+      if (currentMe?.hasSubmitted) return;
+      playQuizTone('submit', muted);
+      if (backendMode === 'server') {
+        const byok = getByokConfig();
+        await sendWs({
+          type: 'quiz:submit',
+          answer: answerText,
+          ...(byok ? { byok } : {}),
+        });
+        return;
+      }
+      if (!playerId) return;
+      try {
+        await submitCloudAnswer({
+          code: room.code,
+          playerId,
+          questionIndex: room.currentIndex,
+          roundId: room.roundId || `r_${room.currentIndex}`,
+          questionStartedAt: room.questionStartedAt,
+          answer: answerText,
+        });
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to submit answer.');
+      }
+    },
+    [room, playerId, muted, backendMode, sendWs]
+  );
+
   const handleSubmitAnswer = async (e: FormEvent) => {
     e.preventDefault();
-    if (!room || room.status !== 'question') return;
-    const currentMe = playerId ? room.players.find((p) => p.id === playerId) : null;
-    if (currentMe?.hasSubmitted) return;
-    playQuizTone('submit', muted);
-    if (backendMode === 'server') {
-      const byok = getByokConfig();
-      await sendWs({
-        type: 'quiz:submit',
-        answer: answerInput,
-        ...(byok ? { byok } : {}),
-      });
-      return;
-    }
-    if (!playerId) return;
-    try {
-      await submitCloudAnswer({
+    await submitAnswerValue(answerInput);
+  };
+
+  const handleReportBrawlProgress = useCallback(
+    (stats: QuizBrawlStats) => {
+      if (!room || room.status !== 'question') return;
+      if (backendMode === 'server') {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'quiz:brawl-progress', stats }));
+        }
+        return;
+      }
+      if (!playerId) return;
+      const track = brawlStatsTrackRef.current;
+      const computedScore = stats.xp + stats.kills * 25 + track.bonusPoints;
+      void submitCloudBrawlProgress({
         code: room.code,
         playerId,
-        questionIndex: room.currentIndex,
-        roundId: room.roundId || `r_${room.currentIndex}`,
-        questionStartedAt: room.questionStartedAt,
-        answer: answerInput,
+        stats,
+        score: computedScore,
+        correctCount: track.correctCount,
+        streak: track.streak,
+        bestStreak: track.bestStreak,
       });
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to submit answer.');
+    },
+    [room, backendMode, playerId]
+  );
+
+  const handleSubmitBrawlAnswer = useCallback(
+    async (question: QuizBrawlQuestion, answerText: string): Promise<BrawlAnswerFeedback> => {
+      if (backendMode === 'server' && room) {
+        const requestId = `br_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        const byok = getByokConfig();
+        return await new Promise<BrawlAnswerFeedback>((resolve) => {
+          const timeoutId = window.setTimeout(() => {
+            brawlPendingResolversRef.current.delete(requestId);
+            resolve({
+              correct: false,
+              officialAnswer: question.answer || '',
+              pointsAwarded: 0,
+              streak: 0,
+            });
+          }, 8000);
+
+          brawlPendingResolversRef.current.set(requestId, (res) => {
+            window.clearTimeout(timeoutId);
+            resolve(res);
+          });
+
+          void sendWs({
+            type: 'quiz:brawl-answer',
+            requestId,
+            questionId: question.id,
+            answer: answerText,
+            ...(byok ? { byok } : {}),
+          });
+        });
+      }
+
+      const official =
+        question.answer ||
+        cloudQuestionsRef.current.find((c) => c.id === question.id)?.answer ||
+        '';
+      const outcome = await gradeBrawlAnswerLocalOrCloud({
+        question: question.question,
+        officialAnswer: official,
+        studentAnswer: answerText,
+        isMcq: room?.questionFormat === 'mcq',
+      });
+
+      const track = brawlStatsTrackRef.current;
+      let pointsAwarded = 0;
+      if (outcome.correct) {
+        track.correctCount += 1;
+        track.streak += 1;
+        track.bestStreak = Math.max(track.bestStreak, track.streak);
+        pointsAwarded = 150 + Math.min(200, (track.streak - 1) * 50);
+        track.bonusPoints += pointsAwarded;
+      } else {
+        track.streak = 0;
+      }
+
+      return {
+        correct: outcome.correct,
+        officialAnswer: official,
+        pointsAwarded,
+        streak: track.streak,
+      };
+    },
+    [backendMode, room, sendWs]
+  );
+
+  // Keyboard shortcuts 1-4 / A-D for Classic MCQ questions
+  useEffect(() => {
+    if (
+      !room ||
+      room.gameMode === 'monster-brawl' ||
+      room.status !== 'question' ||
+      !room.currentQuestion?.choices?.length
+    ) {
+      return;
     }
-  };
+    const choices = room.currentQuestion.choices;
+    const currentMe = playerId ? room.players.find((p) => p.id === playerId) : null;
+    if (currentMe?.hasSubmitted) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      const lower = e.key.toLowerCase();
+      const idx =
+        lower === '1' || lower === 'a'
+          ? 0
+          : lower === '2' || lower === 'b'
+          ? 1
+          : lower === '3' || lower === 'c'
+          ? 2
+          : lower === '4' || lower === 'd'
+          ? 3
+          : -1;
+      if (idx >= 0 && choices[idx]) {
+        e.preventDefault();
+        void submitAnswerValue(choices[idx]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [room, playerId, submitAnswerValue]);
 
   const handleLeaveRoom = async () => {
     try {
@@ -1390,10 +1595,58 @@ export function LiveQuizView({
   );
   const isHost = Boolean(me?.isHost);
 
+  const brawlCoopChannel = useMemo<BrawlCoopChannel>(
+    () => ({
+      isRealtimeServer: backendMode === 'server',
+      sendWorld: (world) => {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'quiz:brawl-world', world }));
+        }
+      },
+      sendHero: (hero) => {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'quiz:brawl-hero', hero }));
+        }
+      },
+      sendAction: (action) => {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'quiz:brawl-action', action }));
+        }
+      },
+      subscribe: (handlers) => {
+        brawlCoopListenersRef.current = handlers;
+        return () => {
+          brawlCoopListenersRef.current = {};
+        };
+      },
+    }),
+    [backendMode]
+  );
+
   // ============================================================================
   // ACTIVE MULTIPLAYER ARENA VIEW (Lobby / Question / Reveal / Podium)
   // ============================================================================
   if (room) {
+    if (room.gameMode === 'monster-brawl' && room.status === 'question') {
+      return (
+        <MonsterBrawlArena
+          room={room}
+          playerId={playerId}
+          isHost={isHost}
+          muted={muted}
+          coopChannel={brawlCoopChannel}
+          onToggleMute={() => setMuted((m) => !m)}
+          onReportProgress={(stats) => void handleReportBrawlProgress(stats)}
+          onSubmitBrawlAnswer={handleSubmitBrawlAnswer}
+          onFinishMatch={() => void sendHostAction('finish-brawl')}
+          onLeaveRoom={() => void handleLeaveRoom()}
+        />
+      );
+    }
+
     const connectedCount = room.players.filter((p) => p.connected).length;
     const answeredCount = room.players.filter((p) => p.hasSubmitted).length;
     const totalMs = room.timerSeconds * 1000;
@@ -1553,7 +1806,39 @@ export function LiveQuizView({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                    <div className="text-[var(--mute)]">Game Mode</div>
+                    <div className="mt-0.5 flex items-center gap-1.5 text-sm font-bold text-[var(--ink)]">
+                      {room.gameMode === 'monster-brawl' ? (
+                        <>
+                          <Swords className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                          <span>Monster Brawl</span>
+                        </>
+                      ) : (
+                        <>
+                          <Gamepad2 className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                          <span>Classic Quiz</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
+                    <div className="text-[var(--mute)]">Question Format</div>
+                    <div className="mt-0.5 flex items-center gap-1.5 text-sm font-bold text-[var(--ink)]">
+                      {room.questionFormat === 'mcq' ? (
+                        <>
+                          <ListChecks className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                          <span>Multiple Choice</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                          <span>Typed Recall</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
                   <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
                     <div className="text-[var(--mute)]">Questions</div>
                     <div className="font-mono-num mt-0.5 text-lg font-bold text-[var(--ink)]">
@@ -1561,18 +1846,24 @@ export function LiveQuizView({
                     </div>
                   </div>
                   <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
-                    <div className="text-[var(--mute)]">Round Timer</div>
-                    <div className="font-mono-num mt-0.5 text-lg font-bold text-[var(--ink)]">
-                      {room.timerSeconds}s
+                    <div className="text-[var(--mute)]">
+                      {room.gameMode === 'monster-brawl' ? 'Difficulty' : 'Round Timer'}
                     </div>
-                  </div>
-                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3">
-                    <div className="text-[var(--mute)]">Sections</div>
                     <div className="font-mono-num mt-0.5 text-lg font-bold text-[var(--ink)]">
-                      {room.selectedSections.length}
+                      {room.gameMode === 'monster-brawl'
+                        ? BRAWL_DIFFICULTIES[room.brawlDifficulty || 'easy'].label
+                        : `${room.timerSeconds}s`}
                     </div>
                   </div>
                 </div>
+
+                {room.gameMode === 'monster-brawl' && (
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5 text-xs text-[var(--ink)]">
+                    <strong>Co-op Arena Scaling:</strong> All {connectedCount} connected player
+                    {connectedCount === 1 ? '' : 's'} fight together on the expanded arena map.
+                    Monster HP &amp; spawn intensity scale automatically with team size.
+                  </div>
+                )}
 
                 <div className="text-xs text-[var(--mute)]">
                   <strong className="text-[var(--ink)]">Included Sections:</strong>{' '}
@@ -1587,13 +1878,21 @@ export function LiveQuizView({
                       onClick={() => void sendHostAction('start')}
                       className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap disabled:opacity-60"
                     >
-                      <Play className="h-4 w-4" aria-hidden="true" />
-                      <span>Start Live Quiz Now</span>
+                      {room.gameMode === 'monster-brawl' ? (
+                        <Swords className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <Play className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      <span>
+                        {room.gameMode === 'monster-brawl'
+                          ? 'Start Monster Brawl Now'
+                          : 'Start Live Quiz Now'}
+                      </span>
                     </button>
                   </div>
                 ) : (
                   <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs font-medium text-[var(--mute)]">
-                    Waiting for the Host to start the match…
+                    Waiting for the Host to launch {room.gameMode === 'monster-brawl' ? 'Monster Brawl' : 'the match'}…
                   </div>
                 )}
               </div>
@@ -1681,33 +1980,78 @@ export function LiveQuizView({
                   </h2>
                 </div>
 
-                {/* Player / Host Answer Form */}
+                {/* Player / Host Answer Input (MCQ Buttons or Typed Recall) */}
                 {!me?.hasSubmitted ? (
-                  <form onSubmit={(e) => void handleSubmitAnswer(e)} className="mt-5 space-y-3">
-                    <label className="block text-xs font-semibold text-[var(--mute)]">
-                      Your Answer (speed counts — up to 1,000 pts + streak bonus)
-                      <input
-                        type="text"
-                        autoFocus
-                        value={answerInput}
-                        onChange={(e) => setAnswerInput(e.target.value)}
-                        placeholder="Type your answer and press Enter…"
-                        className="sd-input mt-1.5 py-3 text-base"
-                      />
-                    </label>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs text-[var(--mute)]">
-                        Exact answers pass in 0ms; close phrasings &amp; dates are checked
-                        immediately by Smart + Gemini Flash-Lite Grading.
-                      </span>
-                      <button
-                        type="submit"
-                        className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap"
-                      >
-                        Submit Answer
-                      </button>
+                  room.currentQuestion.choices && room.currentQuestion.choices.length >= 2 ? (
+                    <div className="mt-5 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
+                        <span className="font-semibold">
+                          Pick the correct option (press keys 1–4 or A–D)
+                        </span>
+                        <span className="font-mono-num">Up to 1,000 pts + streak bonus</span>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {room.currentQuestion.choices.map((choice, idx) => {
+                          const letter = String.fromCharCode(65 + idx);
+                          const accentClasses = [
+                            'hover:border-emerald-500/70 hover:bg-emerald-500/10',
+                            'hover:border-sky-500/70 hover:bg-sky-500/10',
+                            'hover:border-amber-500/70 hover:bg-amber-500/10',
+                            'hover:border-violet-500/70 hover:bg-violet-500/10',
+                          ][idx % 4];
+                          const badgeClasses = [
+                            'bg-emerald-500/15 text-emerald-500 border-emerald-500/30',
+                            'bg-sky-500/15 text-sky-500 border-sky-500/30',
+                            'bg-amber-500/15 text-amber-500 border-amber-500/30',
+                            'bg-violet-500/15 text-violet-500 border-violet-500/30',
+                          ][idx % 4];
+                          return (
+                            <button
+                              key={`${idx}_${choice}`}
+                              type="button"
+                              onClick={() => void submitAnswerValue(choice)}
+                              className={`group flex cursor-pointer items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 text-left transition-all ${accentClasses}`}
+                            >
+                              <span
+                                className={`font-mono-num flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border text-sm font-extrabold ${badgeClasses}`}
+                              >
+                                {letter}
+                              </span>
+                              <span className="min-w-0 flex-1 text-sm font-semibold leading-snug text-[var(--ink)] sm:text-base">
+                                {choice}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </form>
+                  ) : (
+                    <form onSubmit={(e) => void handleSubmitAnswer(e)} className="mt-5 space-y-3">
+                      <label className="block text-xs font-semibold text-[var(--mute)]">
+                        Your Answer (speed counts — up to 1,000 pts + streak bonus)
+                        <input
+                          type="text"
+                          autoFocus
+                          value={answerInput}
+                          onChange={(e) => setAnswerInput(e.target.value)}
+                          placeholder="Type your answer and press Enter…"
+                          className="sd-input mt-1.5 py-3 text-base"
+                        />
+                      </label>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs text-[var(--mute)]">
+                          Exact answers pass in 0ms; close phrasings &amp; dates are checked
+                          immediately by Smart + Gemini Flash-Lite Grading.
+                        </span>
+                        <button
+                          type="submit"
+                          className="sd-btn-pri px-5 py-2.5 text-sm whitespace-nowrap"
+                        >
+                          Submit Answer
+                        </button>
+                      </div>
+                    </form>
+                  )
                 ) : (
                   <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_8%,var(--bg))] p-4 text-sm">
                     <div>
@@ -1954,8 +2298,16 @@ export function LiveQuizView({
                           {p.score.toLocaleString()} pts
                         </div>
                         <div className="font-mono-num mt-1 text-xs text-[var(--mute)]">
-                          {p.correctCount}/{room.totalQuestions} correct · Best streak {p.bestStreak}
+                          {p.correctCount}
+                          {room.gameMode === 'monster-brawl' ? '' : `/${room.totalQuestions}`} correct ·
+                          Best streak {p.bestStreak}
                         </div>
+                        {room.gameMode === 'monster-brawl' && p.brawlStats && (
+                          <div className="font-mono-num mt-1 text-[11px] font-semibold text-[var(--e2)]">
+                            Lv. {p.brawlStats.level} · Wave {p.brawlStats.wave} ·{' '}
+                            {p.brawlStats.kills} kills
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1992,7 +2344,7 @@ export function LiveQuizView({
                   {room.players.map((p, idx) => (
                     <div
                       key={p.id}
-                      className="flex items-center justify-between rounded-xl border border-[var(--line)] bg-[var(--bg)] px-4 py-2.5 text-xs"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-4 py-2.5 text-xs"
                     >
                       <div className="flex items-center gap-3">
                         <span className="font-mono-num font-bold text-[var(--mute)]">
@@ -2000,9 +2352,16 @@ export function LiveQuizView({
                         </span>
                         <span className="font-bold text-[var(--ink)]">{p.nickname}</span>
                       </div>
-                      <div className="font-mono-num flex items-center gap-4 text-[var(--mute)]">
+                      <div className="font-mono-num flex flex-wrap items-center gap-4 text-[var(--mute)]">
+                        {room.gameMode === 'monster-brawl' && p.brawlStats && (
+                          <span className="text-[var(--e2)]">
+                            Lv.{p.brawlStats.level} · W{p.brawlStats.wave} · {p.brawlStats.kills}{' '}
+                            kills
+                          </span>
+                        )}
                         <span>
-                          {p.correctCount}/{room.totalQuestions} correct
+                          {p.correctCount}
+                          {room.gameMode === 'monster-brawl' ? '' : `/${room.totalQuestions}`} correct
                         </span>
                         <span>Best streak {p.bestStreak}</span>
                         <strong className="text-sm text-[var(--ink)]">
@@ -2116,31 +2475,53 @@ export function LiveQuizView({
             {/* Import & Auto-Sections Form */}
             <div className="space-y-5 lg:col-span-3">
               <form onSubmit={(e) => void handleSaveDeck(e)} className="sd-card space-y-4 p-5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <h2 className="font-display text-lg font-bold text-[var(--ink)]">
-                      Import &amp; Auto-Sections (CSV)
+                      Import MCQ Text or CSV Decks
                     </h2>
                     <p className="mt-0.5 text-xs text-[var(--mute)]">
-                      Format: <code>Question, Answer, Section</code> (handles commas in quotes; blank
-                      section defaults to &ldquo;General&rdquo;).
+                      Paste formatted Multiple Choice question blocks, MCQ CSV files, or standard
+                      <code> Question, Answer, Section</code> flashcard CSVs.
                     </p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <input
                       ref={csvFileRef}
                       type="file"
-                      accept=".csv,text/csv,text/plain"
+                      accept=".csv,.txt,text/csv,text/plain"
                       className="hidden"
                       onChange={(e) => void handleCsvFileUpload(e)}
                     />
                     <button
                       type="button"
                       onClick={() => csvFileRef.current?.click()}
-                      className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
                     >
                       <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Upload .csv</span>
+                      <span>Upload .csv / .txt</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!importTitle.trim()) setImportTitle('MCQ Revision Pack');
+                        setCsvText(SAMPLE_MCQ_TEXT);
+                      }}
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                    >
+                      <ListChecks className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                      <span>Sample MCQ Text</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!importTitle.trim()) setImportTitle('STEM & History MCQ CSV');
+                        setCsvText(SAMPLE_MCQ_CSV);
+                      }}
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                      <span>Sample MCQ CSV</span>
                     </button>
                     <button
                       type="button"
@@ -2148,13 +2529,52 @@ export function LiveQuizView({
                         if (!importTitle.trim()) setImportTitle('Weimar Germany Revision');
                         setCsvText(SAMPLE_CSV);
                       }}
-                      className="sd-btn px-3 py-1.5 text-xs whitespace-nowrap"
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
                     >
                       <FileSpreadsheet className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Load Sample CSV</span>
+                      <span>Sample CSV</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowFormatGuide((v) => !v)}
+                      aria-expanded={showFormatGuide}
+                      className="sd-btn px-2.5 py-1.5 text-xs whitespace-nowrap"
+                    >
+                      <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Format Guide</span>
                     </button>
                   </div>
                 </div>
+
+                {showFormatGuide && (
+                  <div className="grid gap-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-[11px] sm:grid-cols-2">
+                    <div>
+                      <div className="font-bold text-[var(--ink)]">
+                        1. Pasted MCQ Text Block Format
+                      </div>
+                      <pre className="font-mono-num mt-1 whitespace-pre-wrap text-[var(--mute)]">
+{`Section: Biology
+Q: Which organelle produces ATP?
+A) Ribosome
+B) Mitochondrion *
+C) Lysosome
+D) Vacuole
+(Or put "Answer: B" below options)`}
+                      </pre>
+                    </div>
+                    <div>
+                      <div className="font-bold text-[var(--ink)]">
+                        2. Multiple Choice CSV Headers
+                      </div>
+                      <pre className="font-mono-num mt-1 whitespace-pre-wrap text-[var(--mute)]">
+{`Question,A,B,C,D,Correct,Section
+"Gas ~78% of air?","O2","N2","CO2","Ar",B,Chem
+Also supports Question,CorrectAnswer,
+Distractor1,Distractor2,Distractor3,Section`}
+                      </pre>
+                    </div>
+                  </div>
+                )}
 
                 <label className="block text-xs font-semibold text-[var(--mute)]">
                   Deck Title *
@@ -2162,37 +2582,96 @@ export function LiveQuizView({
                     type="text"
                     value={importTitle}
                     onChange={(e) => setImportTitle(e.target.value)}
-                    placeholder="e.g. GCSE History Paper 1"
+                    placeholder="e.g. GCSE Biology Multiple Choice"
                     className="sd-input mt-1 text-sm"
                   />
                 </label>
 
                 <label className="block text-xs font-semibold text-[var(--mute)]">
-                  CSV Content (Question, Answer, Section) *
+                  Paste MCQ Text, MCQ CSV, or Question/Answer CSV *
                   <textarea
-                    rows={8}
+                    rows={9}
                     value={csvText}
                     onChange={(e) => setCsvText(e.target.value)}
                     placeholder={
-                      'Question,Answer,Section\n"When was the Armistice signed?","11 November 1918",World War I\n"Capital of France?",Paris,'
+                      'Section: History\nQ: When was the Armistice signed?\nA) 11 November 1918 *\nB) 28 June 1919\nC) 4 August 1914\nD) 9 November 1918'
                     }
                     className="sd-input font-mono-num mt-1 text-xs leading-relaxed"
                   />
                 </label>
 
-                {/* Live Section Grouping Preview */}
+                {/* Live Section & MCQ Grouping Preview */}
                 {csvPreviewCards.length > 0 && (
-                  <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 text-xs">
-                    <div className="font-bold text-[var(--ink)]">
-                      Parsed Preview: {csvPreviewCards.length} cards across{' '}
-                      {csvPreviewSections.length} section
-                      {csvPreviewSections.length === 1 ? '' : 's'}
+                  <div className="space-y-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-bold text-[var(--ink)]">
+                        Parsed Preview: {csvPreviewCards.length} cards across{' '}
+                        {csvPreviewSections.length} section
+                        {csvPreviewSections.length === 1 ? '' : 's'}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono-num rounded-md border border-[var(--line)] bg-[var(--card)] px-2 py-0.5 text-[11px] font-semibold text-[var(--ink)]">
+                          {parsedImport.formatDetected === 'mcq-text'
+                            ? 'MCQ Text Blocks'
+                            : parsedImport.formatDetected === 'mcq-csv'
+                              ? 'MCQ CSV'
+                              : 'Standard Q&A CSV'}
+                        </span>
+                        {parsedImport.mcqCount > 0 && (
+                          <span className="font-mono-num rounded-md border border-[var(--e3)]/40 bg-[color-mix(in_srgb,var(--e3)_12%,var(--bg))] px-2 py-0.5 text-[11px] font-bold text-[var(--e3)]">
+                            {parsedImport.mcqCount} MCQ cards
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-3 text-[var(--mute)]">
+
+                    <div className="flex flex-wrap gap-3 text-[var(--mute)]">
                       {csvPreviewSections.map((s) => (
                         <span key={s.name} className="font-mono-num">
                           <strong className="text-[var(--e3)]">{s.name}</strong> ({s.count})
                         </span>
+                      ))}
+                    </div>
+
+                    <div className="space-y-2 border-t border-[var(--line)] pt-2.5">
+                      {csvPreviewCards.slice(0, 3).map((card, idx) => (
+                        <div
+                          key={`${idx}_${card.question.slice(0, 20)}`}
+                          className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-2.5"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="font-semibold text-[var(--ink)]">
+                              {idx + 1}. {card.question}
+                            </span>
+                            <span className="shrink-0 text-[11px] text-[var(--mute)]">
+                              {card.section}
+                            </span>
+                          </div>
+                          {card.options && card.options.length > 0 ? (
+                            <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                              {card.options.map((opt, optIdx) => {
+                                const isAns =
+                                  opt.trim().toLowerCase() === card.answer.trim().toLowerCase();
+                                return (
+                                  <div
+                                    key={`${optIdx}_${opt}`}
+                                    className={`rounded-md border px-2 py-1 text-[11px] ${
+                                      isAns
+                                        ? 'border-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,var(--bg))] font-bold text-[var(--ok)]'
+                                        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--mute)]'
+                                    }`}
+                                  >
+                                    {String.fromCharCode(65 + optIdx)}) {opt}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="mt-1 text-[11px] text-[var(--ok)]">
+                              Answer: {card.answer}
+                            </div>
+                          )}
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -2672,6 +3151,215 @@ export function LiveQuizView({
                   </button>
                 )}
               </div>
+            </div>
+
+            {/* Game Mode & Question Format Selection */}
+            <div className="grid gap-4 rounded-2xl border border-[var(--line)] bg-[var(--bg)] p-4 lg:grid-cols-12">
+              <div className="space-y-2 lg:col-span-7">
+                <div className="text-xs font-semibold uppercase tracking-wider text-[var(--mute)]">
+                  Game Mode
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    aria-pressed={gameMode === 'classic'}
+                    onClick={() => setGameMode('classic')}
+                    className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 text-left transition-all ${
+                      gameMode === 'classic'
+                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))] shadow-sm'
+                        : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
+                    }`}
+                  >
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] bg-[var(--bg)] text-[var(--e3)]">
+                      <Gamepad2 className="h-5 w-5" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-display text-sm font-bold text-[var(--ink)]">
+                          Classic Live Quiz
+                        </span>
+                        {gameMode === 'classic' && (
+                          <span className="text-[11px] font-bold text-[var(--e3)]">Selected</span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs leading-snug text-[var(--mute)]">
+                        Round-by-round speed &amp; streak leaderboard with instant grading.
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-pressed={gameMode === 'monster-brawl'}
+                    onClick={() => setGameMode('monster-brawl')}
+                    className={`relative flex cursor-pointer items-start gap-3 overflow-hidden rounded-xl border p-3.5 text-left transition-all ${
+                      gameMode === 'monster-brawl'
+                        ? 'border-emerald-500 bg-slate-950 text-slate-100 shadow-sm'
+                        : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
+                    }`}
+                  >
+                    <img
+                      src={ARENA_MAP_URL}
+                      alt=""
+                      aria-hidden="true"
+                      referrerPolicy="no-referrer"
+                      className={`pointer-events-none absolute inset-0 h-full w-full object-cover ${
+                        gameMode === 'monster-brawl' ? 'opacity-25' : 'opacity-10'
+                      }`}
+                    />
+                    <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-emerald-400/35 bg-slate-900">
+                      <img
+                        src={MONSTER_ARCHETYPES.slime.imageUrl}
+                        alt="Emerald Slime monster preview"
+                        referrerPolicy="no-referrer"
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="relative min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={`font-display flex items-center gap-1.5 text-sm font-bold ${
+                            gameMode === 'monster-brawl' ? 'text-white' : 'text-[var(--ink)]'
+                          }`}
+                        >
+                          <Swords className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+                          <span>Monster Brawl</span>
+                        </span>
+                        <div className="flex h-6 w-6 shrink-0 overflow-hidden rounded-md border border-amber-400/35 bg-slate-900">
+                          <img
+                            src={MONSTER_ARCHETYPES.drake.imageUrl}
+                            alt="Magma Drake monster preview"
+                            referrerPolicy="no-referrer"
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                      </div>
+                      <p
+                        className={`mt-0.5 text-xs leading-snug ${
+                          gameMode === 'monster-brawl' ? 'text-slate-300' : 'text-[var(--mute)]'
+                        }`}
+                      >
+                        2D survival arena with waves, bosses, XP upgrades &amp; quiz power-ups.
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2 lg:col-span-5">
+                <div className="text-xs font-semibold uppercase tracking-wider text-[var(--mute)]">
+                  Question Format
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                  <button
+                    type="button"
+                    aria-pressed={questionFormat === 'mcq'}
+                    onClick={() => setQuestionFormat('mcq')}
+                    className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors ${
+                      questionFormat === 'mcq'
+                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))]'
+                        : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--ink)]">
+                        <ListChecks className="h-3.5 w-3.5 text-[var(--e3)]" aria-hidden="true" />
+                        <span>Multiple Choice (4 Options)</span>
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-[var(--mute)]">
+                        Auto-converts flashcards into 4-choice A/B/C/D options or uses imported MCQ choices.
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-pressed={questionFormat === 'typed'}
+                    onClick={() => setQuestionFormat('typed')}
+                    className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors ${
+                      questionFormat === 'typed'
+                        ? 'border-[var(--e3)] bg-[color-mix(in_srgb,var(--e3)_10%,var(--card))]'
+                        : 'border-[var(--line)] bg-[var(--card)] hover:border-[var(--mute)]'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--ink)]">
+                        <Sparkles className="h-3.5 w-3.5 text-[var(--e2)]" aria-hidden="true" />
+                        <span>Typed Recall (AI Graded)</span>
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-[var(--mute)]">
+                        Players type free-text answers checked by Smart + Gemini grading.
+                      </div>
+                    </div>
+                  </button>
+                </div>
+                {gameMode === 'monster-brawl' && (
+                  <p className="text-[11px] text-[var(--mute)]">
+                    In Monster Brawl, players fight side-by-side on a shared arena map and difficulty
+                    scales with player count.
+                  </p>
+                )}
+              </div>
+
+              {gameMode === 'monster-brawl' && (
+                <div className="space-y-2 border-t border-[var(--line)] pt-3 lg:col-span-12">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-[var(--mute)]">
+                      Monster Brawl Difficulty (Co-op Scaled by Players)
+                    </span>
+                    <span className="text-[11px] text-[var(--mute)]">
+                      More players = stronger monsters &amp; larger waves
+                    </span>
+                  </div>
+                  <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+                    {BRAWL_DIFFICULTY_ORDER.map((diffId) => {
+                      const prof = BRAWL_DIFFICULTIES[diffId];
+                      const active = brawlDifficulty === diffId;
+                      return (
+                        <button
+                          key={diffId}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setBrawlDifficulty(diffId)}
+                          className={`flex cursor-pointer flex-col justify-between rounded-xl border p-3 text-left transition-all ${
+                            active
+                              ? 'border-[var(--ink)] bg-[var(--card)] shadow-sm'
+                              : 'border-[var(--line)] bg-[var(--card)]/70 hover:border-[var(--mute)]'
+                          }`}
+                          style={
+                            active
+                              ? {
+                                  borderColor: prof.badgeColor,
+                                  boxShadow: `0 0 0 1px ${prof.badgeColor}40`,
+                                }
+                              : undefined
+                          }
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className="font-display text-sm font-extrabold"
+                                style={{ color: prof.badgeColor }}
+                              >
+                                {prof.label}
+                              </span>
+                              <span className="font-mono-num text-[10px] font-bold uppercase text-[var(--mute)]">
+                                {prof.shortTag}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-[11px] leading-snug text-[var(--mute)]">
+                              {prof.description}
+                            </p>
+                          </div>
+                          <div className="font-mono-num mt-2 text-[10px] font-semibold text-[var(--ink)]">
+                            {prof.hpMult}x HP · {prof.damageMult}x DMG · Boss q{prof.bossWaveInterval}W
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {hostSource === 'current' ? (

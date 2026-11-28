@@ -161,19 +161,32 @@ export function estimateNoteReadingMinutes(note: StructuredNoteData): number {
   return Math.max(1, Math.ceil(words / 180));
 }
 
-export function isNoteEmpty(note: StructuredNoteData): boolean {
-  const hasSummary = note.summary.trim().length > 0;
-  const hasSections = note.sections.some(
+export function isNoteEmpty(note: StructuredNoteData | null | undefined): boolean {
+  if (!note || typeof note !== 'object') return true;
+  const hasSummary = typeof note.summary === 'string' && note.summary.trim().length > 0;
+  const sections = Array.isArray(note.sections) ? note.sections : [];
+  const hasSections = sections.some(
     (s) =>
-      s.points.some((p) => p.trim().length > 0) ||
-      (s.heading.trim().length > 0 && note.sections.length > 1)
+      s &&
+      ((Array.isArray(s.points) &&
+        s.points.some((p) => typeof p === 'string' && p.trim().length > 0)) ||
+        (typeof s.heading === 'string' && s.heading.trim().length > 0 && sections.length > 1))
   );
-  const hasTerms = note.keyTerms.some((k) => k.term.trim() && k.definition.trim());
-  const hasTip = note.examTip.trim().length > 0;
-  const hasEx = note.workedExample.trim().length > 0;
+  const keyTerms = Array.isArray(note.keyTerms) ? note.keyTerms : [];
+  const hasTerms = keyTerms.some(
+    (k) =>
+      k &&
+      typeof k.term === 'string' &&
+      k.term.trim() &&
+      typeof k.definition === 'string' &&
+      k.definition.trim()
+  );
+  const hasTip = typeof note.examTip === 'string' && note.examTip.trim().length > 0;
+  const hasEx = typeof note.workedExample === 'string' && note.workedExample.trim().length > 0;
   const docHtml = note.originalHtml || note.legacyHtml;
   const hasLegacy = Boolean(
-    docHtml &&
+    typeof docHtml === 'string' &&
+      docHtml &&
       (/<img\b/i.test(docHtml) || docHtml.replace(/<[^>]+>/g, '').trim().length > 0)
   );
   return !hasSummary && !hasSections && !hasTerms && !hasTip && !hasEx && !hasLegacy;

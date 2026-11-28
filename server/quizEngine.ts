@@ -2,6 +2,14 @@ import type { IncomingMessage, Server } from 'http';
 import type { GoogleGenAI } from '@google/genai';
 import { WebSocket, WebSocketServer } from 'ws';
 import { fastLocalQuizCheck, smartSemanticFallbackCheck } from '../src/lib/quizGrader.ts';
+import { normalizeBrawlDifficulty } from '../src/lib/brawlDifficulty.ts';
+import {
+  buildMcqChoices,
+  isMcqSelectionCorrect,
+  type QuizGameMode,
+  type QuizQuestionFormat,
+} from '../src/lib/quizMcq.ts';
+import type { BrawlDifficulty } from '../src/types.ts';
 import { getDeckById, type StoredQuizCard } from './quizDb.ts';
 
 import {
@@ -528,6 +536,20 @@ interface PlayerAnswerRecord {
   streakBonus: number;
 }
 
+interface RoomBrawlStats {
+  xp: number;
+  level: number;
+  kills: number;
+  wave: number;
+  hp: number;
+  maxHp: number;
+  weaponCount: number;
+  x?: number;
+  y?: number;
+  facing?: 1 | -1;
+  shielded?: boolean;
+}
+
 interface RoomPlayer {
   id: string;
   nickname: string;
@@ -539,6 +561,7 @@ interface RoomPlayer {
   connected: boolean;
   socket: WebSocket | null;
   answers: Map<string, PlayerAnswerRecord>;
+  brawlStats: RoomBrawlStats;
 }
 
 interface QuizRoom {
@@ -547,8 +570,12 @@ interface QuizRoom {
   deckTitle: string;
   selectedSections: string[];
   timerSeconds: 15 | 20 | 30;
+  gameMode: QuizGameMode;
+  questionFormat: QuizQuestionFormat;
+  brawlDifficulty: BrawlDifficulty;
   status: RoomStatus;
   questions: StoredQuizCard[];
+  questionChoices: Map<string, string[]>;
   currentIndex: number;
   roundId: string;
   questionStartedAt: number | null;
@@ -557,11 +584,33 @@ interface QuizRoom {
   roundTimer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   pendingGrades: Map<string, Promise<void>>;
+  lastBrawlBroadcastAt: number;
   hostAiConfig?: UserAiConfig | null;
 }
 
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const rooms = new Map<string, QuizRoom>();
+
+function createDefaultBrawlStats(): RoomBrawlStats {
+  return {
+    xp: 0,
+    level: 1,
+    kills: 0,
+    wave: 1,
+    hp: 100,
+    maxHp: 100,
+    weaponCount: 1,
+  };
+}
+
+function rebuildQuestionChoices(room: QuizRoom): void {
+  room.questionChoices.clear();
+  if (room.questionFormat !== 'mcq') return;
+  room.questions.forEach((card, idx) => {
+    const choices = buildMcqChoices(room.questions, idx, `${room.code}:${room.deckId}:${card.id}`);
+    room.questionChoices.set(card.id, choices);
+  });
+}
 
 function makeRoundId(index: number): string {
   return `r_${index}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -633,6 +682,7 @@ function serializeRoomForPlayer(room: QuizRoom, viewerId: string) {
         connected: p.connected,
         hasSubmitted: Boolean(rec),
         gradingStatus: rec?.gradingStatus || null,
+        brawlStats: room.gameMode === 'monster-brawl' ? p.brawlStats : undefined,
         lastSubmission:
           room.status === 'reveal' || room.status === 'finished'
             ? rec
@@ -659,12 +709,21 @@ function serializeRoomForPlayer(room: QuizRoom, viewerId: string) {
     })
     .sort((a, b) => b.score - a.score || b.correctCount - a.correctCount);
 
+  const currentChoices =
+    currentCard && room.questionFormat === 'mcq'
+      ? room.questionChoices.get(currentCard.id) ||
+        buildMcqChoices(room.questions, room.currentIndex, `${room.code}:${currentCard.id}`)
+      : undefined;
+
   return {
     code: room.code,
     deckId: room.deckId,
     deckTitle: room.deckTitle,
     selectedSections: room.selectedSections,
     timerSeconds: room.timerSeconds,
+    gameMode: room.gameMode,
+    questionFormat: room.questionFormat,
+    brawlDifficulty: room.brawlDifficulty,
     status: room.status,
     totalQuestions: room.questions.length,
     currentIndex: room.currentIndex,
@@ -677,12 +736,28 @@ function serializeRoomForPlayer(room: QuizRoom, viewerId: string) {
           id: currentCard.id,
           question: currentCard.question,
           section: currentCard.section,
+          ...(currentChoices ? { choices: currentChoices } : {}),
           officialAnswer:
             room.status === 'reveal' || room.status === 'finished'
               ? currentCard.answer
               : undefined,
         }
       : null,
+    brawlDeck:
+      room.gameMode === 'monster-brawl'
+        ? room.questions.map((q, idx) => ({
+            id: q.id,
+            question: q.question,
+            section: q.section,
+            ...(room.questionFormat === 'mcq'
+              ? {
+                  choices:
+                    room.questionChoices.get(q.id) ||
+                    buildMcqChoices(room.questions, idx, `${room.code}:${q.id}`),
+                }
+              : {}),
+          }))
+        : undefined,
     players: playersList,
   };
 }
@@ -872,6 +947,11 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
         const rawTimer = Number(msg.timerSeconds || 20);
         const timerSeconds: 15 | 20 | 30 =
           rawTimer === 15 ? 15 : rawTimer === 30 ? 30 : 20;
+        const gameMode: QuizGameMode =
+          msg.gameMode === 'monster-brawl' ? 'monster-brawl' : 'classic';
+        const questionFormat: QuizQuestionFormat =
+          msg.questionFormat === 'mcq' ? 'mcq' : 'typed';
+        const brawlDifficulty: BrawlDifficulty = normalizeBrawlDifficulty(msg.brawlDifficulty);
         const selectedSections = Array.isArray(msg.selectedSections)
           ? msg.selectedSections.map((s) => String(s || '').trim()).filter(Boolean)
           : [];
@@ -890,10 +970,18 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
         if (inlineCardsRaw && inlineCardsRaw.length > 0) {
           cards = inlineCardsRaw
             .map((raw, idx) => {
-              const item = raw as { question?: unknown; answer?: unknown; section?: unknown };
+              const item = raw as {
+                question?: unknown;
+                answer?: unknown;
+                section?: unknown;
+                options?: unknown;
+              };
               const q = String(item?.question || '').trim();
               const a = String(item?.answer || '').trim();
               const sec = String(item?.section || '').trim() || 'General';
+              const opts = Array.isArray(item?.options)
+                ? item.options.map((x) => String(x || '').trim()).filter(Boolean)
+                : undefined;
               return {
                 id: `inline_${idx}_${Date.now().toString(36)}`,
                 deckId: resolvedDeckId,
@@ -901,6 +989,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
                 answer: a,
                 section: sec,
                 position: idx,
+                ...(opts && opts.length >= 2 ? { options: opts } : {}),
               };
             })
             .filter((c) => c.question && c.answer);
@@ -947,6 +1036,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           connected: true,
           socket: ws,
           answers: new Map(),
+          brawlStats: createDefaultBrawlStats(),
         };
 
         const hostAiConfig = parseUserAiConfig(msg.byok);
@@ -957,8 +1047,12 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           deckTitle: resolvedDeckTitle,
           selectedSections: activeSections,
           timerSeconds,
+          gameMode,
+          questionFormat,
+          brawlDifficulty,
           status: 'lobby',
           questions: shuffleCards(cards),
+          questionChoices: new Map(),
           currentIndex: 0,
           roundId: makeRoundId(-1),
           questionStartedAt: null,
@@ -967,8 +1061,10 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           roundTimer: null,
           cleanupTimer: null,
           pendingGrades: new Map(),
+          lastBrawlBroadcastAt: 0,
           hostAiConfig,
         };
+        rebuildQuestionChoices(room);
 
         rooms.set(code, room);
         attachedRoomCode = code;
@@ -1070,6 +1166,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           connected: true,
           socket: ws,
           answers: new Map(),
+          brawlStats: createDefaultBrawlStats(),
         };
         room.players.set(playerId, player);
         attachedRoomCode = code;
@@ -1118,18 +1215,190 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           return;
         }
         if (room.status !== 'lobby') return;
+        if (room.gameMode === 'monster-brawl') {
+          clearRoomTimers(room);
+          room.pendingGrades.clear();
+          room.status = 'question';
+          room.currentIndex = 0;
+          room.roundId = makeRoundId(0);
+          room.questionStartedAt = Date.now();
+          room.questionEndsAt = null;
+          broadcastRoomState(room);
+          return;
+        }
         startQuestion(room, 0);
         return;
       }
 
+      if (type === 'quiz:finish-brawl') {
+        if (!player.isHost || room.gameMode !== 'monster-brawl') return;
+        clearRoomTimers(room);
+        room.status = 'finished';
+        room.questionEndsAt = Date.now();
+        broadcastRoomState(room);
+        return;
+      }
+
+      if (type === 'quiz:brawl-world') {
+        if (room.gameMode !== 'monster-brawl' || room.status !== 'question' || !player.isHost) return;
+        for (const p of room.players.values()) {
+          if (p.id !== player.id && p.connected && p.socket) {
+            sendJson(p.socket, { type: 'quiz:brawl-world', world: msg.world });
+          }
+        }
+        return;
+      }
+
+      if (type === 'quiz:brawl-hero') {
+        if (room.gameMode !== 'monster-brawl' || room.status !== 'question') return;
+        const heroObj =
+          msg.hero && typeof msg.hero === 'object' ? (msg.hero as Record<string, unknown>) : {};
+        const payload = {
+          type: 'quiz:brawl-hero',
+          hero: {
+            ...heroObj,
+            playerId: player.id,
+            nickname: player.nickname,
+          },
+        };
+        for (const p of room.players.values()) {
+          if (p.id !== player.id && p.connected && p.socket) {
+            sendJson(p.socket, payload);
+          }
+        }
+        return;
+      }
+
+      if (type === 'quiz:brawl-action') {
+        if (room.gameMode !== 'monster-brawl' || room.status !== 'question') return;
+        const actionObj =
+          msg.action && typeof msg.action === 'object'
+            ? (msg.action as Record<string, unknown>)
+            : {};
+        const payload = {
+          type: 'quiz:brawl-action',
+          action: {
+            ...actionObj,
+            playerId: player.id,
+          },
+        };
+        for (const p of room.players.values()) {
+          if (p.id !== player.id && p.connected && p.socket) {
+            sendJson(p.socket, payload);
+          }
+        }
+        return;
+      }
+
+      if (type === 'quiz:brawl-progress') {
+        if (room.gameMode !== 'monster-brawl' || room.status !== 'question') return;
+        const rawStats = (msg.stats || {}) as Record<string, unknown>;
+        const nextXp = Math.max(0, Math.min(500000, Math.round(Number(rawStats.xp) || 0)));
+        const nextLevel = Math.max(1, Math.min(99, Math.round(Number(rawStats.level) || 1)));
+        const nextKills = Math.max(0, Math.min(100000, Math.round(Number(rawStats.kills) || 0)));
+        const nextWave = Math.max(1, Math.min(999, Math.round(Number(rawStats.wave) || 1)));
+        const nextMaxHp = Math.max(50, Math.min(1000, Math.round(Number(rawStats.maxHp) || 100)));
+        const nextHp = Math.max(0, Math.min(nextMaxHp, Math.round(Number(rawStats.hp) || 0)));
+        const nextWeapons = Math.max(1, Math.min(12, Math.round(Number(rawStats.weaponCount) || 1)));
+        const nextX = typeof rawStats.x === 'number' ? Math.round(rawStats.x) : undefined;
+        const nextY = typeof rawStats.y === 'number' ? Math.round(rawStats.y) : undefined;
+        const nextFacing = rawStats.facing === -1 ? -1 : rawStats.facing === 1 ? 1 : undefined;
+        const nextShielded = typeof rawStats.shielded === 'boolean' ? rawStats.shielded : undefined;
+
+        const prevWave = player.brawlStats.wave;
+        const prevLevel = player.brawlStats.level;
+        player.brawlStats = {
+          xp: nextXp,
+          level: nextLevel,
+          kills: nextKills,
+          wave: nextWave,
+          hp: nextHp,
+          maxHp: nextMaxHp,
+          weaponCount: nextWeapons,
+          ...(nextX !== undefined ? { x: nextX } : {}),
+          ...(nextY !== undefined ? { y: nextY } : {}),
+          ...(nextFacing !== undefined ? { facing: nextFacing } : {}),
+          ...(nextShielded !== undefined ? { shielded: nextShielded } : {}),
+        };
+        const computedScore = nextXp + nextKills * 25 + player.correctCount * 150;
+        if (computedScore > player.score) {
+          player.score = computedScore;
+        }
+
+        const now = Date.now();
+        if (
+          now - room.lastBrawlBroadcastAt >= 850 ||
+          nextWave !== prevWave ||
+          nextLevel !== prevLevel
+        ) {
+          room.lastBrawlBroadcastAt = now;
+          broadcastRoomState(room);
+        }
+        return;
+      }
+
+      if (type === 'quiz:brawl-answer') {
+        if (room.gameMode !== 'monster-brawl' || room.status !== 'question') return;
+        const questionId = String(msg.questionId || '');
+        const requestId = String(msg.requestId || '');
+        const answerText = String(msg.answer || '').trim();
+        const card = room.questions.find((q) => q.id === questionId) || room.questions[0];
+        if (!card) return;
+
+        let outcome: GradeOutcome;
+        if (!answerText) {
+          outcome = { correct: false, source: 'local', latencyMs: 0 };
+        } else if (room.questionFormat === 'mcq') {
+          outcome = {
+            correct: isMcqSelectionCorrect(answerText, card.answer),
+            source: 'local',
+            latencyMs: 0,
+          };
+        } else if (fastLocalQuizCheck(answerText, card.answer)) {
+          outcome = { correct: true, source: 'local', latencyMs: 0 };
+        } else {
+          const playerAiConfig = parseUserAiConfig(msg.byok);
+          outcome = await gradeSingleAnswer(
+            card.question,
+            card.answer,
+            answerText,
+            playerAiConfig || room.hostAiConfig || null
+          );
+        }
+
+        let pointsAwarded = 0;
+        if (outcome.correct) {
+          player.streak += 1;
+          player.bestStreak = Math.max(player.bestStreak, player.streak);
+          player.correctCount += 1;
+          pointsAwarded = 150 + Math.min(200, (player.streak - 1) * 50);
+          player.score += pointsAwarded;
+        } else {
+          player.streak = 0;
+        }
+
+        sendJson(ws, {
+          type: 'quiz:brawl-graded',
+          requestId,
+          questionId: card.id,
+          correct: outcome.correct,
+          officialAnswer: card.answer,
+          pointsAwarded,
+          streak: player.streak,
+          gradingSource: outcome.source,
+        });
+        broadcastRoomState(room);
+        return;
+      }
+
       if (type === 'quiz:reveal') {
-        if (!player.isHost) return;
+        if (!player.isHost || room.gameMode === 'monster-brawl') return;
         await revealRound(room, room.roundId);
         return;
       }
 
       if (type === 'quiz:next') {
-        if (!player.isHost) return;
+        if (!player.isHost || room.gameMode === 'monster-brawl') return;
         const expectedRoundId = typeof msg.roundId === 'string' ? msg.roundId : room.roundId;
         if (expectedRoundId !== room.roundId) return;
         if (room.status === 'question') {
@@ -1152,19 +1421,21 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
         room.questionStartedAt = null;
         room.questionEndsAt = null;
         room.questions = shuffleCards(room.questions);
+        rebuildQuestionChoices(room);
         for (const p of room.players.values()) {
           p.score = 0;
           p.streak = 0;
           p.bestStreak = 0;
           p.correctCount = 0;
           p.answers.clear();
+          p.brawlStats = createDefaultBrawlStats();
         }
         broadcastRoomState(room);
         return;
       }
 
       if (type === 'quiz:submit') {
-        if (room.status !== 'question') return;
+        if (room.status !== 'question' || room.gameMode === 'monster-brawl') return;
         const qIdx = room.currentIndex;
         const lockedRoundId = room.roundId;
         if (player.answers.has(lockedRoundId)) return;
@@ -1196,7 +1467,10 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
           return;
         }
 
-        if (fastLocalQuizCheck(answerText, card.answer)) {
+        // Fast 0ms grading for Multiple Choice or exact/local match
+        const isMcqCorrect =
+          room.questionFormat === 'mcq' ? isMcqSelectionCorrect(answerText, card.answer) : false;
+        if (room.questionFormat === 'mcq' || fastLocalQuizCheck(answerText, card.answer)) {
           const rec: PlayerAnswerRecord = {
             questionIndex: qIdx,
             roundId: lockedRoundId,
@@ -1210,7 +1484,7 @@ export function attachQuizWebSocketServer(httpServer: Server): WebSocketServer {
             streakBonus: 0,
           };
           applyGradedOutcome(room, player, rec, {
-            correct: true,
+            correct: room.questionFormat === 'mcq' ? isMcqCorrect : true,
             source: 'local',
             latencyMs: 0,
           });

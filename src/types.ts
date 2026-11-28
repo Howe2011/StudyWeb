@@ -577,10 +577,125 @@ export interface QuizCardItem {
   answer: string;
   section: string;
   position: number;
+  options?: string[];
 }
 
 export interface QuizDeckDetail extends QuizDeckSummary {
   cards: QuizCardItem[];
+}
+
+export type QuizGameMode = 'classic' | 'monster-brawl';
+export type QuizQuestionFormat = 'typed' | 'mcq';
+export type BrawlDifficulty = 'easy' | 'medium' | 'hard' | 'impossible';
+export type BrawlMonsterKind = 'slime' | 'imp' | 'golem' | 'drake' | 'titan';
+
+export interface QuizBrawlStats {
+  xp: number;
+  level: number;
+  kills: number;
+  wave: number;
+  hp: number;
+  maxHp: number;
+  weaponCount?: number;
+  x?: number;
+  y?: number;
+  facing?: 1 | -1;
+  shielded?: boolean;
+}
+
+export interface BrawlNetMonster {
+  uid: number;
+  kind: BrawlMonsterKind;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  maxHp: number;
+  speed: number;
+  radius: number;
+  damage: number;
+  xpValue: number;
+  facing: 1 | -1;
+  spawnTimer: number;
+  isBoss: boolean;
+  flashTimer: number;
+}
+
+export interface BrawlNetCrystal {
+  id: number;
+  x: number;
+  y: number;
+  value: number;
+  kind: 'emerald' | 'cyan' | 'gold' | 'heart';
+}
+
+export interface BrawlNetProjectile {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  damage: number;
+  fromEnemy: boolean;
+  color: string;
+}
+
+export interface BrawlWorldSnapshot {
+  wave: number;
+  waveTimer: number;
+  monsters: BrawlNetMonster[];
+  crystals: BrawlNetCrystal[];
+  enemyProjectiles: BrawlNetProjectile[];
+  xpGrants: Record<string, number>;
+  healGrants: Record<string, number>;
+  coopPlayerCount: number;
+  serverTs: number;
+}
+
+export interface BrawlHeroPacket {
+  playerId: string;
+  nickname: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  maxHp: number;
+  level: number;
+  xp: number;
+  kills: number;
+  facing: 1 | -1;
+  aimAngle: number;
+  shielded: boolean;
+  dashing: boolean;
+  abilities: Record<string, number>;
+}
+
+export interface BrawlDamageEvent {
+  uid: number;
+  dmg: number;
+  kbX: number;
+  kbY: number;
+  crit: boolean;
+}
+
+export interface BrawlCoopActionPacket {
+  playerId: string;
+  hits?: BrawlDamageEvent[];
+  pickedCrystalIds?: number[];
+  slash?: { x: number; y: number; angle: number; radius: number; color: string };
+  bolt?: { points: Array<{ x: number; y: number }> };
+  nova?: { x: number; y: number; maxRadius: number; color: string };
+}
+
+export interface QuizBrawlQuestion {
+  id: string;
+  question: string;
+  section: string;
+  choices?: string[];
+  answer?: string;
 }
 
 export interface QuizSubmissionInfo {
@@ -604,6 +719,7 @@ export interface QuizPlayerState {
   hasSubmitted: boolean;
   gradingStatus: 'grading' | 'done' | null;
   lastSubmission: QuizSubmissionInfo | null;
+  brawlStats?: QuizBrawlStats;
 }
 
 export interface QuizRoomState {
@@ -612,6 +728,9 @@ export interface QuizRoomState {
   deckTitle: string;
   selectedSections: string[];
   timerSeconds: 15 | 20 | 30;
+  gameMode?: QuizGameMode;
+  questionFormat?: QuizQuestionFormat;
+  brawlDifficulty?: BrawlDifficulty;
   status: 'lobby' | 'question' | 'reveal' | 'finished';
   totalQuestions: number;
   currentIndex: number;
@@ -623,7 +742,9 @@ export interface QuizRoomState {
     id: string;
     question: string;
     section: string;
+    choices?: string[];
     officialAnswer?: string;
   } | null;
+  brawlDeck?: QuizBrawlQuestion[];
   players: QuizPlayerState[];
 }

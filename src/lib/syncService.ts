@@ -106,7 +106,15 @@ export async function fetchUserAccount(uid: string): Promise<UserAccountDoc | nu
   const path = `users/${uid}`;
   try {
     const snap = await getDoc(doc(db, 'users', uid));
-    return snap.exists() ? (snap.data() as UserAccountDoc) : null;
+    if (!snap.exists()) return null;
+    const raw = snap.data() as Partial<UserAccountDoc>;
+    return {
+      ...(raw as UserAccountDoc),
+      uid: typeof raw.uid === 'string' && raw.uid ? raw.uid : snap.id,
+      displayName: typeof raw.displayName === 'string' && raw.displayName ? raw.displayName : 'Student',
+      role: raw.role === 'admin' || raw.role === 'educator' ? raw.role : 'student',
+      keyVersion: Number(raw.keyVersion) || 1,
+    };
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, path);
   }
@@ -627,7 +635,19 @@ export function subscribeDevices(
   return onSnapshot(
     q,
     (snap) => {
-      const list = snap.docs.map((d) => d.data() as UserDeviceDoc);
+      const list = snap.docs.map((d) => {
+        const raw = d.data() as Partial<UserDeviceDoc>;
+        return {
+          ...(raw as UserDeviceDoc),
+          deviceId: typeof raw.deviceId === 'string' && raw.deviceId ? raw.deviceId : d.id,
+          deviceName:
+            typeof raw.deviceName === 'string' && raw.deviceName.trim() ? raw.deviceName : 'Device',
+          platform:
+            typeof raw.platform === 'string' && raw.platform.trim()
+              ? raw.platform
+              : 'Desktop Browser',
+        };
+      });
       list.sort((a, b) => {
         const ta = a.lastSeenAt instanceof Timestamp ? a.lastSeenAt.toMillis() : 0;
         const tb = b.lastSeenAt instanceof Timestamp ? b.lastSeenAt.toMillis() : 0;
@@ -707,7 +727,17 @@ export async function listAllUserAccounts(): Promise<UserAccountDoc[]> {
   const path = 'users';
   try {
     const snap = await getDocs(collection(db, 'users'));
-    return snap.docs.map((d) => d.data() as UserAccountDoc);
+    return snap.docs.map((d) => {
+      const raw = d.data() as Partial<UserAccountDoc>;
+      return {
+        ...(raw as UserAccountDoc),
+        uid: typeof raw.uid === 'string' && raw.uid ? raw.uid : d.id,
+        displayName:
+          typeof raw.displayName === 'string' && raw.displayName ? raw.displayName : 'Student',
+        role: raw.role === 'admin' || raw.role === 'educator' ? raw.role : 'student',
+        keyVersion: Number(raw.keyVersion) || 1,
+      };
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.LIST, path);
   }
@@ -782,7 +812,19 @@ export async function fetchUserDevicesForAdmin(targetUid: string): Promise<UserD
     const q = query(collection(db, 'users', targetUid, 'devices'), where('ownerId', '==', targetUid));
     const snap = await getDocs(q);
     return snap.docs
-      .map((d) => d.data() as UserDeviceDoc)
+      .map((d) => {
+        const raw = d.data() as Partial<UserDeviceDoc>;
+        return {
+          ...(raw as UserDeviceDoc),
+          deviceId: typeof raw.deviceId === 'string' && raw.deviceId ? raw.deviceId : d.id,
+          deviceName:
+            typeof raw.deviceName === 'string' && raw.deviceName.trim() ? raw.deviceName : 'Device',
+          platform:
+            typeof raw.platform === 'string' && raw.platform.trim()
+              ? raw.platform
+              : 'Desktop Browser',
+        };
+      })
       .sort((a, b) => {
         const ta = a.lastSeenAt instanceof Timestamp ? a.lastSeenAt.toMillis() : 0;
         const tb = b.lastSeenAt instanceof Timestamp ? b.lastSeenAt.toMillis() : 0;

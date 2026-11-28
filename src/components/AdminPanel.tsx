@@ -59,12 +59,21 @@ function extractErrMessage(err: unknown, fallback: string): string {
 
 function formatTs(ts: unknown): string {
   if (!ts) return '—';
-  if (typeof ts === 'string') {
-    const d = new Date(ts);
-    return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-GB');
-  }
-  if (typeof (ts as { toDate?: () => Date }).toDate === 'function') {
-    return (ts as { toDate: () => Date }).toDate().toLocaleString('en-GB');
+  try {
+    if (typeof ts === 'string' || typeof ts === 'number') {
+      const d = new Date(ts);
+      return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-GB');
+    }
+    if (typeof (ts as { toDate?: () => Date }).toDate === 'function') {
+      const d = (ts as { toDate: () => Date }).toDate();
+      return d instanceof Date && !Number.isNaN(d.getTime()) ? d.toLocaleString('en-GB') : '—';
+    }
+    if (typeof (ts as { seconds?: unknown }).seconds === 'number') {
+      const d = new Date((ts as { seconds: number }).seconds * 1000);
+      return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-GB');
+    }
+  } catch {
+    return '—';
   }
   return '—';
 }
@@ -532,7 +541,7 @@ export function AdminPanel({
                             )}
                           </td>
                           <td className="font-mono-num px-4 py-3 text-xs text-[var(--mute)]">
-                            <span title={u.uid}>{u.uid.slice(0, 14)}…</span>
+                            <span title={u.uid || ''}>{(u.uid || '').slice(0, 14)}…</span>
                           </td>
                           <td className="px-4 py-3">
                             <select
@@ -683,9 +692,9 @@ export function AdminPanel({
                             </div>
                           </td>
                           <td className="px-4 py-3 text-xs text-[var(--ink)]">
-                            {item.ownerName}
+                            {item.ownerName || 'User'}
                             <div className="font-mono-num text-[11px] text-[var(--mute)]">
-                              {item.ownerId.slice(0, 12)}…
+                              {(item.ownerId || '').slice(0, 12)}…
                             </div>
                           </td>
                           <td className="font-mono-num px-4 py-3 text-xs font-bold text-[var(--e3)]">

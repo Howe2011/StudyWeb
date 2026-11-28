@@ -100,7 +100,8 @@ app.post('/api/quiz/decks', (req: Request, res: Response) => {
     const body = req.body as {
       title?: string;
       csvText?: string;
-      cards?: Array<{ question?: string; answer?: string; section?: string }>;
+      rawText?: string;
+      cards?: Array<{ question?: string; answer?: string; section?: string; options?: unknown }>;
     };
 
     const title = String(body.title || '').trim();
@@ -109,22 +110,30 @@ app.post('/api/quiz/decks', (req: Request, res: Response) => {
       return;
     }
 
+    const rawInput = typeof body.rawText === 'string' ? body.rawText : body.csvText;
     let cards: ParsedCsvCard[] = [];
-    if (typeof body.csvText === 'string' && body.csvText.trim()) {
-      cards = parseCsvCards(body.csvText);
+    if (typeof rawInput === 'string' && rawInput.trim()) {
+      cards = parseCsvCards(rawInput);
     } else if (Array.isArray(body.cards)) {
       cards = body.cards
-        .map((c) => ({
-          question: String(c.question || '').trim(),
-          answer: String(c.answer || '').trim(),
-          section: String(c.section || '').trim() || 'General',
-        }))
+        .map((c) => {
+          const opts = Array.isArray(c.options)
+            ? c.options.map((x) => String(x || '').trim()).filter(Boolean)
+            : undefined;
+          return {
+            question: String(c.question || '').trim(),
+            answer: String(c.answer || '').trim(),
+            section: String(c.section || '').trim() || 'General',
+            ...(opts && opts.length >= 2 ? { options: opts } : {}),
+          };
+        })
         .filter((c) => c.question && c.answer);
     }
 
     if (!cards.length) {
       res.status(400).json({
-        error: 'No valid Question, Answer rows found. Use CSV format: Question, Answer, Section.',
+        error:
+          'No valid questions found. Paste CSV (Question, Answer, Section or Question, A, B, C, D, Correct, Section) or MCQ text blocks (Q: / A) * / B) ...).',
       });
       return;
     }
